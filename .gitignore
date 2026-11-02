@@ -4,3 +4,6 @@ sandak.lock
 *.o
 .env
 **/.env
+# данните на rocksbaga, които създава scripts/up.sh
+db/
+.up.pids
