@@ -1,0 +1,111 @@
+// store_scan.baga — префикс-сканиране и сортировка над drockb.
+//
+// rocksbaga SCAN е Redis-стил: неподреден и cursor-based. Ключовете на
+// buchnative са zero-padded, така че след сбориране лексикографската наредба
+// съвпада с логическата.
+
+import "store.baga"
+import "drockb/drockb.baga"
+import "std/bytes/bytes.baga"
+import "std/json/json.baga"
+
+// ── prefix scan (collected + sorted) ─────────────────────────────────────
+
+fn bn_bytes_cmp(a: bytes, b: bytes) -> i64 {
+    let na = bytes_len(a)
+    let nb = bytes_len(b)
+    let mut n = na
+    if nb < n {
+        n = nb
+    }
+    let mut i: i64 = 0
+    while i < n {
+        let x = bytes_at(a, i) & 255
+        let y = bytes_at(b, i) & 255
+        if x != y {
+            if x < y {
+                return 0 - 1
+            }
+            return 1
+        }
+        i = i + 1
+    }
+    if na == nb {
+        return 0
+    }
+    if na < nb {
+        return 0 - 1
+    }
+    return 1
+}
+
+fn bn_qs_partition(v: Vec<bytes>, lo: i64, hi: i64) -> i64 {
+    let pivot = vec_get(v, hi)
+    let mut i = lo
+    for j in lo..hi {
+        if bn_bytes_cmp(vec_get(v, j), pivot) <= 0 {
+            let tmp = vec_get(v, i)
+            vec_set(v, i, vec_get(v, j))
+            vec_set(v, j, tmp)
+            i = i + 1
+        }
+    }
+    let tmp = vec_get(v, i)
+    vec_set(v, i, vec_get(v, hi))
+    vec_set(v, hi, tmp)
+    return i
+}
+
+fn bn_qs_sort(v: Vec<bytes>, lo: i64, hi: i64) {
+    if lo < hi {
+        let p = bn_qs_partition(v, lo, hi)
+        bn_qs_sort(v, lo, p - 1)
+        bn_qs_sort(v, p + 1, hi)
+    }
+}
+
+fn bn_scan_keys(db: DrokDB, prefix: str) -> Vec<bytes> !Net !IO {
+    let mut keys: Vec<bytes> = vec_new()
+    let mut it = drock_iter_prefix(drock_iter_new(db), bytes_of_str(prefix))
+    it = drock_iter_next(it)?
+    while drock_iter_valid(it) == 1 {
+        vec_push(keys, drock_iter_key(it))
+        it = drock_iter_next(it)?
+    }
+    drock_iter_close(it)
+    if vec_len(keys) > 1 {
+        bn_qs_sort(keys, 0, vec_len(keys) - 1)
+    }
+    return keys
+}
+
+// Values aligned with bn_scan_keys order; empty bytes for a missing key.
+fn bn_scan_values(db: DrokDB, prefix: str) -> Vec<bytes> !Net !IO {
+    let keys = bn_scan_keys(db, prefix)?
+    let m = bn_mget(db, keys)?
+    return m.vals
+}
+
+fn bn_scan_strs(db: DrokDB, prefix: str) -> Vec<str> !Net !IO {
+    let keys = bn_scan_keys(db, prefix)?
+    let m = bn_mget(db, keys)?
+    let out: Vec<str> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(m.vals) {
+        vec_push(out, str_of_bytes(vec_get(m.vals, i)))
+        i = i + 1
+    }
+    return out
+}
+
+fn bn_scan_key_strs(db: DrokDB, prefix: str) -> Vec<str> !Net !IO {
+    let keys = bn_scan_keys(db, prefix)?
+    let out: Vec<str> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(keys) {
+        vec_push(out, str_of_bytes(vec_get(keys, i)))
+        i = i + 1
+    }
+    return out
+}
+

@@ -1,0 +1,103 @@
+// routes.baga — таблица на маршрутите + градене на app-а от env.
+//
+// Всеки запис е маршрут + хендълър + OpenAPI метаданни. `public=1` означава
+// без автентикация; всичко друго минава през ролята на потребителя.
+
+import "http.baga"
+import "routes_rid.baga"
+import "actions/system.baga"
+import "actions/auth.baga"
+import "actions/companies.baga"
+import "actions/accounts.baga"
+import "actions/counterparts.baga"
+import "actions/journal.baga"
+import "actions/invoices.baga"
+import "actions/periods.baga"
+import "actions/opening.baga"
+import "actions/reports.baga"
+import "actions/users.baga"
+import "store.baga"
+import "std/os/os.baga"
+import "std/str/str.baga"
+
+fn bn_build_app() -> BnApp !IO {
+    let mut app = bn_app_new(bn_env_or("FMR_TITLE", "buchnative")?, bn_env_or("FMR_VERSION", "0.1.0")?)
+    app = bn_app_jwt(app, bn_env_or("FMR_JWT_SECRET", "baga-secret")?)
+    app = bn_app_cors(app, bn_env_or("FMR_CORS", "")?)
+    app = bn_app_log(app, parse_int(bn_env_or("FMR_LOG", "0")?))
+    app = bn_app_db(app, bn_env_or("DROCK_HOST", "127.0.0.1")?, parse_int(bn_env_or("DROCK_PORT", "16579")?))
+    app = bn_app_http_port(app, parse_int(bn_env_or("PORT", "8090")?))
+
+    // ── системни ──
+    app = bn_route_fn_meta(app, "GET", "/health", RID_HEALTH(), act_health, "Health", "system", 1, "", "", "200", "")
+    app = bn_route_fn_meta(app, "GET", "/ready", RID_READY(), act_ready, "Ready", "system", 1, "", "", "200", "")
+    app = bn_route_fn_meta(app, "GET", "/v1/meta", RID_META(), act_meta, "Meta", "system", 1, "", "", "200", "")
+
+    // ── автентикация ──
+    app = bn_route_fn_meta(app, "POST", "/v1/auth/token", RID_TOKEN(), act_token, "Вход", "auth", 1, "Credentials", "Token", "200", "")
+    app = bn_route_fn_meta(app, "POST", "/v1/auth/register", RID_REGISTER(), act_register, "Регистрация", "auth", 1, "Register", "Token", "200", "")
+    app = bn_route_fn_meta(app, "GET", "/v1/me", RID_ME(), act_me, "Текущ потребител", "auth", 0, "", "Me", "200", "")
+    app = bn_route_fn_meta(app, "GET", "/v1/me/company", RID_ME_COMPANY_GET(), act_me_company_get, "Активна фирма", "auth", 0, "", "CompanyRef", "200", "")
+    app = bn_route_fn_meta(app, "POST", "/v1/me/company", RID_ME_COMPANY_SET(), act_me_company_set, "Смяна на фирма", "auth", 0, "CompanyRef", "CompanyRef", "200", "")
+
+    // ── фирми ──
+    app = bn_route_fn_meta(app, "GET", "/v1/companies", RID_COMPANIES_INDEX(), act_companies_index, "Списък фирми", "companies", 0, "", "CompanyList", "200", "limit,offset")
+    app = bn_route_fn_meta(app, "POST", "/v1/companies", RID_COMPANIES_CREATE(), act_companies_create, "Нова фирма", "companies", 0, "CompanyCreate", "Company", "201", "")
+    app = bn_route_fn_meta(app, "GET", "/v1/companies/{id}", RID_COMPANIES_SHOW(), act_companies_show, "Фирма", "companies", 0, "", "Company", "200", "")
+    app = bn_route_fn_meta(app, "PATCH", "/v1/companies/{id}", RID_COMPANIES_UPDATE(), act_companies_update, "Промяна на фирма", "companies", 0, "CompanyUpdate", "Company", "200", "")
+    app = bn_route_fn_meta(app, "DELETE", "/v1/companies/{id}", RID_COMPANIES_DELETE(), act_companies_delete, "Изтриване на фирма", "companies", 0, "", "-", "204", "")
+
+    // ── сметкоплан ──
+    app = bn_route_fn_meta(app, "GET", "/v1/accounts", RID_ACCOUNTS_INDEX(), act_accounts_index, "Сметкоплан", "accounts", 0, "", "AccountList", "200", "limit,offset")
+    app = bn_route_fn_meta(app, "POST", "/v1/accounts", RID_ACCOUNTS_CREATE(), act_accounts_create, "Нова сметка", "accounts", 0, "AccountCreate", "Account", "201", "")
+    app = bn_route_fn_meta(app, "POST", "/v1/accounts/seed", RID_ACCOUNTS_SEED(), act_accounts_seed, "Базов сметкоплан", "accounts", 0, "", "SeedResult", "200", "")
+    app = bn_route_fn_meta(app, "GET", "/v1/accounts/{code}", RID_ACCOUNTS_SHOW(), act_accounts_show, "Сметка", "accounts", 0, "", "Account", "200", "")
+    app = bn_route_fn_meta(app, "PATCH", "/v1/accounts/{code}", RID_ACCOUNTS_UPDATE(), act_accounts_update, "Промяна на сметка", "accounts", 0, "AccountUpdate", "Account", "200", "")
+    app = bn_route_fn_meta(app, "DELETE", "/v1/accounts/{code}", RID_ACCOUNTS_DELETE(), act_accounts_delete, "Изтриване на сметка", "accounts", 0, "", "-", "204", "")
+
+    // ── контрагенти ──
+    app = bn_route_fn_meta(app, "GET", "/v1/counterparts", RID_COUNTERPARTS_INDEX(), act_counterparts_index, "Контрагенти", "counterparts", 0, "", "CounterpartList", "200", "limit,offset")
+    app = bn_route_fn_meta(app, "POST", "/v1/counterparts", RID_COUNTERPARTS_CREATE(), act_counterparts_create, "Нов контрагент", "counterparts", 0, "CounterpartCreate", "Counterpart", "201", "")
+    app = bn_route_fn_meta(app, "GET", "/v1/counterparts/{id}", RID_COUNTERPARTS_SHOW(), act_counterparts_show, "Контрагент", "counterparts", 0, "", "Counterpart", "200", "")
+    app = bn_route_fn_meta(app, "PATCH", "/v1/counterparts/{id}", RID_COUNTERPARTS_UPDATE(), act_counterparts_update, "Промяна на контрагент", "counterparts", 0, "CounterpartUpdate", "Counterpart", "200", "")
+    app = bn_route_fn_meta(app, "DELETE", "/v1/counterparts/{id}", RID_COUNTERPARTS_DELETE(), act_counterparts_delete, "Изтриване на контрагент", "counterparts", 0, "", "-", "204", "")
+
+    // ── дневник ──
+    app = bn_route_fn_meta(app, "GET", "/v1/journal", RID_JOURNAL_INDEX(), act_journal_index, "Дневник", "journal", 0, "", "EntryList", "200", "period,limit,offset")
+    app = bn_route_fn_meta(app, "POST", "/v1/journal", RID_JOURNAL_CREATE(), act_journal_create, "Проводка", "journal", 0, "EntryCreate", "Entry", "201", "")
+    app = bn_route_fn_meta(app, "GET", "/v1/journal/{period}/{number}", RID_JOURNAL_SHOW(), act_journal_show, "Запис", "journal", 0, "", "Entry", "200", "")
+    app = bn_route_fn_meta(app, "POST", "/v1/journal/{period}/{number}/reverse", RID_JOURNAL_REVERSE(), act_journal_reverse, "Сторно", "journal", 0, "", "Entry", "201", "")
+
+    // ── фактури ──
+    app = bn_route_fn_meta(app, "GET", "/v1/invoices", RID_INVOICES_INDEX(), act_invoices_index, "Фактури", "invoices", 0, "", "InvoiceList", "200", "limit,offset")
+    app = bn_route_fn_meta(app, "POST", "/v1/invoices", RID_INVOICES_CREATE(), act_invoices_create, "Нова фактура", "invoices", 0, "InvoiceCreate", "Invoice", "201", "")
+    app = bn_route_fn_meta(app, "GET", "/v1/invoices/{id}", RID_INVOICES_SHOW(), act_invoices_show, "Фактура", "invoices", 0, "", "Invoice", "200", "")
+    app = bn_route_fn_meta(app, "POST", "/v1/invoices/{id}/post", RID_INVOICES_POST(), act_invoices_post, "Проводка на фактура", "invoices", 0, "", "Invoice", "200", "")
+    app = bn_route_fn_meta(app, "DELETE", "/v1/invoices/{id}", RID_INVOICES_DELETE(), act_invoices_delete, "Изтриване на фактура", "invoices", 0, "", "-", "204", "")
+
+    // ── периоди ──
+    app = bn_route_fn_meta(app, "GET", "/v1/periods", RID_PERIODS_INDEX(), act_periods_index, "Периоди", "periods", 0, "", "PeriodList", "200", "limit,offset")
+    app = bn_route_fn_meta(app, "POST", "/v1/periods/{period}/close", RID_PERIODS_CLOSE(), act_periods_close, "Затваряне на период", "periods", 0, "", "Period", "200", "")
+    app = bn_route_fn_meta(app, "POST", "/v1/periods/{period}/reopen", RID_PERIODS_REOPEN(), act_periods_reopen, "Отваряне на период", "periods", 0, "", "Period", "200", "")
+
+    // ── начални салда ──
+    app = bn_route_fn_meta(app, "GET", "/v1/opening-balances", RID_OPENING_INDEX(), act_opening_index, "Начални салда", "opening", 0, "", "OpeningList", "200", "year,limit,offset")
+    app = bn_route_fn_meta(app, "POST", "/v1/opening-balances", RID_OPENING_UPSERT(), act_opening_upsert, "Начално салдо", "opening", 0, "OpeningCreate", "Opening", "200", "")
+    app = bn_route_fn_meta(app, "DELETE", "/v1/opening-balances/{account}", RID_OPENING_DELETE(), act_opening_delete, "Изтриване на салдо", "opening", 0, "", "-", "204", "year")
+
+    // ── отчети ──
+    app = bn_route_fn_meta(app, "GET", "/v1/reports/trial", RID_REPORT_TRIAL(), act_report_trial, "Оборотна ведомост", "reports", 0, "", "TrialBalance", "200", "period")
+    app = bn_route_fn_meta(app, "GET", "/v1/reports/trial-year", RID_REPORT_TRIAL_YEAR(), act_report_trial_year, "Оборотна ведомост (година)", "reports", 0, "", "TrialYear", "200", "year")
+    app = bn_route_fn_meta(app, "GET", "/v1/reports/ledger", RID_REPORT_LEDGER(), act_report_ledger, "Главна книга", "reports", 0, "", "Ledger", "200", "account,period")
+    app = bn_route_fn_meta(app, "GET", "/v1/reports/pl", RID_REPORT_PL(), act_report_pl, "НСС1 резултат", "reports", 0, "", "ProfitLoss", "200", "period")
+    app = bn_route_fn_meta(app, "GET", "/v1/reports/pl-year", RID_REPORT_PL_YEAR(), act_report_pl_year, "НСС1 резултат (година)", "reports", 0, "", "ProfitLoss", "200", "period")
+    app = bn_route_fn_meta(app, "GET", "/v1/reports/bs", RID_REPORT_BS(), act_report_bs, "НСС2 баланс", "reports", 0, "", "BalanceSheet", "200", "period")
+
+    // ── потребители и роли ──
+    app = bn_route_fn_meta(app, "GET", "/v1/users", RID_USERS_INDEX(), act_users_index, "Потребители", "users", 0, "", "UserList", "200", "limit,offset")
+    app = bn_route_fn_meta(app, "POST", "/v1/users", RID_USERS_CREATE(), act_users_create, "Нов потребител", "users", 0, "UserCreate", "User", "201", "")
+    app = bn_route_fn_meta(app, "PATCH", "/v1/users/{email}/role", RID_USERS_ROLE(), act_users_role, "Смяна на роля", "users", 0, "RoleUpdate", "RoleRef", "200", "")
+    app = bn_route_fn_meta(app, "GET", "/v1/roles", RID_ROLES_INDEX(), act_roles_index, "Роли", "users", 0, "", "RoleList", "200", "limit,offset")
+
+    return app
+}

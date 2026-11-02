@@ -1,0 +1,88 @@
+// actions/journal.baga — дневник: списък, проводка, показване, сторно.
+
+import "action.baga"
+import "fmrbaga/jsonx.baga"
+import "../model_journal.baga"
+import "../model_journal_query.baga"
+import "../json.baga"
+import "../time.baga"
+import "std/json/json.baga"
+import "std/str/str.baga"
+
+fn act_journal_index(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net !Time {
+    let a = bn_act_require(ctx, db, BN_R_READ())
+    if a.ok == 0 {
+        return a.out
+    }
+    let co = bn_act_company(db, ctx)?
+    let mut period = fmr_query(ctx, "period")
+    if period == "" {
+        period = bn_today_period()?
+    }
+    let entries = bn_je_list(db, co.id, period)?
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < vec_len(entries) {
+        arr = jarr_obj(arr, bn_entry_to_json(vec_get(entries, i)))
+        i = i + 1
+    }
+    return bn_act_ok(db, bn_act_page_wrap(arr, vec_len(entries), bn_act_page(ctx, 100, 1000)))
+}
+
+fn act_journal_create(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net !Time !Par {
+    let a = bn_act_require(ctx, db, BN_R_POST())
+    if a.ok == 0 {
+        return a.out
+    }
+    let co = bn_act_company(db, ctx)?
+    let d = bn_act_body(ctx)
+    let b = bn_j_root(d)
+    let date = bn_j_str(d, b, "date")
+    if date == "" {
+        return bn_act_err(db, 422, "date е задължително")
+    }
+    let lines = bn_lines_from_json(d, bn_j_child(d, b, "lines"))
+    let r = bn_je_post(db, co.id, date, bn_j_str(d, b, "doc_type"), bn_j_str(d, b, "doc_number"), bn_j_str(d, b, "description"), lines, a.ctx.user_sub, bn_now_iso()?)?
+    if r.ok == 0 {
+        return bn_act_err(db, 422, r.err)
+    }
+    let e = bn_je_get(db, co.id, bn_period_of(date), r.number)?
+    return bn_act_created(db, bn_entry_to_json(e))
+}
+
+fn act_journal_show(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net {
+    let a = bn_act_require(ctx, db, BN_R_READ())
+    if a.ok == 0 {
+        return a.out
+    }
+    let co = bn_act_company(db, ctx)?
+    let period = fmr_param(ctx, "period")
+    let number = fmr_param_i64(ctx, "number")
+    if period == "" || number <= 0 {
+        return bn_act_err(db, 400, "невалиден период или номер")
+    }
+    let e = bn_je_get(db, co.id, period, number)?
+    if e.number <= 0 {
+        return bn_act_404(db, "няма такъв запис")
+    }
+    return bn_act_ok(db, bn_entry_to_json(e))
+}
+
+fn act_journal_reverse(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net !Time !Par {
+    let a = bn_act_require(ctx, db, BN_R_POST())
+    if a.ok == 0 {
+        return a.out
+    }
+    let co = bn_act_company(db, ctx)?
+    let period = fmr_param(ctx, "period")
+    let number = fmr_param_i64(ctx, "number")
+    if period == "" || number <= 0 {
+        return bn_act_err(db, 400, "невалиден период или номер")
+    }
+    let r = bn_je_reverse(db, co.id, period, number, a.ctx.user_sub, bn_now_iso()?)?
+    if r.ok == 0 {
+        return bn_act_err(db, 422, r.err)
+    }
+    let e = bn_je_get(db, co.id, period, r.number)?
+    return bn_act_created(db, bn_entry_to_json(e))
+}

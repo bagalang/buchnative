@@ -1,0 +1,384 @@
+// model_journal.baga — дневник: двоен запис, автоматична номерация, салда.
+//
+// Един запис е непроменим (append-only, zero-padded ключ). Салдата на всяка
+// сметка се инкрементира в същия MSET, който записва реда — така ред и
+// салда са атомарни. Преди това се взема KV-заключване на фирмата, за да няма
+// загубена промяна при едновременни проводки.
+
+import "store.baga"
+import "store_scan.baga"
+import "json.baga"
+import "money.baga"
+import "fmrbaga/jsonx.baga"
+import "model_account.baga"
+import "model_company.baga"
+import "model_period.baga"
+import "std/json/json.baga"
+import "std/str/str.baga"
+
+struct BnLine {
+    account: str,
+    debit: str,
+    credit: str,
+    counterpart: i64,
+    note: str
+}
+
+struct BnEntry {
+    id: i64,
+    company: i64,
+    number: i64,
+    period: str,
+    date: str,
+    doc_type: str,
+    doc_number: str,
+    description: str,
+    lines: Vec<BnLine>,
+    created_at: str,
+    created_by: str
+}
+
+fn bn_line_zero() -> BnLine {
+    return BnLine { account: "", debit: "0.00", credit: "0.00", counterpart: 0, note: "" }
+}
+
+fn bn_line_from_json(d: JsonDoc, root: i64) -> BnLine {
+    let mut l = bn_line_zero()
+    l.account = bn_j_str(d, root, "account")
+    l.debit = bn_money_round2(bn_j_str(d, root, "debit"))
+    l.credit = bn_money_round2(bn_j_str(d, root, "credit"))
+    l.counterpart = bn_j_i64(d, root, "counterpart")
+    l.note = bn_j_str(d, root, "note")
+    return l
+}
+
+fn bn_line_to_json(l: BnLine) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_str(o, "account", l.account)
+    o = jobj_str(o, "debit", bn_money_round2(l.debit))
+    o = jobj_str(o, "credit", bn_money_round2(l.credit))
+    o = jobj_i64(o, "counterpart", l.counterpart)
+    o = jobj_str(o, "note", l.note)
+    return o
+}
+
+// Ред в аналитичния индекс — запазва и контекста на записа.
+fn bn_line_json_str(l: BnLine, e: BnEntry) -> str {
+    let mut o = bn_line_to_json(l)
+    o = jobj_i64(o, "entry", e.number)
+    o = jobj_str(o, "entry_date", e.date)
+    o = jobj_str(o, "doc_type", e.doc_type)
+    o = jobj_str(o, "doc_number", e.doc_number)
+    o = jobj_str(o, "description", e.description)
+    return jobj_encode(o)
+}
+
+// Редове от аналитичния индекс на сметка в период.
+fn bn_jl_load(db: DrokDB, co: i64, account: str, period: str) -> Vec<BnLine> !Net !IO {
+    let keys = bn_scan_key_strs(db, bn_k_jl_prefix(co, account, period))?
+    let out: Vec<BnLine> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(keys) {
+        let s = vec_get(keys, i)
+        let d = json_parse(bn_get_str(db, s)?)
+        if bn_j_root(d) >= 0 {
+            vec_push(out, bn_line_from_json(d, bn_j_root(d)))
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Документите на аналитичния индек, подредени по номер на запис.
+fn bn_jl_docs(db: DrokDB, co: i64, account: str, period: str) -> Vec<str> !Net !IO {
+    return bn_scan_strs(db, bn_k_jl_prefix(co, account, period))?
+}
+
+fn bn_lines_to_json(lines: Vec<BnLine>) -> JArr {
+    let mut a = jarr_new()
+    let mut i: i64 = 0
+    while i < vec_len(lines) {
+        a = jarr_obj(a, bn_line_to_json(vec_get(lines, i)))
+        i = i + 1
+    }
+    return a
+}
+
+fn bn_lines_from_json(d: JsonDoc, arr: i64) -> Vec<BnLine> {
+    let out: Vec<BnLine> = vec_new()
+    if arr < 0 {
+        return out
+    }
+    let n = bn_j_count(d, arr)
+    let mut i: i64 = 0
+    while i < n {
+        let node = bn_j_item(d, arr, i)
+        if node >= 0 && json_tag(d, node) == 6 {
+            vec_push(out, bn_line_from_json(d, node))
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn bn_entry_zero() -> BnEntry {
+    return BnEntry { id: 0, company: 0, number: 0, period: "", date: "", doc_type: "", doc_number: "", description: "", lines: vec_new(), created_at: "", created_by: "" }
+}
+
+fn bn_entry_from_json(d: JsonDoc, root: i64) -> BnEntry {
+    let e = bn_entry_zero()
+    e.id = bn_j_i64(d, root, "id")
+    e.company = bn_j_i64(d, root, "company")
+    e.number = bn_j_i64(d, root, "number")
+    e.period = bn_j_str(d, root, "period")
+    e.date = bn_j_str(d, root, "date")
+    e.doc_type = bn_j_str(d, root, "doc_type")
+    e.doc_number = bn_j_str(d, root, "doc_number")
+    e.description = bn_j_str(d, root, "description")
+    let la = bn_j_child(d, root, "lines")
+    e.lines = bn_lines_from_json(d, la)
+    e.created_at = bn_j_str(d, root, "created_at")
+    e.created_by = bn_j_str(d, root, "created_by")
+    return e
+}
+
+fn bn_entry_to_json(e: BnEntry) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", e.id)
+    o = jobj_i64(o, "company", e.company)
+    o = jobj_i64(o, "number", e.number)
+    o = jobj_str(o, "period", e.period)
+    o = jobj_str(o, "date", e.date)
+    o = jobj_str(o, "doc_type", e.doc_type)
+    o = jobj_str(o, "doc_number", e.doc_number)
+    o = jobj_str(o, "description", e.description)
+    o = jobj_arr(o, "lines", bn_lines_to_json(e.lines))
+    o = jobj_str(o, "created_at", e.created_at)
+    o = jobj_str(o, "created_by", e.created_by)
+    return o
+}
+
+fn bn_entry_json_str(e: BnEntry) -> str {
+    return jobj_encode(bn_entry_to_json(e))
+}
+
+// ── салда ─────────────────────────────────────────────────────────────────
+
+struct BnBalance {
+    company: i64,
+    period: str,
+    account: str,
+    debit: str,
+    credit: str,
+    balance: str,
+    lines: i64
+}
+
+fn bn_bal_zero(co: i64, period: str, account: str) -> BnBalance {
+    return BnBalance { company: co, period: period, account: account, debit: "0.00", credit: "0.00", balance: "0.00", lines: 0 }
+}
+
+fn bn_bal_from_json(d: JsonDoc, root: i64, co: i64, period: str, account: str) -> BnBalance {
+    let b = bn_bal_zero(co, period, account)
+    b.debit = bn_money_round2(bn_j_str(d, root, "debit"))
+    b.credit = bn_money_round2(bn_j_str(d, root, "credit"))
+    b.balance = bn_money_round2(bn_j_str(d, root, "balance"))
+    b.lines = bn_j_i64(d, root, "lines")
+    return b
+}
+
+fn bn_bal_to_json(b: BnBalance) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "company", b.company)
+    o = jobj_str(o, "period", b.period)
+    o = jobj_str(o, "account", b.account)
+    o = jobj_str(o, "debit", b.debit)
+    o = jobj_str(o, "credit", b.credit)
+    o = jobj_str(o, "balance", b.balance)
+    o = jobj_i64(o, "lines", b.lines)
+    return o
+}
+
+fn bn_bal_json_str(b: BnBalance) -> str {
+    return jobj_encode(bn_bal_to_json(b))
+}
+
+fn bn_bal_load(db: DrokDB, co: i64, period: str, account: str) -> BnBalance !Net !IO {
+    let s = bn_get_str(db, bn_k_bal(co, period, account))?
+    if s == "" {
+        return bn_bal_zero(co, period, account)
+    }
+    let d = json_parse(s)
+    return bn_bal_from_json(d, bn_j_root(d), co, period, account)
+}
+
+// Модифицира локално копие под външно заключване.
+fn bn_bal_add(b: BnBalance, debit: str, credit: str) -> BnBalance {
+    b.debit = bn_money_add(b.debit, debit)
+    b.credit = bn_money_add(b.credit, credit)
+    b.lines = b.lines + 1
+    if bn_ac_side(bn_bal_class(b.account)) == "debit" {
+        b.balance = bn_money_sub(b.debit, b.credit)
+    } else {
+        b.balance = bn_money_sub(b.credit, b.debit)
+    }
+    return b
+}
+
+fn bn_bal_class(account: str) -> i64 {
+    if len(account) < 1 {
+        return 0
+    }
+    return parse_int(substr(account, 0, 1))
+}
+
+// Агрегира редовете по сметка в рамките на един запис.
+//
+// Салдото се начислява веднъж на сметка — ако сметката се повтаря в записа
+// (две аналитични разбивки по една и съща сметка), иначе второто начисление
+// се плъва върху първото и сумата се губи.
+fn bn_lines_aggregate(lines: Vec<BnLine>) -> Vec<BnLine> {
+    let out: Vec<BnLine> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(lines) {
+        let l = vec_get(lines, i)
+        let mut found: i64 = 0 - 1
+        let mut j: i64 = 0
+        while j < vec_len(out) {
+            if vec_get(out, j).account == l.account {
+                found = j
+            }
+            j = j + 1
+        }
+        if found < 0 {
+            let nl = bn_line_zero()
+            nl.account = l.account
+            nl.debit = l.debit
+            nl.credit = l.credit
+            vec_push(out, nl)
+        } else {
+            let cur = vec_get(out, found)
+            cur.debit = bn_money_add(cur.debit, l.debit)
+            cur.credit = bn_money_add(cur.credit, l.credit)
+            vec_set(out, found, cur)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ── резултат ──────────────────────────────────────────────────────────────
+
+struct BnResult {
+    ok: i64,
+    err: str,
+    id: i64,
+    number: i64
+}
+
+fn bn_res_ok(id: i64, number: i64) -> BnResult {
+    return BnResult { ok: 1, err: "", id: id, number: number }
+}
+
+fn bn_res_err(msg: str) -> BnResult {
+    return BnResult { ok: 0, err: msg, id: 0, number: 0 }
+}
+
+// ── валидация на редове ──────────────────────────────────────────────────
+
+fn bn_lines_validate(db: DrokDB, co: i64, lines: Vec<BnLine>) -> str !Net !IO {
+    if vec_len(lines) < 2 {
+        return "проводката трябва да има поне два реда"
+    }
+    let mut debit_total = bn_money_zero()
+    let mut credit_total = bn_money_zero()
+    let mut i: i64 = 0
+    while i < vec_len(lines) {
+        let l = vec_get(lines, i)
+        if l.account == "" {
+            return concat("ред ", concat(int_to_str(i + 1), ": липсва сметка"))
+        }
+        if bn_money_is_valid(l.debit) == 0 || bn_money_is_valid(l.credit) == 0 {
+            return concat("ред ", concat(int_to_str(i + 1), ": сумата не е число"))
+        }
+        if bn_ac_exists(db, co, l.account)? == 0 {
+            return concat("ред ", concat(int_to_str(i + 1), concat(": няма сметка ", l.account)))
+        }
+        if bn_money_lt(l.debit, bn_money_zero()) == 1 || bn_money_lt(l.credit, bn_money_zero()) == 1 {
+            return concat("ред ", concat(int_to_str(i + 1), ": отрицателна сума"))
+        }
+        if bn_money_gt(l.debit, bn_money_zero()) == 1 && bn_money_gt(l.credit, bn_money_zero()) == 1 {
+            return concat("ред ", concat(int_to_str(i + 1), ": дебит и кредит едновременно"))
+        }
+        debit_total = bn_money_add(debit_total, l.debit)
+        credit_total = bn_money_add(credit_total, l.credit)
+        i = i + 1
+    }
+    if bn_money_eq(debit_total, credit_total) == 0 {
+        return "дебитът не е равен на кредита"
+    }
+    return ""
+}
+
+// ── проводка ──────────────────────────────────────────────────────────────
+
+fn bn_je_post(db: DrokDB, co: i64, date: str, doc_type: str, doc_number: str, description: str, lines: Vec<BnLine>, created_by: str, created_at: str) -> BnResult !Net !IO !Par {
+    let period = bn_period_of(date)
+    if len(period) != 7 {
+        return bn_res_err("датата трябва да е YYYY-MM-DD")
+    }
+    if bn_co_exists(db, co)? == 0 {
+        return bn_res_err("няма такава фирма")
+    }
+    if bn_per_is_open(db, co, period)? == 0 {
+        return bn_res_err(concat("период ", concat(period, " е затворен")))
+    }
+    let err = bn_lines_validate(db, co, lines)?
+    if err != "" {
+        return bn_res_err(err)
+    }
+    let lock = concat(concat("bn:lock:post:", int_to_str(co)), ":")
+    if bn_lock_wait(db, lock, 30, 200)? == 0 {
+        return bn_res_err("дневникът е зает, опитай пак")
+    }
+    let r = bn_je_write(db, co, period, date, doc_type, doc_number, description, lines, created_by, created_at)?
+    bn_lock_release(db, lock)?
+    return r
+}
+
+// Под заключване: чете салда, добавя, записва ред + индекс + салда в един MSET.
+fn bn_je_write(db: DrokDB, co: i64, period: str, date: str, doc_type: str, doc_number: str, description: str, lines: Vec<BnLine>, created_by: str, created_at: str) -> BnResult !Net !IO {
+    let number = bn_incr(db, bn_k_seq(co, period))?
+    if number < 0 {
+        return bn_res_err("не може да се номерира запис")
+    }
+    let e = BnEntry { id: number, company: co, number: number, period: period, date: date, doc_type: doc_type, doc_number: doc_number, description: description, lines: lines, created_at: created_at, created_by: created_by }
+    let ks: Vec<str> = vec_new()
+    let vs: Vec<str> = vec_new()
+    vec_push(ks, bn_k_je(co, period, number))
+    vec_push(vs, bn_entry_json_str(e))
+    // Аналитичен индекс: сметка → запис → линия (за главна книга).
+    let mut i: i64 = 0
+    while i < vec_len(lines) {
+        let l = vec_get(lines, i)
+        vec_push(ks, bn_k_jl(co, l.account, period, number, i))
+        vec_push(vs, bn_line_json_str(l, e))
+        i = i + 1
+    }
+    // Салда по сметка — инкрементална, в същия атомарен MSET. Повторна сметка
+    // в записа се агрегира, за да не се загуби начисление.
+    let agg = bn_lines_aggregate(lines)
+    let mut j: i64 = 0
+    while j < vec_len(agg) {
+        let l = vec_get(agg, j)
+        let b = bn_bal_load(db, co, period, l.account)?
+        let nb = bn_bal_add(b, l.debit, l.credit)
+        vec_push(ks, bn_k_bal(co, period, l.account))
+        vec_push(vs, bn_bal_json_str(nb))
+        j = j + 1
+    }
+    if bn_mset(db, ks, vs)? == 0 {
+        return bn_res_err("записът не бе приет от базата")
+    }
+    return bn_res_ok(number, number)
+}

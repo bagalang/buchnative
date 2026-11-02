@@ -1,0 +1,155 @@
+// api_test.baga — тест на HTTP слоя в процеса (рутер, JWT, права, хендлери).
+//
+// Не отваря сокет: заявката се подава директно на bn_handle. Нужен е rocksbaga
+// на DROCK_PORT. Фирмата 900003 се използва само за тестовете.
+//
+//   DROCK_PORT=16579 ./baga -I . -I app-product app-product/buchnative/tests/api_test.baga
+
+import "../routes.baga"
+import "../http.baga"
+import "../store.baga"
+import "../json.baga"
+import "../model_user.baga"
+import "../model_company.baga"
+import "../model_account.baga"
+import "../model_journal.baga"
+import "httpdbaga/http.baga"
+import "std/json/json.baga"
+import "std/os/os.baga"
+import "std/random/random.baga"
+import "std/str/str.baga"
+
+fn need(cond: bool, fails: Map<str, i64>, label: str) {
+    if cond == false {
+        print(concat("FAIL ", label))
+        map_set(fails, label, 1)
+    }
+}
+
+fn bn_api_req(method: str, path: str, body: str, token: str) -> Request {
+    let ks: Vec<str> = vec_new()
+    let vs: Vec<str> = vec_new()
+    vec_push(ks, "Content-Type")
+    vec_push(vs, "application/json")
+    if token != "" {
+        vec_push(ks, "Authorization")
+        vec_push(vs, concat("Bearer ", token))
+    }
+    return Request { method: method, path: path, version: "HTTP/1.1", hkeys: ks, hvals: vs, body: body, body_bytes: bytes_of_str(body) }
+}
+
+fn bn_api_json(resp: Response) -> JsonDoc {
+    return bn_j_body(resp.body)
+}
+
+fn bn_api_field(d: JsonDoc, key: str) -> str {
+    return bn_j_str(d, bn_j_root(d), key)
+}
+
+fn bn_api_i64(d: JsonDoc, key: str) -> i64 {
+    return bn_j_i64(d, bn_j_root(d), key)
+}
+
+fn main() -> i64 !Net !IO !Random !Time {
+    let fails: Map<str, i64> = map_new()
+    let db = bn_open_env()?
+    if drock_ok(db) == 0 {
+        print(concat("SKIP api_test: ", drock_last_error(db)))
+        return 0
+    }
+    // Тестът разчита на празна база: първият регистриран потребител става
+    // супер-админ заедно с фирма и сметкоплан. Сървърът му е отделен (виж
+    // run_tests.sh), затова можем да го изчистим безопасно — така тестът не
+    // зависи от това какво е останало в него от предишни прогони.
+    let fl = drock_flushall(db)?
+    need(fl.ok == 1, fails, "flushall on isolated test server")
+    let existing = bn_user_all(db)?
+    if vec_len(existing) > 0 {
+        print("SKIP api_test: базата не е празна след FLUSHALL — нещо не е наред")
+        return 0
+    }
+    let app = bn_build_app()?
+
+    // ── публични ──
+    let h = bn_handle(app, bn_api_req("GET", "/health", "", ""), db)?
+    need(h.status == 200, fails, "health 200")
+    need(str_find(h.body, "buchnative") > 0, fails, "health body")
+
+    let r404 = bn_handle(app, bn_api_req("GET", "/nope", "", ""), db)?
+    need(r404.status == 404, fails, "unknown path 404")
+
+    let r405 = bn_handle(app, bn_api_req("DELETE", "/health", "", ""), db)?
+    need(r405.status == 405, fails, "wrong method 405")
+
+    // ── защита ──
+    let noauth = bn_handle(app, bn_api_req("GET", "/v1/me", "", ""), db)?
+    need(noauth.status == 401, fails, "me without token 401")
+
+    let badtok = bn_handle(app, bn_api_req("GET", "/v1/me", "", "not-a-jwt"), db)?
+    need(badtok.status == 401, fails, "me with bad token 401")
+
+    // ── регистрация първи потребител ──
+    let reg = bn_api_req("POST", "/v1/auth/register", "{\"email\":\"api@x.com\",\"password\":\"pw+123\",\"name\":\"API\",\"company\":\"API CO\"}", "")
+    let regr = bn_handle(app, reg, db)?
+    need(regr.status == 200, fails, "register 200")
+    let tok = bn_api_field(bn_api_json(regr), "access_token")
+    need(tok != "", fails, "register returns token")
+
+    // ── /me ──
+    let me = bn_handle(app, bn_api_req("GET", "/v1/me", "", tok), db)?
+    need(me.status == 200, fails, "me 200")
+    need(bn_api_i64(bn_api_json(me), "is_super_admin") == 1, fails, "first user is super admin")
+
+    // ── сметки ──
+    let accs = bn_handle(app, bn_api_req("GET", "/v1/accounts", "", tok), db)?
+    need(accs.status == 200, fails, "accounts 200")
+    need(str_find(accs.body, "\"count\":24") > 0, fails, "seed chart has 24 accounts")
+
+    // ── фирма ──
+    let co = bn_handle(app, bn_api_req("POST", "/v1/companies", "{\"name\":\"Втора фирма\"}", tok), db)?
+    need(co.status == 201, fails, "company create 201")
+
+    // ── контрагент ──
+    let cp = bn_handle(app, bn_api_req("POST", "/v1/counterparts", "{\"name\":\"Клиент А\",\"is_customer\":1}", tok), db)?
+    need(cp.status == 201, fails, "counterpart create 201")
+
+    // ── проводка ──
+    let body = "{\"date\":\"2026-11-05\",\"doc_type\":\"sale\",\"doc_number\":\"A-1\",\"description\":\"Тест\",\"lines\":[{\"account\":\"211\",\"debit\":\"300.00\",\"credit\":\"0.00\"},{\"account\":\"701\",\"debit\":\"0.00\",\"credit\":\"300.00\"}]}"
+    let je = bn_handle(app, bn_api_req("POST", "/v1/journal", body, tok), db)?
+    need(je.status == 201, fails, "journal post 201")
+
+    let jebad = "{\"date\":\"2026-11-05\",\"doc_type\":\"sale\",\"doc_number\":\"A-2\",\"description\":\"Тест\",\"lines\":[{\"account\":\"211\",\"debit\":\"300.00\",\"credit\":\"0.00\"},{\"account\":\"701\",\"debit\":\"0.00\",\"credit\":\"200.00\"}]}"
+    let jbr = bn_handle(app, bn_api_req("POST", "/v1/journal", jebad, tok), db)?
+    need(jbr.status == 422, fails, "unbalanced journal 422")
+
+    // ── отчети ──
+    let trial = bn_handle(app, bn_api_req("GET", "/v1/reports/trial?period=2026-11", "", tok), db)?
+    need(trial.status == 200, fails, "trial 200")
+    need(str_find(trial.body, "\"balanced\":\"1\"") > 0, fails, "trial balanced")
+
+    let led = bn_handle(app, bn_api_req("GET", "/v1/reports/ledger?account=211&period=2026-11", "", tok), db)?
+    need(led.status == 200, fails, "ledger 200")
+
+    let pl = bn_handle(app, bn_api_req("GET", "/v1/reports/pl?period=2026-11", "", tok), db)?
+    need(pl.status == 200, fails, "pl 200")
+
+    let bs = bn_handle(app, bn_api_req("GET", "/v1/reports/bs?period=2026-11", "", tok), db)?
+    need(bs.status == 200, fails, "bs 200")
+
+    // ── права: счетоводител не може да създава фирми ──
+    let uadd = bn_handle(app, bn_api_req("POST", "/v1/users", "{\"email\":\"acc@x.com\",\"password\":\"pw+123\",\"role\":\"accountant\"}", tok), db)?
+    need(uadd.status == 201, fails, "user create 201")
+    let tlogin = bn_handle(app, bn_api_req("POST", "/v1/auth/token", "{\"email\":\"acc@x.com\",\"password\":\"pw+123\"}", ""), db)?
+    let atok = bn_api_field(bn_api_json(tlogin), "access_token")
+    need(atok != "", fails, "accountant login")
+    let co2 = bn_handle(app, bn_api_req("POST", "/v1/companies", "{\"name\":\"Не\"}", atok), db)?
+    need(co2.status == 403, fails, "accountant cannot create company")
+
+    drock_close(db)?
+    if map_len(fails) == 0 {
+        print("api_test: ok")
+        return 0
+    }
+    print(concat("api_test: ", concat(int_to_str(map_len(fails)), " failure(s)")))
+    return 1
+}

@@ -1,0 +1,338 @@
+// store.baga — KV layer over drockb for buchnative.
+//
+// rocksbaga SCAN is Redis-style: unordered and cursor-based. This layer keeps
+// every index key zero-padded so lexicographic order == logical order, then
+// sorts after a prefix scan. Values are JSON text; money inside is a decimal
+// string (never f64).
+//
+// Key layout (all keys ASCII):
+//   bn:meta:ver                          schema version
+//   bn:id:<kind>                        INCR id allocator (co, cp, inv, usr)
+//   bn:co:<id>                           company JSON
+//   bn:co:all                            JSON array of company ids
+//   bn:usr:<email>                       user JSON
+//   bn:role:<company>:<email>            role code
+//   bn:act:<email>                       active company id
+//   bn:acc:<co>:<code>                   account JSON
+//   bn:acc:all:<co>                      JSON array of account codes
+//   bn:cp:<co>:<id>                      counterpart JSON
+//   bn:cp:all:<co>                       JSON array of counterpart ids
+//   bn:per:<co>:<yyyy-mm>                period JSON {status}
+//   bn:ob:<co>:<account>:<yyyy>          opening balance JSON
+//   bn:seq:<co>:<yyyy-mm>                INCR entry-number counter
+//   bn:je:<co>:<yyyy-mm>:<seq:08d>       journal entry JSON
+//   bn:jl:<co>:<account>:<yyyy-mm>:<seq:08d>  journal line JSON
+//   bn:bal:<co>:<yyyy-mm>:<account>      incremental balance JSON
+//   bn:inv:<co>:<id>                     invoice JSON
+//   bn:inv:num:<co>:<number>             invoice id (number index)
+//   bn:inv:all:<co>                      JSON array of invoice ids
+
+import "drockb/drockb.baga"
+import "fmrbaga/jsonx.baga"
+import "std/bytes/bytes.baga"
+import "std/str/str.baga"
+import "std/json/json.baga"
+import "std/os/os.baga"
+
+fn BN_VERSION() -> str { return "1" }
+
+// ── key builders ─────────────────────────────────────────────────────────
+
+fn bn_k_meta() -> str { return "bn:meta:ver" }
+fn bn_k_id(kind: str) -> str { return concat("bn:id:", kind) }
+fn bn_k_co(id: i64) -> str { return concat("bn:co:", int_to_str(id)) }
+fn bn_k_co_all() -> str { return "bn:co:all" }
+fn bn_k_usr(email: str) -> str { return concat("bn:usr:", email) }
+fn bn_k_role(co: i64, email: str) -> str { return concat("bn:role:", concat(int_to_str(co), concat(":", email))) }
+fn bn_k_act(email: str) -> str { return concat("bn:act:", email) }
+
+fn bn_k_acc(co: i64, code: str) -> str { return concat("bn:acc:", concat(int_to_str(co), concat(":", code))) }
+fn bn_k_acc_all(co: i64) -> str { return concat("bn:acc:all:", int_to_str(co)) }
+
+fn bn_k_cp(co: i64, id: i64) -> str { return concat("bn:cp:", concat(int_to_str(co), concat(":", int_to_str(id)))) }
+fn bn_k_cp_all(co: i64) -> str { return concat("bn:cp:all:", int_to_str(co)) }
+
+fn bn_k_per(co: i64, period: str) -> str { return concat("bn:per:", concat(int_to_str(co), concat(":", period))) }
+fn bn_k_ob(co: i64, account: str, year: str) -> str { return concat("bn:ob:", concat(int_to_str(co), concat(":", concat(account, concat(":", year))))) }
+
+fn bn_k_seq(co: i64, period: str) -> str { return concat("bn:seq:", concat(int_to_str(co), concat(":", period))) }
+
+fn bn_k_je(co: i64, period: str, seq: i64) -> str { return concat("bn:je:", concat(int_to_str(co), concat(":", concat(period, concat(":", bn_pad8(seq)))))) }
+fn bn_k_je_prefix(co: i64, period: str) -> str { return concat("bn:je:", concat(int_to_str(co), concat(":", concat(period, ":")))) }
+
+// Номерът на линия в ключа предотвратява загубата на втора линия по същата
+// сметка в един запис (ключът иначе се повтаря и едната линия затира другата).
+fn bn_k_jl(co: i64, account: str, period: str, seq: i64, line_no: i64) -> str { return concat("bn:jl:", concat(int_to_str(co), concat(":", concat(account, concat(":", concat(period, concat(":", concat(bn_pad8(seq), concat(":", bn_pad2(line_no)))))))))) }
+fn bn_k_jl_prefix(co: i64, account: str, period: str) -> str { return concat("bn:jl:", concat(int_to_str(co), concat(":", concat(account, concat(":", concat(period, ":")))))) }
+
+fn bn_k_bal(co: i64, period: str, account: str) -> str { return concat("bn:bal:", concat(int_to_str(co), concat(":", concat(period, concat(":", account))))) }
+fn bn_k_bal_prefix(co: i64, period: str) -> str { return concat("bn:bal:", concat(int_to_str(co), concat(":", concat(period, ":")))) }
+
+fn bn_k_inv(co: i64, id: i64) -> str { return concat("bn:inv:", concat(int_to_str(co), concat(":", int_to_str(id)))) }
+fn bn_k_inv_num(co: i64, number: str) -> str { return concat("bn:inv:num:", concat(int_to_str(co), concat(":", number))) }
+fn bn_k_inv_all(co: i64) -> str { return concat("bn:inv:all:", int_to_str(co)) }
+
+// ── connection ───────────────────────────────────────────────────────────
+
+fn bn_open(host: str, port: i64) -> DrokDB !Net !IO {
+    return drock_open(host, port)?
+}
+
+fn bn_open_env() -> DrokDB !Net !IO {
+    let h = bn_env_or("DROCK_HOST", "127.0.0.1")?
+    let p = parse_int(bn_env_or("DROCK_PORT", "16579")?)
+    return drock_open(h, p)?
+}
+
+fn bn_env_or(name: str, def: str) -> str !IO {
+    let v = env(name)?
+    if v == "" {
+        return def
+    }
+    return v
+}
+
+fn bn_ok(db: DrokDB) -> i64 { return drock_ok(db) }
+fn bn_err(db: DrokDB) -> str { return drock_last_error(db) }
+
+fn bn_close(db: DrokDB) -> i64 !Net !IO {
+    return drock_close(db)?
+}
+
+fn bn_ping(db: DrokDB) -> i64 !Net !IO {
+    let r = drock_ping(db)?
+    return r.ok
+}
+
+// ── primitive get/put ────────────────────────────────────────────────────
+
+fn bn_get_str(db: DrokDB, key: str) -> str !Net !IO {
+    let g = drock_get(db, bytes_of_str(key))?
+    if g.ok == 0 || g.found == 0 {
+        return ""
+    }
+    return str_of_bytes(g.val)
+}
+
+fn bn_get_str_def(db: DrokDB, key: str, def: str) -> str !Net !IO {
+    let s = bn_get_str(db, key)?
+    if s == "" {
+        return def
+    }
+    return s
+}
+
+fn bn_put_str(db: DrokDB, key: str, val: str) -> i64 !Net !IO {
+    let r = drock_put(db, bytes_of_str(key), bytes_of_str(val))?
+    return r.ok
+}
+
+fn bn_del(db: DrokDB, key: str) -> i64 !Net !IO {
+    let r = drock_delete(db, bytes_of_str(key))?
+    return r.ok
+}
+
+fn bn_exists(db: DrokDB, key: str) -> i64 !Net !IO {
+    let r = drock_exists(db, bytes_of_str(key))?
+    return r.n
+}
+
+fn bn_incr(db: DrokDB, key: str) -> i64 !Net !IO {
+    let r = drock_incr(db, bytes_of_str(key))?
+    if r.ok == 0 {
+        return 0 - 1
+    }
+    return r.n
+}
+
+fn bn_next_id(db: DrokDB, kind: str) -> i64 !Net !IO {
+    return bn_incr(db, bn_k_id(kind))?
+}
+
+// ── ключ-баsed заключване (RESP SETNX + EXPIRE) ───────────────────────────
+//
+// Салдата се четат и записват под този ключ, за да няма загубена промяна при
+// едновременни проводки. При паднал процес ключът изтича сам (ttl).
+
+fn bn_lock_try(db: DrokDB, key: str, ttl_s: i64) -> i64 !Net !IO {
+    let r = drock_setnx(db, bytes_of_str(key), bytes_of_str("1"))?
+    if r.ok == 0 || r.n != 1 {
+        return 0
+    }
+    if ttl_s > 0 {
+        drock_expire(db, bytes_of_str(key), ttl_s)?
+    }
+    return 1
+}
+
+fn bn_lock_release(db: DrokDB, key: str) -> i64 !Net !IO {
+    return bn_del(db, key)?
+}
+
+// Задържа до `max_tries` на 5 ms; 0 = не успя.
+fn bn_lock_wait(db: DrokDB, key: str, ttl_s: i64, max_tries: i64) -> i64 !Net !IO !Par {
+    let mut i: i64 = 0
+    while i < max_tries {
+        if bn_lock_try(db, key, ttl_s)? == 1 {
+            return 1
+        }
+        sleep_ms(5)
+        i = i + 1
+    }
+    return 0
+}
+
+// ── multi-key ────────────────────────────────────────────────────────────
+
+struct BnMulti {
+    found: Vec<i64>,
+    vals: Vec<bytes>
+}
+
+fn bn_mget(db: DrokDB, keys: Vec<bytes>) -> BnMulti !Net !IO {
+    if vec_len(keys) == 0 {
+        return BnMulti { found: vec_new(), vals: vec_new() }
+    }
+    let r = drock_mget(db, keys)?
+    if r.ok == 0 {
+        return BnMulti { found: vec_new(), vals: vec_new() }
+    }
+    return BnMulti { found: r.found, vals: r.vals }
+}
+
+// MSET is one server command — the whole write lands atomically.
+fn bn_mset(db: DrokDB, keys: Vec<str>, vals: Vec<str>) -> i64 !Net !IO {
+    if vec_len(keys) == 0 || vec_len(keys) != vec_len(vals) {
+        return 0
+    }
+    let bk: Vec<bytes> = vec_new()
+    let bv: Vec<bytes> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(keys) {
+        vec_push(bk, bytes_of_str(vec_get(keys, i)))
+        vec_push(bv, bytes_of_str(vec_get(vals, i)))
+        i = i + 1
+    }
+    let r = drock_mset(db, bk, bv)?
+    return r.ok
+}
+
+fn bn_del_many(db: DrokDB, keys: Vec<str>) -> i64 !Net !IO {
+    let bk: Vec<bytes> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(keys) {
+        vec_push(bk, bytes_of_str(vec_get(keys, i)))
+        i = i + 1
+    }
+    if vec_len(bk) == 0 {
+        return 0
+    }
+    let r = drock_del(db, bk)?
+    if r.ok == 0 {
+        return 0
+    }
+    return r.n
+}
+
+fn bn_pad8(n: i64) -> str {
+    let s = int_to_str(n)
+    let mut out = s
+    let mut i = len(s)
+    while i < 8 {
+        out = concat("0", out)
+        i = i + 1
+    }
+    return out
+}
+
+fn bn_pad2(n: i64) -> str {
+    let s = int_to_str(n)
+    let mut out = s
+    let mut i = len(s)
+    while i < 2 {
+        out = concat("0", out)
+        i = i + 1
+    }
+    return out
+}
+
+// ── date helpers ─────────────────────────────────────────────────────────
+
+fn bn_period_of(date: str) -> str {
+    if len(date) < 7 {
+        return date
+    }
+    return substr(date, 0, 7)
+}
+
+fn bn_year_of(date: str) -> str {
+    if len(date) < 4 {
+        return date
+    }
+    return substr(date, 0, 4)
+}
+
+// ── id list index (append-only JSON array of strings) ────────────────────
+
+// Ids stay strings on purpose: no f64 anywhere in the store.
+fn bn_list_parse(s: str) -> Vec<str> {
+    if s == "" {
+        return vec_new()
+    }
+    let d = json_parse(s)
+    if json_tag(d, json_root(d)) != 5 {
+        return vec_new()
+    }
+    let n = json_count(d, json_root(d))
+    let out: Vec<str> = vec_new()
+    let mut i: i64 = 0
+    while i < n {
+        let node = json_at(d, json_root(d), i)
+        if json_tag(d, node) == 4 {
+            vec_push(out, json_str(d, node))
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn bn_list_encode(items: Vec<str>) -> str {
+    let mut a = jarr_new()
+    let mut i: i64 = 0
+    while i < vec_len(items) {
+        a = jarr_str(a, vec_get(items, i))
+        i = i + 1
+    }
+    return jarr_encode(a)
+}
+
+fn bn_list_has(items: Vec<str>, id: str) -> i64 {
+    let mut i: i64 = 0
+    while i < vec_len(items) {
+        if vec_get(items, i) == id {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+fn bn_list_add(items: Vec<str>, id: str) -> Vec<str> {
+    if bn_list_has(items, id) == 1 {
+        return items
+    }
+    vec_push(items, id)
+    return items
+}
+
+fn bn_list_del(items: Vec<str>, id: str) -> Vec<str> {
+    let out: Vec<str> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(items) {
+        if vec_get(items, i) != id {
+            vec_push(out, vec_get(items, i))
+        }
+        i = i + 1
+    }
+    return out
+}

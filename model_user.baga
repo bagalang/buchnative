@@ -1,0 +1,169 @@
+// model_user.baga — потребители, роли и активна фирма.
+//
+// Passwords are salted SHA-256 ("salt$hex"), one random 16-byte salt per user.
+// Roles are per company; the super admin is global and matches "*".
+
+import "store.baga"
+import "store_scan.baga"
+import "json.baga"
+import "fmrbaga/jsonx.baga"
+import "std/crypto/sha256.baga"
+import "std/json/json.baga"
+import "std/random/random.baga"
+import "std/str/str.baga"
+
+// Права: 1=четене 2=проводки 3=управление 4=админ
+fn BN_R_READ() -> i64 { return 1 }
+fn BN_R_POST() -> i64 { return 2 }
+fn BN_R_MANAGE() -> i64 { return 3 }
+fn BN_R_ADMIN() -> i64 { return 4 }
+
+struct BnUser {
+    email: str,
+    name: str,
+    pass_hash: str,
+    is_active: i64,
+    is_super_admin: i64,
+    created_at: str
+}
+
+fn bn_user_zero() -> BnUser {
+    return BnUser { email: "", name: "", pass_hash: "", is_active: 1, is_super_admin: 0, created_at: "" }
+}
+
+fn bn_user_from_json(d: JsonDoc, root: i64) -> BnUser {
+    return BnUser {
+        email: bn_j_str(d, root, "email"),
+        name: bn_j_str(d, root, "name"),
+        pass_hash: bn_j_str(d, root, "pass_hash"),
+        is_active: bn_j_i64(d, root, "is_active"),
+        is_super_admin: bn_j_i64(d, root, "is_super_admin"),
+        created_at: bn_j_str(d, root, "created_at")
+    }
+}
+
+fn bn_user_to_json(u: BnUser) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_str(o, "email", u.email)
+    o = jobj_str(o, "name", u.name)
+    o = jobj_str(o, "pass_hash", u.pass_hash)
+    o = jobj_i64(o, "is_active", u.is_active)
+    o = jobj_i64(o, "is_super_admin", u.is_super_admin)
+    o = jobj_str(o, "created_at", u.created_at)
+    return o
+}
+
+fn bn_user_json_str(u: BnUser) -> str {
+    return jobj_encode(bn_user_to_json(u))
+}
+
+fn bn_user_load(db: DrokDB, email: str) -> BnUser !Net !IO {
+    let s = bn_get_str(db, bn_k_usr(email))?
+    if s == "" {
+        return bn_user_zero()
+    }
+    let d = json_parse(s)
+    return bn_user_from_json(d, bn_j_root(d))
+}
+
+fn bn_user_exists(db: DrokDB, email: str) -> i64 !Net !IO {
+    return bn_exists(db, bn_k_usr(email))?
+}
+
+fn bn_user_save(db: DrokDB, u: BnUser) -> i64 !Net !IO {
+    return bn_put_str(db, bn_k_usr(u.email), bn_user_json_str(u))?
+}
+
+fn bn_user_hash(password: str, salt: str) -> str {
+    return concat(salt, concat("$", sha256_hex(concat(salt, concat("|", password)))))
+}
+
+fn bn_user_new_hash(password: str) -> str !Random {
+    let raw = random_bytes(16)?
+    return bn_user_hash(password, bytes_to_hex(raw))
+}
+
+fn bn_user_check(u: BnUser, password: str) -> i64 {
+    let p = str_find(u.pass_hash, "$")
+    if p <= 0 {
+        return 0
+    }
+    let salt = substr(u.pass_hash, 0, p)
+    if bn_user_hash(password, salt) != u.pass_hash {
+        return 0
+    }
+    return 1
+}
+
+fn bn_user_all(db: DrokDB) -> Vec<BnUser> !Net !IO {
+    let keys = bn_scan_key_strs(db, "bn:usr:")?
+    let out: Vec<BnUser> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(keys) {
+        let u = bn_user_load(db, substr(vec_get(keys, i), 7, len(vec_get(keys, i))))?
+        if u.email != "" {
+            vec_push(out, u)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ── roles ────────────────────────────────────────────────────────────────
+
+fn bn_role_rank(role: str) -> i64 {
+    if role == "super_admin" {
+        return 4
+    }
+    if role == "admin" {
+        return 3
+    }
+    if role == "accountant" {
+        return 2
+    }
+    if role == "viewer" {
+        return 1
+    }
+    return 0
+}
+
+fn bn_role_can(role: str, need: i64) -> i64 {
+    if bn_role_rank(role) >= need {
+        return 1
+    }
+    return 0
+}
+
+fn bn_role_get(db: DrokDB, co: i64, email: str) -> str !Net !IO {
+    return bn_get_str_def(db, bn_k_role(co, email), "viewer")?
+}
+
+fn bn_role_set(db: DrokDB, co: i64, email: str, role: str) -> i64 !Net !IO {
+    return bn_put_str(db, bn_k_role(co, email), role)?
+}
+
+fn bn_role_delete(db: DrokDB, co: i64, email: str) -> i64 !Net !IO {
+    return bn_del(db, bn_k_role(co, email))?
+}
+
+// Effective rights for a request: super admin wins, else the company role.
+fn bn_role_effective(db: DrokDB, co: i64, u: BnUser) -> str !Net !IO {
+    if u.is_super_admin == 1 {
+        return "super_admin"
+    }
+    return bn_role_get(db, co, u.email)?
+}
+
+// ── active company per user ──────────────────────────────────────────────
+
+fn bn_act_get(db: DrokDB, email: str) -> i64 !Net !IO {
+    let s = bn_get_str(db, bn_k_act(email))?
+    if s == "" {
+        return 0
+    }
+    return parse_int(s)
+}
+
+fn bn_act_set(db: DrokDB, email: str, co: i64) -> i64 !Net !IO {
+    return bn_put_str(db, bn_k_act(email), int_to_str(co))?
+}

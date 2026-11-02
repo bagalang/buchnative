@@ -1,0 +1,100 @@
+// report_ledger.baga — главна книга по сметка за период.
+//
+// Чете аналитичния индекс на сметката (zero-padded номер на запис) и дава
+// хронологичен списък с текущо салдо.
+
+import "store.baga"
+import "json.baga"
+import "money.baga"
+import "fmrbaga/jsonx.baga"
+import "model_account.baga"
+import "model_journal.baga"
+import "std/json/json.baga"
+import "std/str/str.baga"
+
+struct BnLedgerRow {
+    number: i64,
+    date: str,
+    doc_type: str,
+    doc_number: str,
+    description: str,
+    account: str,
+    debit: str,
+    credit: str,
+    balance: str
+}
+
+fn bn_ledger_row_zero() -> BnLedgerRow {
+    return BnLedgerRow { number: 0, date: "", doc_type: "", doc_number: "", description: "", account: "", debit: "0.00", credit: "0.00", balance: "0.00" }
+}
+
+fn bn_ledger_row_to_json(r: BnLedgerRow) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "number", r.number)
+    o = jobj_str(o, "date", r.date)
+    o = jobj_str(o, "doc_type", r.doc_type)
+    o = jobj_str(o, "doc_number", r.doc_number)
+    o = jobj_str(o, "description", r.description)
+    o = jobj_str(o, "account", r.account)
+    o = jobj_str(o, "debit", r.debit)
+    o = jobj_str(o, "credit", r.credit)
+    o = jobj_str(o, "balance", r.balance)
+    return o
+}
+
+fn bn_ledger_rows(db: DrokDB, co: i64, account: str, period: str) -> Vec<BnLedgerRow> !Net !IO {
+    let docs = bn_jl_docs(db, co, account, period)?
+    let side = bn_ac_side(bn_ac_load(db, co, account)?.cls)
+    let out: Vec<BnLedgerRow> = vec_new()
+    let mut running = bn_money_zero()
+    let mut i: i64 = 0
+    while i < vec_len(docs) {
+        let d = json_parse(vec_get(docs, i))
+        let root = bn_j_root(d)
+        let r = bn_ledger_row_zero()
+        r.number = bn_j_i64(d, root, "entry")
+        r.date = bn_j_str(d, root, "entry_date")
+        r.doc_type = bn_j_str(d, root, "doc_type")
+        r.doc_number = bn_j_str(d, root, "doc_number")
+        r.description = bn_j_str(d, root, "description")
+        r.account = bn_j_str(d, root, "account")
+        r.debit = bn_money_round2(bn_j_str(d, root, "debit"))
+        r.credit = bn_money_round2(bn_j_str(d, root, "credit"))
+        if side == "debit" {
+            running = bn_money_add(running, bn_money_sub(r.debit, r.credit))
+        } else {
+            running = bn_money_add(running, bn_money_sub(r.credit, r.debit))
+        }
+        r.balance = running
+        vec_push(out, r)
+        i = i + 1
+    }
+    return out
+}
+
+fn bn_ledger_json(db: DrokDB, co: i64, account: str, period: str) -> JObj !Net !IO {
+    let acc = bn_ac_load(db, co, account)?
+    let rows = bn_ledger_rows(db, co, account, period)?
+    let mut a = jarr_new()
+    let mut tdebit = bn_money_zero()
+    let mut tcredit = bn_money_zero()
+    let mut i: i64 = 0
+    while i < vec_len(rows) {
+        let r = vec_get(rows, i)
+        a = jarr_obj(a, bn_ledger_row_to_json(r))
+        tdebit = bn_money_add(tdebit, r.debit)
+        tcredit = bn_money_add(tcredit, r.credit)
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_i64(o, "company", co)
+    o = jobj_str(o, "period", period)
+    o = jobj_str(o, "account", account)
+    o = jobj_str(o, "account_name", acc.name)
+    o = jobj_str(o, "side", bn_ac_side(acc.cls))
+    o = jobj_arr(o, "rows", a)
+    o = jobj_str(o, "total_debit", tdebit)
+    o = jobj_str(o, "total_credit", tcredit)
+    o = jobj_str(o, "balance", bn_money_sub(tdebit, tcredit))
+    return o
+}

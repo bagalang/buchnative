@@ -1,0 +1,219 @@
+// model_account.baga — сметкоплан (класове 1–9 по НСС) и базов план.
+//
+// Сметката се идентифицира по код в рамките на фирмата — няма глобален id.
+// `kind` е изведен от класа и решава знака на салдото; `analytic` маркира
+// сметки, които се водят по контрагент/артикул.
+
+import "store.baga"
+import "json.baga"
+import "fmrbaga/jsonx.baga"
+import "std/json/json.baga"
+import "std/str/str.baga"
+
+struct BnAccount {
+    code: str,
+    name: str,
+    cls: i64,
+    kind: str,
+    analytic: i64,
+    parent: str,
+    is_active: i64
+}
+
+fn bn_ac_zero() -> BnAccount {
+    return BnAccount { code: "", name: "", cls: 0, kind: "", analytic: 0, parent: "", is_active: 1 }
+}
+
+// asset | equity | liability | expense | income | result | offbalance
+fn bn_ac_kind(cls: i64) -> str {
+    if cls == 1 {
+        return "asset"
+    }
+    if cls == 2 {
+        return "asset"
+    }
+    if cls == 3 {
+        return "equity"
+    }
+    if cls == 4 {
+        return "liability"
+    }
+    if cls == 5 {
+        return "liability"
+    }
+    if cls == 6 {
+        return "expense"
+    }
+    if cls == 7 {
+        return "income"
+    }
+    if cls == 8 {
+        return "result"
+    }
+    return "offbalance"
+}
+
+// debit = актив/разход, credit = пасив/приход, both = резултатни/службени
+fn bn_ac_side(cls: i64) -> str {
+    if cls == 1 {
+        return "debit"
+    }
+    if cls == 2 {
+        return "debit"
+    }
+    if cls == 3 {
+        return "credit"
+    }
+    if cls == 4 {
+        return "credit"
+    }
+    if cls == 5 {
+        return "credit"
+    }
+    if cls == 6 {
+        return "debit"
+    }
+    if cls == 7 {
+        return "credit"
+    }
+    return "both"
+}
+
+fn bn_ac_from_json(d: JsonDoc, root: i64) -> BnAccount {
+    let cls = bn_j_i64(d, root, "cls")
+    let mut kind = bn_j_str(d, root, "kind")
+    if kind == "" {
+        kind = bn_ac_kind(cls)
+    }
+    return BnAccount {
+        code: bn_j_str(d, root, "code"),
+        name: bn_j_str(d, root, "name"),
+        cls: cls,
+        kind: kind,
+        analytic: bn_j_i64(d, root, "analytic"),
+        parent: bn_j_str(d, root, "parent"),
+        is_active: bn_j_i64(d, root, "is_active")
+    }
+}
+
+fn bn_ac_to_json(a: BnAccount) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_str(o, "code", a.code)
+    o = jobj_str(o, "name", a.name)
+    o = jobj_i64(o, "cls", a.cls)
+    o = jobj_str(o, "kind", a.kind)
+    o = jobj_str(o, "side", bn_ac_side(a.cls))
+    o = jobj_i64(o, "analytic", a.analytic)
+    o = jobj_str(o, "parent", a.parent)
+    o = jobj_i64(o, "is_active", a.is_active)
+    return o
+}
+
+fn bn_ac_json_str(a: BnAccount) -> str {
+    return jobj_encode(bn_ac_to_json(a))
+}
+
+fn bn_ac_load(db: DrokDB, co: i64, code: str) -> BnAccount !Net !IO {
+    let s = bn_get_str(db, bn_k_acc(co, code))?
+    if s == "" {
+        return bn_ac_zero()
+    }
+    let d = json_parse(s)
+    return bn_ac_from_json(d, bn_j_root(d))
+}
+
+fn bn_ac_exists(db: DrokDB, co: i64, code: str) -> i64 !Net !IO {
+    return bn_exists(db, bn_k_acc(co, code))?
+}
+
+fn bn_ac_save(db: DrokDB, co: i64, a: BnAccount) -> i64 !Net !IO {
+    let codes = bn_list_parse(bn_get_str(db, bn_k_acc_all(co))?)
+    let n = bn_list_add(codes, a.code)
+    let ks: Vec<str> = vec_new()
+    let vs: Vec<str> = vec_new()
+    vec_push(ks, bn_k_acc(co, a.code))
+    vec_push(vs, bn_ac_json_str(a))
+    vec_push(ks, bn_k_acc_all(co))
+    vec_push(vs, bn_list_encode(n))
+    return bn_mset(db, ks, vs)?
+}
+
+fn bn_ac_codes(db: DrokDB, co: i64) -> Vec<str> !Net !IO {
+    return bn_list_parse(bn_get_str(db, bn_k_acc_all(co))?)
+}
+
+fn bn_ac_all(db: DrokDB, co: i64) -> Vec<BnAccount> !Net !IO {
+    let codes = bn_ac_codes(db, co)?
+    let out: Vec<BnAccount> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(codes) {
+        let a = bn_ac_load(db, co, vec_get(codes, i))?
+        if a.code != "" {
+            vec_push(out, a)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn bn_ac_delete(db: DrokDB, co: i64, code: str) -> i64 !Net !IO {
+    bn_del(db, bn_k_acc(co, code))?
+    let codes = bn_list_parse(bn_get_str(db, bn_k_acc_all(co))?)
+    let n = bn_list_del(codes, code)
+    return bn_put_str(db, bn_k_acc_all(co), bn_list_encode(n))?
+}
+
+// ── базов сметкоплан (bg-basic) ──────────────────────────────────────────
+
+struct BnAcSpec {
+    code: str,
+    name: str,
+    cls: i64,
+    analytic: i64
+}
+
+fn bn_ac_specs() -> Vec<BnAcSpec> {
+    let v: Vec<BnAcSpec> = vec_new()
+    vec_push(v, BnAcSpec { code: "101", name: "Дългосрочни материални активи", cls: 1, analytic: 0 })
+    vec_push(v, BnAcSpec { code: "111", name: "Дългосрочни нематериални активи", cls: 1, analytic: 0 })
+    vec_push(v, BnAcSpec { code: "201", name: "Запасы (материали и стоки)", cls: 2, analytic: 0 })
+    vec_push(v, BnAcSpec { code: "211", name: "Вземания по продажби", cls: 2, analytic: 1 })
+    vec_push(v, BnAcSpec { code: "221", name: "Каса", cls: 2, analytic: 0 })
+    vec_push(v, BnAcSpec { code: "231", name: "Банкови сметки", cls: 2, analytic: 0 })
+    vec_push(v, BnAcSpec { code: "301", name: "Основен капитал", cls: 3, analytic: 0 })
+    vec_push(v, BnAcSpec { code: "302", name: "Резерв", cls: 3, analytic: 0 })
+    vec_push(v, BnAcSpec { code: "303", name: "Неразпределена печалба/загуба", cls: 3, analytic: 0 })
+    vec_push(v, BnAcSpec { code: "401", name: "Дългосрочни кредити", cls: 4, analytic: 0 })
+    vec_push(v, BnAcSpec { code: "501", name: "Задължения по доставки", cls: 5, analytic: 1 })
+    vec_push(v, BnAcSpec { code: "511", name: "Задължения по труд и осигурения", cls: 5, analytic: 0 })
+    vec_push(v, BnAcSpec { code: "521", name: "Задължения по ДДС", cls: 5, analytic: 0 })
+    vec_push(v, BnAcSpec { code: "531", name: "Разплащания с държавния бюджет", cls: 5, analytic: 0 })
+    vec_push(v, BnAcSpec { code: "601", name: "Разходи за материали", cls: 6, analytic: 0 })
+    vec_push(v, BnAcSpec { code: "602", name: "Разходи за труд", cls: 6, analytic: 0 })
+    vec_push(v, BnAcSpec { code: "603", name: "Разходи за амортизации", cls: 6, analytic: 0 })
+    vec_push(v, BnAcSpec { code: "604", name: "Финансови разходи", cls: 6, analytic: 0 })
+    vec_push(v, BnAcSpec { code: "611", name: "Разходи за реализация", cls: 6, analytic: 0 })
+    vec_push(v, BnAcSpec { code: "701", name: "Приходи от продажби", cls: 7, analytic: 0 })
+    vec_push(v, BnAcSpec { code: "702", name: "Финансови приходи", cls: 7, analytic: 0 })
+    vec_push(v, BnAcSpec { code: "801", name: "Печалба от дейността", cls: 8, analytic: 0 })
+    vec_push(v, BnAcSpec { code: "802", name: "Загуба от дейността", cls: 8, analytic: 0 })
+    vec_push(v, BnAcSpec { code: "901", name: "Разчетни сметки", cls: 9, analytic: 0 })
+    return v
+}
+
+// Добя само сметките, които още не съществуват.
+fn bn_ac_seed(db: DrokDB, co: i64) -> i64 !Net !IO {
+    let specs = bn_ac_specs()
+    let mut added: i64 = 0
+    let mut i: i64 = 0
+    while i < vec_len(specs) {
+        let s = vec_get(specs, i)
+        if bn_ac_exists(db, co, s.code)? == 0 {
+            let a = BnAccount { code: s.code, name: s.name, cls: s.cls, kind: bn_ac_kind(s.cls), analytic: s.analytic, parent: "", is_active: 1 }
+            bn_ac_save(db, co, a)?
+            added = added + 1
+        }
+        i = i + 1
+    }
+    return added
+}

@@ -1,0 +1,111 @@
+// actions/invoices.baga — фактури: списък, създаване, проводка, изтриване.
+
+import "action.baga"
+import "fmrbaga/jsonx.baga"
+import "../model_invoice.baga"
+import "../model_counterpart.baga"
+import "../json.baga"
+import "../time.baga"
+import "std/json/json.baga"
+import "std/str/str.baga"
+
+fn act_invoices_index(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net {
+    let a = bn_act_require(ctx, db, BN_R_READ())
+    if a.ok == 0 {
+        return a.out
+    }
+    let co = bn_act_company(db, ctx)?
+    let vs = bn_inv_list(db, co.id)?
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < vec_len(vs) {
+        arr = jarr_obj(arr, bn_inv_to_json(vec_get(vs, i)))
+        i = i + 1
+    }
+    return bn_act_ok(db, bn_act_page_wrap(arr, vec_len(vs), bn_act_page(ctx, 100, 1000)))
+}
+
+fn act_invoices_create(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net !Time {
+    let a = bn_act_require(ctx, db, BN_R_POST())
+    if a.ok == 0 {
+        return a.out
+    }
+    let co = bn_act_company(db, ctx)?
+    let d = bn_act_body(ctx)
+    let b = bn_j_root(d)
+    let number = bn_j_str(d, b, "number")
+    let date = bn_j_str(d, b, "date")
+    if number == "" || date == "" {
+        return bn_act_err(db, 422, "number и date са задължителни")
+    }
+    if bn_inv_load_by_number(db, co.id, number)?.id > 0 {
+        return bn_act_err(db, 409, concat("фактура ", concat(number, " вече съществува")))
+    }
+    let id = bn_next_id(db, "inv")?
+    let v = bn_inv_zero()
+    v.id = id
+    v.company = co.id
+    v.number = number
+    v.kind = bn_j_str(d, b, "kind")
+    v.date = date
+    v.period = bn_period_of(date)
+    v.counterpart = bn_j_i64(d, b, "counterpart")
+    let lines = bn_inv_lines_from_json(d, bn_j_child(d, b, "lines"))
+    if vec_len(lines) == 0 {
+        return bn_act_err(db, 422, "фактурата няма редове")
+    }
+    v.lines = lines
+    if v.counterpart > 0 {
+        v.counterpart_name = bn_cp_load(db, co.id, v.counterpart)?.name
+    }
+    v.created_at = bn_now_iso()?
+    let done = bn_inv_recompute(v)
+    bn_inv_save(db, co.id, done)?
+    return bn_act_created(db, bn_inv_to_json(done))
+}
+
+fn act_invoices_show(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net {
+    let a = bn_act_require(ctx, db, BN_R_READ())
+    if a.ok == 0 {
+        return a.out
+    }
+    let co = bn_act_company(db, ctx)?
+    let id = fmr_param_i64(ctx, "id")
+    let v = bn_inv_load(db, co.id, id)?
+    if v.id <= 0 {
+        return bn_act_404(db, "няма такава фактура")
+    }
+    return bn_act_ok(db, bn_inv_to_json(v))
+}
+
+fn act_invoices_post(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net !Time !Par {
+    let a = bn_act_require(ctx, db, BN_R_POST())
+    if a.ok == 0 {
+        return a.out
+    }
+    let co = bn_act_company(db, ctx)?
+    let id = fmr_param_i64(ctx, "id")
+    let r = bn_inv_post(db, co.id, id, a.ctx.user_sub, bn_now_iso()?)?
+    if r.ok == 0 {
+        return bn_act_err(db, 422, r.err)
+    }
+    let v = bn_inv_load(db, co.id, id)?
+    return bn_act_ok(db, bn_inv_to_json(v))
+}
+
+fn act_invoices_delete(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net {
+    let a = bn_act_require(ctx, db, BN_R_MANAGE())
+    if a.ok == 0 {
+        return a.out
+    }
+    let co = bn_act_company(db, ctx)?
+    let id = fmr_param_i64(ctx, "id")
+    let rc = bn_inv_delete(db, co.id, id)?
+    if rc == 0 - 1 {
+        return bn_act_err(db, 409, "проведена фактура не се изтрива — сторнирай я")
+    }
+    if rc == 0 {
+        return bn_act_404(db, "няма такава фактура")
+    }
+    return bn_act_no_content(db)
+}

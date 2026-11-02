@@ -1,0 +1,123 @@
+// actions/accounts.baga — сметкоплан на активната фирма.
+
+import "action.baga"
+import "fmrbaga/jsonx.baga"
+import "../model_account.baga"
+import "../json.baga"
+import "std/json/json.baga"
+import "std/str/str.baga"
+
+fn act_accounts_index(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net {
+    let a = bn_act_require(ctx, db, BN_R_READ())
+    if a.ok == 0 {
+        return a.out
+    }
+    let co = bn_act_company(db, ctx)?
+    let accs = bn_ac_all(db, co.id)?
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < vec_len(accs) {
+        arr = jarr_obj(arr, bn_ac_to_json(vec_get(accs, i)))
+        i = i + 1
+    }
+    return bn_act_ok(db, bn_act_page_wrap(arr, vec_len(accs), bn_act_page(ctx, 100, 500)))
+}
+
+fn act_accounts_create(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net {
+    let a = bn_act_require(ctx, db, BN_R_MANAGE())
+    if a.ok == 0 {
+        return a.out
+    }
+    let co = bn_act_company(db, ctx)?
+    let d = bn_act_body(ctx)
+    let b = bn_j_root(d)
+    let code = bn_j_str(d, b, "code")
+    let name = bn_j_str(d, b, "name")
+    if code == "" || name == "" {
+        return bn_act_err(db, 422, "code и name са задължителни")
+    }
+    let cls = bn_j_i64(d, b, "cls")
+    if cls < 1 || cls > 9 {
+        return bn_act_err(db, 422, "cls трябва да е 1..9")
+    }
+    if bn_ac_exists(db, co.id, code)? == 1 {
+        return bn_act_err(db, 409, concat("сметка ", concat(code, " вече съществува")))
+    }
+    let acc = BnAccount { code: code, name: name, cls: cls, kind: bn_ac_kind(cls), analytic: bn_j_i64(d, b, "analytic"), parent: bn_j_str(d, b, "parent"), is_active: 1 }
+    bn_ac_save(db, co.id, acc)?
+    return bn_act_created(db, bn_ac_to_json(acc))
+}
+
+fn act_accounts_show(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net {
+    let a = bn_act_require(ctx, db, BN_R_READ())
+    if a.ok == 0 {
+        return a.out
+    }
+    let co = bn_act_company(db, ctx)?
+    let code = fmr_param(ctx, "code")
+    if code == "" {
+        return bn_act_err(db, 400, "липсва код на сметка")
+    }
+    let acc = bn_ac_load(db, co.id, code)?
+    if acc.code == "" {
+        return bn_act_404(db, "няма такава сметка")
+    }
+    return bn_act_ok(db, bn_ac_to_json(acc))
+}
+
+fn act_accounts_update(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net {
+    let a = bn_act_require(ctx, db, BN_R_MANAGE())
+    if a.ok == 0 {
+        return a.out
+    }
+    let co = bn_act_company(db, ctx)?
+    let code = fmr_param(ctx, "code")
+    let acc = bn_ac_load(db, co.id, code)?
+    if acc.code == "" {
+        return bn_act_404(db, "няма такава сметка")
+    }
+    let d = bn_act_body(ctx)
+    let b = bn_j_root(d)
+    if bn_j_has(d, b, "name") == 1 {
+        acc.name = bn_j_str(d, b, "name")
+    }
+    if bn_j_has(d, b, "analytic") == 1 {
+        acc.analytic = bn_j_i64(d, b, "analytic")
+    }
+    if bn_j_has(d, b, "parent") == 1 {
+        acc.parent = bn_j_str(d, b, "parent")
+    }
+    if bn_j_has(d, b, "is_active") == 1 {
+        acc.is_active = bn_j_i64(d, b, "is_active")
+    }
+    bn_ac_save(db, co.id, acc)?
+    return bn_act_ok(db, bn_ac_to_json(acc))
+}
+
+fn act_accounts_delete(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net {
+    let a = bn_act_require(ctx, db, BN_R_MANAGE())
+    if a.ok == 0 {
+        return a.out
+    }
+    let co = bn_act_company(db, ctx)?
+    let code = fmr_param(ctx, "code")
+    if bn_ac_exists(db, co.id, code)? == 0 {
+        return bn_act_404(db, "няма такава сметка")
+    }
+    bn_ac_delete(db, co.id, code)?
+    return bn_act_no_content(db)
+}
+
+// Добавя базовия сметкоплан към активната фирма.
+fn act_accounts_seed(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net {
+    let a = bn_act_require(ctx, db, BN_R_MANAGE())
+    if a.ok == 0 {
+        return a.out
+    }
+    let co = bn_act_company(db, ctx)?
+    let added = bn_ac_seed(db, co.id)?
+    let mut o = jobj_new()
+    o = jobj_i64(o, "added", added)
+    o = jobj_i64(o, "company", co.id)
+    return bn_act_ok(db, o)
+}

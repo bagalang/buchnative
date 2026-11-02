@@ -1,0 +1,112 @@
+// actions/companies.baga — фирми (мултитенантски контур).
+
+import "action.baga"
+import "fmrbaga/jsonx.baga"
+import "../model_company.baga"
+import "../model_account.baga"
+import "../json.baga"
+import "../time.baga"
+import "std/json/json.baga"
+import "std/str/str.baga"
+
+fn act_companies_index(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net {
+    let a = bn_act_require(ctx, db, BN_R_READ())
+    if a.ok == 0 {
+        return a.out
+    }
+    let cos = bn_co_all(db)?
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < vec_len(cos) {
+        arr = jarr_obj(arr, bn_co_to_json(vec_get(cos, i)))
+        i = i + 1
+    }
+    return bn_act_ok(db, bn_act_page_wrap(arr, vec_len(cos), bn_act_page(ctx, 50, 200)))
+}
+
+fn act_companies_create(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net !Time {
+    let a = bn_act_require(ctx, db, BN_R_MANAGE())
+    if a.ok == 0 {
+        return a.out
+    }
+    let d = bn_act_body(ctx)
+    let b = bn_j_root(d)
+    let name = bn_j_str(d, b, "name")
+    if name == "" {
+        return bn_act_err(db, 422, "name е задължително")
+    }
+    let id = bn_next_id(db, "co")?
+    let c = BnCompany { id: id, name: name, eik: bn_j_str(d, b, "eik"), vat: bn_j_str(d, b, "vat"), city: bn_j_str(d, b, "city"), address: bn_j_str(d, b, "address"), owner: bn_j_str(d, b, "owner"), created_at: bn_now_iso()? }
+    bn_co_save(db, c)?
+    bn_ac_seed(db, id)?
+    return bn_act_created(db, bn_co_to_json(c))
+}
+
+fn act_companies_show(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net {
+    let a = bn_act_require(ctx, db, BN_R_READ())
+    if a.ok == 0 {
+        return a.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return bn_act_err(db, 400, "невалиден id")
+    }
+    let c = bn_co_load(db, id)?
+    if c.id <= 0 {
+        return bn_act_404(db, "няма такава фирма")
+    }
+    return bn_act_ok(db, bn_co_to_json(c))
+}
+
+fn act_companies_update(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net {
+    let a = bn_act_require(ctx, db, BN_R_MANAGE())
+    if a.ok == 0 {
+        return a.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return bn_act_err(db, 400, "невалиден id")
+    }
+    let c = bn_co_load(db, id)?
+    if c.id <= 0 {
+        return bn_act_404(db, "няма такава фирма")
+    }
+    let d = bn_act_body(ctx)
+    let b = bn_j_root(d)
+    if bn_j_has(d, b, "name") == 1 {
+        c.name = bn_j_str(d, b, "name")
+    }
+    if bn_j_has(d, b, "eik") == 1 {
+        c.eik = bn_j_str(d, b, "eik")
+    }
+    if bn_j_has(d, b, "vat") == 1 {
+        c.vat = bn_j_str(d, b, "vat")
+    }
+    if bn_j_has(d, b, "city") == 1 {
+        c.city = bn_j_str(d, b, "city")
+    }
+    if bn_j_has(d, b, "address") == 1 {
+        c.address = bn_j_str(d, b, "address")
+    }
+    if bn_j_has(d, b, "owner") == 1 {
+        c.owner = bn_j_str(d, b, "owner")
+    }
+    bn_co_save(db, c)?
+    return bn_act_ok(db, bn_co_to_json(c))
+}
+
+fn act_companies_delete(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net {
+    let a = bn_act_require(ctx, db, BN_R_ADMIN())
+    if a.ok == 0 {
+        return a.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return bn_act_err(db, 400, "невалиден id")
+    }
+    if bn_co_exists(db, id)? == 0 {
+        return bn_act_404(db, "няма такава фирма")
+    }
+    bn_co_delete(db, id)?
+    return bn_act_no_content(db)
+}

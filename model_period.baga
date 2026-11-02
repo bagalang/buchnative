@@ -1,0 +1,95 @@
+// model_period.baga — счетоводи периоди (месец): отворен или затворен.
+//
+// Затворен период отказва проводки. Липсващ ред = период не е регистриран
+// (проводки се допускат до първото затваряне).
+
+import "store.baga"
+import "store_scan.baga"
+import "json.baga"
+import "fmrbaga/jsonx.baga"
+import "std/json/json.baga"
+import "std/str/str.baga"
+
+struct BnPeriod {
+    company: i64,
+    period: str,
+    status: str
+}
+
+fn bn_per_open() -> BnPeriod {
+    return BnPeriod { company: 0, period: "", status: "open" }
+}
+
+fn bn_per_from_json(d: JsonDoc, root: i64) -> BnPeriod {
+    let mut st = bn_j_str(d, root, "status")
+    if st != "closed" {
+        st = "open"
+    }
+    return BnPeriod { company: bn_j_i64(d, root, "company"), period: bn_j_str(d, root, "period"), status: st }
+}
+
+fn bn_per_to_json(p: BnPeriod) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "company", p.company)
+    o = jobj_str(o, "period", p.period)
+    o = jobj_str(o, "status", p.status)
+    return o
+}
+
+fn bn_per_json_str(p: BnPeriod) -> str {
+    return jobj_encode(bn_per_to_json(p))
+}
+
+fn bn_per_load(db: DrokDB, co: i64, period: str) -> BnPeriod !Net !IO {
+    let s = bn_get_str(db, bn_k_per(co, period))?
+    if s == "" {
+        let p = bn_per_open()
+        p.company = co
+        p.period = period
+        return p
+    }
+    let d = json_parse(s)
+    return bn_per_from_json(d, bn_j_root(d))
+}
+
+fn bn_per_is_open(db: DrokDB, co: i64, period: str) -> i64 !Net !IO {
+    let p = bn_per_load(db, co, period)?
+    if p.status == "closed" {
+        return 0
+    }
+    return 1
+}
+
+fn bn_per_close(db: DrokDB, co: i64, period: str) -> i64 !Net !IO {
+    let p = bn_per_load(db, co, period)?
+    p.status = "closed"
+    return bn_put_str(db, bn_k_per(co, period), bn_per_json_str(p))?
+}
+
+fn bn_per_reopen(db: DrokDB, co: i64, period: str) -> i64 !Net !IO {
+    let p = bn_per_load(db, co, period)?
+    p.status = "open"
+    return bn_put_str(db, bn_k_per(co, period), bn_per_json_str(p))?
+}
+
+// Периодите на фирмата, подредени ходяща (zero-padded ключ).
+fn bn_per_all(db: DrokDB, co: i64) -> Vec<BnPeriod> !Net !IO {
+    let keys = bn_scan_key_strs(db, concat("bn:per:", int_to_str(co)))?
+    let out: Vec<BnPeriod> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(keys) {
+        let period = bn_per_after_prefix(vec_get(keys, i), co)?
+        let p = bn_per_load(db, co, period)?
+        vec_push(out, p)
+        i = i + 1
+    }
+    return out
+}
+
+fn bn_per_after_prefix(key: str, co: i64) -> str {
+    let prefix = concat("bn:per:", int_to_str(co))
+    if str_starts_with(key, prefix) == 0 {
+        return ""
+    }
+    return substr(key, len(prefix) + 1, len(key))
+}

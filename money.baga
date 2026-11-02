@@ -1,0 +1,144 @@
+// money.baga — decimal money helpers over bagadecimal.
+//
+// Money is a string everywhere: in JSON, in the store, in the journal. No f64
+// ever touches an amount. Parsing is total — an unparsable amount becomes 0.00
+// so a bad document can never poison a report silently.
+
+import "bagadecimal/src/decimal.baga"
+import "std/str/str.baga"
+
+fn bn_money_zero() -> str { return "0.00" }
+
+fn bn_money_one() -> str { return "1.00" }
+
+fn bn_money_dec(s: str) -> Decimal {
+    if s == "" {
+        return dec_zero()
+    }
+    let r = dec_parse(s)
+    if r.ok == 0 {
+        return dec_zero()
+    }
+    return r.value
+}
+
+fn bn_money_is_valid(s: str) -> i64 {
+    if s == "" {
+        return 0
+    }
+    let r = dec_parse(s)
+    return r.ok
+}
+
+fn bn_money_str(d: Decimal) -> str {
+    return dec_to_string(d)
+}
+
+// Round to 2 places (half-up) — the ledger's money scale.
+fn bn_money_round2(s: str) -> str {
+    let d = bn_money_dec(s)
+    let q = dec_round_dp(d, 2)
+    if q.ok == 0 {
+        return bn_money_zero()
+    }
+    return dec_to_string(q.value)
+}
+
+fn bn_money_norm(s: str) -> str {
+    return bn_money_str(bn_money_dec(s))
+}
+
+fn bn_money_add(a: str, b: str) -> str {
+    let r = dec_add(bn_money_dec(a), bn_money_dec(b))
+    if r.ok == 0 {
+        return bn_money_zero()
+    }
+    return bn_money_round2(dec_to_string(r.value))
+}
+
+fn bn_money_sub(a: str, b: str) -> str {
+    let r = dec_sub(bn_money_dec(a), bn_money_dec(b))
+    if r.ok == 0 {
+        return bn_money_zero()
+    }
+    return bn_money_round2(dec_to_string(r.value))
+}
+
+fn bn_money_mul(a: str, b: str) -> str {
+    let r = dec_mul(bn_money_dec(a), bn_money_dec(b))
+    if r.ok == 0 {
+        return bn_money_zero()
+    }
+    return bn_money_round2(dec_to_string(r.value))
+}
+
+fn bn_money_div(a: str, b: str) -> str {
+    let db = bn_money_dec(b)
+    if dec_is_zero(db) == 1 {
+        return bn_money_zero()
+    }
+    let r = dec_div(bn_money_dec(a), db)
+    if r.ok == 0 {
+        return bn_money_zero()
+    }
+    return bn_money_round2(dec_to_string(r.value))
+}
+
+fn bn_money_sum(items: Vec<str>) -> str {
+    let mut acc = dec_zero()
+    let mut i: i64 = 0
+    while i < vec_len(items) {
+        let r = dec_add(acc, bn_money_dec(vec_get(items, i)))
+        if r.ok == 1 {
+            acc = r.value
+        }
+        i = i + 1
+    }
+    return dec_to_string(acc)
+}
+
+fn bn_money_neg(a: str) -> str {
+    return dec_to_string(dec_neg(bn_money_dec(a)))
+}
+
+fn bn_money_abs(a: str) -> str {
+    return dec_to_string(dec_abs(bn_money_dec(a)))
+}
+
+fn bn_money_is_zero(a: str) -> i64 {
+    return dec_is_zero(bn_money_dec(a))
+}
+
+// -1 / 0 / 1
+fn bn_money_cmp(a: str, b: str) -> i64 {
+    return dec_cmp(bn_money_dec(a), bn_money_dec(b))
+}
+
+fn bn_money_lt(a: str, b: str) -> i64 {
+    return dec_lt(bn_money_dec(a), bn_money_dec(b))
+}
+
+fn bn_money_gt(a: str, b: str) -> i64 {
+    return dec_gt(bn_money_dec(a), bn_money_dec(b))
+}
+
+fn bn_money_eq(a: str, b: str) -> i64 {
+    return dec_eq(bn_money_dec(a), bn_money_dec(b))
+}
+
+fn bn_money_min(a: str, b: str) -> str {
+    return dec_to_string(dec_min(bn_money_dec(a), bn_money_dec(b)))
+}
+
+fn bn_money_max(a: str, b: str) -> str {
+    return dec_to_string(dec_max(bn_money_dec(a), bn_money_dec(b)))
+}
+
+// Percent of an amount: amount * pct / 100, rounded to 2.
+fn bn_money_percent(amount: str, pct: str) -> str {
+    let r = dec_percent_of(bn_money_dec(amount), bn_money_dec(pct))
+    if r.ok == 0 {
+        return bn_money_zero()
+    }
+    return bn_money_round2(dec_to_string(r.value))
+}

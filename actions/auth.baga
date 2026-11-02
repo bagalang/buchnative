@@ -1,0 +1,157 @@
+// actions/auth.baga — вход (JWT), регистрация, /me и активна фирма.
+
+import "action.baga"
+import "fmrbaga/jsonx.baga"
+import "fmrbaga/deps.baga"
+import "../model_user.baga"
+import "../model_company.baga"
+import "../model_account.baga"
+import "../json.baga"
+import "../time.baga"
+import "std/json/json.baga"
+import "std/os/os.baga"
+import "std/random/random.baga"
+import "std/str/str.baga"
+
+fn bn_auth_ttl() -> i64 !IO {
+    let raw = env("FMR_JWT_TTL_SEC")?
+    if raw == "" {
+        return 604800
+    }
+    let n = parse_int(raw)
+    if n < 300 {
+        return 604800
+    }
+    return n
+}
+
+fn bn_auth_issue(ctx: FmrCtx, db: DrokDB, email: str) -> BnOut !IO !Net !Time {
+    let now = time_now_ms()? / 1000
+    let ttl = bn_auth_ttl()?
+    let extra = concat("\"iat\":", int_to_str(now))
+    let extra2 = concat(extra, concat(",\"exp\":", int_to_str(now + ttl)))
+    let token = fmr_issue_token(ctx.jwt_secret, email, extra2)
+    let mut o = jobj_new()
+    o = jobj_str(o, "access_token", token)
+    o = jobj_str(o, "token_type", "bearer")
+    o = jobj_str(o, "sub", email)
+    o = jobj_i64(o, "expires_in", ttl)
+    return bn_act_ok(db, o)
+}
+
+fn act_token(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net !Time {
+    let d = bn_act_body(ctx)
+    let b = bn_j_root(d)
+    let email = bn_j_str(d, b, "email")
+    let password = bn_j_str(d, b, "password")
+    if email == "" || password == "" {
+        return bn_act_err(db, 422, "email и password са задължителни")
+    }
+    let u = bn_user_load(db, email)?
+    if u.email == "" {
+        return bn_act_err(db, 401, "грешни данни")
+    }
+    if u.is_active == 0 {
+        return bn_act_err(db, 403, "потребителят е деактивиран")
+    }
+    if bn_user_check(u, password) == 0 {
+        return bn_act_err(db, 401, "грешни данни")
+    }
+    return bn_auth_issue(ctx, db, email)?
+}
+
+// Първият потребител в празна база става супер-админ заедно с фирма и план.
+fn bn_auth_register_first(db: DrokDB, email: str, password: str, name: str, company: str, created_at: str) -> i64 !Net !IO !Random {
+    let users = bn_user_all(db)?
+    if vec_len(users) > 0 {
+        return 0
+    }
+    let hash = bn_user_new_hash(password)?
+    let u = BnUser { email: email, name: name, pass_hash: hash, is_active: 1, is_super_admin: 1, created_at: created_at }
+    bn_user_save(db, u)?
+    let id = bn_next_id(db, "co")?
+    let c = BnCompany { id: id, name: company, eik: "", vat: "", city: "", address: "", owner: name, created_at: created_at }
+    bn_co_save(db, c)?
+    bn_ac_seed(db, id)?
+    bn_act_set(db, email, id)?
+    return 1
+}
+
+fn act_register(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net !Time !Random {
+    let enabled = bn_env_or("BN_REGISTRATION", "1")?
+    if enabled == "0" {
+        return bn_act_err(db, 403, "регистрацията е изключена")
+    }
+    let d = bn_act_body(ctx)
+    let b = bn_j_root(d)
+    let email = bn_j_str(d, b, "email")
+    let password = bn_j_str(d, b, "password")
+    let name = bn_j_str(d, b, "name")
+    let company = bn_j_str(d, b, "company")
+    if email == "" || password == "" {
+        return bn_act_err(db, 422, "email и password са задължителни")
+    }
+    let created_at = bn_now_iso()?
+    if bn_user_exists(db, email)? == 1 {
+        return bn_act_err(db, 409, "потребителят вече съществува")
+    }
+    let first = bn_auth_register_first(db, email, password, name, company, created_at)?
+    if first == 0 {
+        let hash = bn_user_new_hash(password)?
+        let u = BnUser { email: email, name: name, pass_hash: hash, is_active: 1, is_super_admin: 0, created_at: created_at }
+        bn_user_save(db, u)?
+    }
+    return bn_auth_issue(ctx, db, email)?
+}
+
+fn act_me(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net {
+    let a = bn_act_auth(ctx, db)
+    if a.ok == 0 {
+        return a.out
+    }
+    let u = bn_user_load(db, a.ctx.user_sub)?
+    let co = bn_act_company(db, a.ctx)?
+    let role = bn_role_effective(db, co.id, u)?
+    let mut o = jobj_new()
+    o = jobj_str(o, "email", u.email)
+    o = jobj_str(o, "name", u.name)
+    o = jobj_i64(o, "is_super_admin", u.is_super_admin)
+    o = jobj_i64(o, "company", co.id)
+    o = jobj_str(o, "company_name", co.name)
+    o = jobj_str(o, "role", role)
+    return bn_act_ok(db, o)
+}
+
+fn act_me_company_get(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net {
+    let a = bn_act_auth(ctx, db)
+    if a.ok == 0 {
+        return a.out
+    }
+    let co = bn_act_company(db, a.ctx)?
+    let mut o = jobj_new()
+    o = jobj_i64(o, "company", co.id)
+    o = jobj_str(o, "company_name", co.name)
+    return bn_act_ok(db, o)
+}
+
+fn act_me_company_set(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net {
+    let a = bn_act_require(ctx, db, BN_R_READ())
+    if a.ok == 0 {
+        return a.out
+    }
+    let d = bn_act_body(ctx)
+    let b = bn_j_root(d)
+    let id = bn_j_i64(d, b, "company")
+    if id <= 0 {
+        return bn_act_err(db, 422, "company трябва да е положително число")
+    }
+    if bn_co_exists(db, id)? == 0 {
+        return bn_act_404(db, "няма такава фирма")
+    }
+    bn_act_set(db, a.ctx.user_sub, id)?
+    let co = bn_co_load(db, id)?
+    let mut o = jobj_new()
+    o = jobj_i64(o, "company", co.id)
+    o = jobj_str(o, "company_name", co.name)
+    return bn_act_ok(db, o)
+}

@@ -1,0 +1,268 @@
+// cli_cmd.baga — реализации на команди за отчети, фактури, периоди и потребители.
+//
+// Разделено от cli.baga, зада не се раздува единият файл с цикличните
+// зависимости между подкоманди.
+
+import "cli.baga"
+import "store.baga"
+import "json.baga"
+import "fmrbaga/jsonx.baga"
+import "model_period.baga"
+import "model_invoice.baga"
+import "model_journal.baga"
+import "model_journal_query.baga"
+import "model_user.baga"
+import "report_trial.baga"
+import "report_ledger.baga"
+import "report_fs.baga"
+import "time.baga"
+import "std/json/json.baga"
+import "std/os/os.baga"
+import "std/random/random.baga"
+import "std/str/str.baga"
+
+fn bn_cli_period_at(i: i64) -> str !IO !Time {
+    let p = bn_cli_arg(i)
+    if p != "" {
+        return p
+    }
+    return bn_today_period()?
+}
+
+fn bn_cli_report() -> i64 !Net !IO !Time {
+    let db = bn_cli_open()?
+    if bn_cli_need_db(db) == 0 {
+        return 1
+    }
+    let co = bn_cli_company(db)?
+    if co.id <= 0 {
+        return 1
+    }
+    let sub = bn_cli_arg(1)
+    if sub == "trial" {
+        bn_cli_json(db, bn_trial_json(db, co.id, bn_cli_period_at(2)?)?)?
+        drock_close(db)?
+        return 0
+    }
+    if sub == "ledger" {
+        let account = bn_cli_arg(2)
+        if account == "" {
+            print("употреба: report ledger <сметка> [период]")
+            return 1
+        }
+        bn_cli_json(db, bn_ledger_json(db, co.id, account, bn_cli_period_at(3)?)?)?
+        drock_close(db)?
+        return 0
+    }
+    if sub == "pl" {
+        bn_cli_json(db, bn_fs_pl_json(db, co.id, bn_cli_period_at(2)?)?)?
+        drock_close(db)?
+        return 0
+    }
+    if sub == "bs" {
+        bn_cli_json(db, bn_fs_bs_json(db, co.id, bn_cli_period_at(2)?)?)?
+        drock_close(db)?
+        return 0
+    }
+    print("употреба: report trial|ledger|pl|bs")
+    return 1
+}
+
+// ── фактури ───────────────────────────────────────────────────────────────
+
+fn bn_cli_invoice() -> i64 !Net !IO !Time !Par {
+    let db = bn_cli_open()?
+    if bn_cli_need_db(db) == 0 {
+        return 1
+    }
+    let co = bn_cli_company(db)?
+    if co.id <= 0 {
+        return 1
+    }
+    let sub = bn_cli_arg(1)
+    if sub == "list" {
+        let vs = bn_inv_list(db, co.id)?
+        let mut i: i64 = 0
+        while i < vec_len(vs) {
+            let v = vec_get(vs, i)
+            print(concat(concat(v.number, "  "), concat(v.kind, concat("  ", concat(v.total, concat("  проведена=", int_to_str(v.journal_entry)))))))
+            i = i + 1
+        }
+        drock_close(db)?
+        return 0
+    }
+    if sub == "add" {
+        let path = bn_cli_arg(2)
+        if path == "" {
+            print("употреба: invoice add <file.json>")
+            return 1
+        }
+        let text = read_file(path)?
+        let d = bn_j_body(text)
+        let b = bn_j_root(d)
+        let number = bn_j_str(d, b, "number")
+        let date = bn_j_str(d, b, "date")
+        if number == "" || date == "" {
+            print("invoice: нужни са number и date")
+            return 1
+        }
+        let id = bn_next_id(db, "inv")?
+        let v = bn_inv_zero()
+        v.id = id
+        v.company = co.id
+        v.number = number
+        v.kind = bn_j_str(d, b, "kind")
+        v.date = date
+        v.period = bn_period_of(date)
+        v.counterpart = bn_j_i64(d, b, "counterpart")
+        v.lines = bn_inv_lines_from_json(d, bn_j_child(d, b, "lines"))
+        v.created_at = bn_now_iso()?
+        let done = bn_inv_recompute(v)
+        bn_inv_save(db, co.id, done)?
+        print(concat("фактура ", number))
+        drock_close(db)?
+        return 0
+    }
+    if sub == "post" {
+        let id = parse_int(bn_cli_arg(2))
+        let r = bn_inv_post(db, co.id, id, "cli", bn_now_iso()?)?
+        if r.ok == 0 {
+            print(concat("invoice: ", r.err))
+            return 1
+        }
+        print(concat("проведена фактура, запис №", int_to_str(r.number)))
+        drock_close(db)?
+        return 0
+    }
+    print("употреба: invoice list|add|post")
+    return 1
+}
+
+// ── периоди ───────────────────────────────────────────────────────────────
+
+fn bn_cli_periods() -> i64 !Net !IO !Time {
+    let db = bn_cli_open()?
+    if bn_cli_need_db(db) == 0 {
+        return 1
+    }
+    let co = bn_cli_company(db)?
+    if co.id <= 0 {
+        return 1
+    }
+    let sub = bn_cli_arg(1)
+    if sub == "list" {
+        let ps = bn_per_all(db, co.id)?
+        let mut i: i64 = 0
+        while i < vec_len(ps) {
+            let p = vec_get(ps, i)
+            print(concat(p.period, concat("  ", p.status)))
+            i = i + 1
+        }
+        drock_close(db)?
+        return 0
+    }
+    if sub == "close" {
+        bn_per_close(db, co.id, bn_cli_arg(2))?
+        print("затворен")
+        drock_close(db)?
+        return 0
+    }
+    if sub == "reopen" {
+        bn_per_reopen(db, co.id, bn_cli_arg(2))?
+        print("отворен")
+        drock_close(db)?
+        return 0
+    }
+    print("употреба: period list|close|reopen <период>")
+    return 1
+}
+
+// ── потребители ───────────────────────────────────────────────────────────
+
+fn bn_cli_user() -> i64 !Net !IO !Time !Random {
+    let db = bn_cli_open()?
+    if bn_cli_need_db(db) == 0 {
+        return 1
+    }
+    let co = bn_cli_company(db)?
+    if co.id <= 0 {
+        return 1
+    }
+    let sub = bn_cli_arg(1)
+    if sub == "list" {
+        let users = bn_user_all(db)?
+        let mut i: i64 = 0
+        while i < vec_len(users) {
+            let u = vec_get(users, i)
+            print(concat(u.email, concat("  ", bn_role_effective(db, co.id, u)?)))
+            i = i + 1
+        }
+        drock_close(db)?
+        return 0
+    }
+    if sub == "add" {
+        let email = bn_cli_arg(2)
+        let password = bn_cli_arg(3)
+        let role = bn_cli_arg(4)
+        if email == "" || password == "" {
+            print("употреба: user add <email> <парола> [роля]")
+            return 1
+        }
+        let hash = bn_user_new_hash(password)?
+        let u = BnUser { email: email, name: email, pass_hash: hash, is_active: 1, is_super_admin: 0, created_at: bn_now_iso()? }
+        bn_user_save(db, u)?
+        if role == "" {
+            bn_role_set(db, co.id, email, "accountant")?
+        } else {
+            bn_role_set(db, co.id, email, role)?
+        }
+        print(concat("потребител ", email))
+        drock_close(db)?
+        return 0
+    }
+    print("употреба: user list|add")
+    return 1
+}
+
+fn bn_cli_help() -> i64 {
+    print("buchnative — счетоводно приложение върху rocksbaga (drockb)")
+    print("  serve                          HTTP API (PORT, подразбира се 8090)")
+    print("  seed                           фирма + сметкоплан + супер-админ")
+    print("  account list|add|seed          сметкоплан")
+    print("  cp list|add                    контрагенти")
+    print("  post <file.json>               проводка от файл")
+    print("  report trial|ledger|pl|bs      отчети")
+    print("  invoice list|add|post          фактури")
+    print("  period list|close|reopen       периоди")
+    print("  user list|add                  потребители")
+    print("  help")
+    return 0
+}
+
+fn bn_cli_run(cmd: str) -> i64 !Net !IO !Par !Random !Time {
+    if cmd == "seed" {
+        return bn_cli_seed()?
+    }
+    if cmd == "account" {
+        return bn_cli_account()?
+    }
+    if cmd == "cp" {
+        return bn_cli_cp()?
+    }
+    if cmd == "post" {
+        return bn_cli_post()?
+    }
+    if cmd == "report" {
+        return bn_cli_report()?
+    }
+    if cmd == "invoice" {
+        return bn_cli_invoice()?
+    }
+    if cmd == "period" {
+        return bn_cli_periods()?
+    }
+    if cmd == "user" {
+        return bn_cli_user()?
+    }
+    return bn_cli_help()?
+}

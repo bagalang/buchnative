@@ -1,0 +1,218 @@
+// cli.baga — команден ред на buchnative.
+//
+//   buchnative seed                        фирма + сметкоплан + супер-админ
+//   buchnative account list|add            сметкоплан
+//   buchnative cp list|add                 контрагенти
+//   buchnative post <file.json>            проводка от файл
+//   buchnative report trial|ledger|pl|bs   отчети
+//   buchnative invoice list|add|post       фактури
+//   buchnative period list|close|reopen   периоди
+//   buchnative user list|add               потребители
+//   buchnative help
+
+import "store.baga"
+import "json.baga"
+import "money.baga"
+import "fmrbaga/jsonx.baga"
+import "model_company.baga"
+import "model_account.baga"
+import "model_counterpart.baga"
+import "model_journal.baga"
+import "model_journal_query.baga"
+import "model_invoice.baga"
+import "model_period.baga"
+import "model_user.baga"
+import "report_trial.baga"
+import "report_ledger.baga"
+import "report_fs.baga"
+import "time.baga"
+import "actions/auth.baga"
+import "std/json/json.baga"
+import "std/os/os.baga"
+import "std/random/random.baga"
+import "std/str/str.baga"
+
+fn bn_cli_command() -> str {
+    if arg_count() < 1 {
+        return ""
+    }
+    return arg(0)
+}
+
+fn bn_cli_arg(i: i64) -> str {
+    if arg_count() <= i {
+        return ""
+    }
+    return arg(i)
+}
+
+fn bn_cli_open() -> DrokDB !Net !IO {
+    return bn_open_env()?
+}
+
+fn bn_cli_need_db(db: DrokDB) -> i64 {
+    if drock_ok(db) == 0 {
+        print(concat("rocksbaga недостъпна: ", drock_last_error(db)))
+        print("стартирай: app-product/rocksbaga/tools/serve.baga")
+        return 0
+    }
+    return 1
+}
+
+fn bn_cli_company(db: DrokDB) -> BnCompany !Net !IO {
+    let co = bn_co_first(db)?
+    if co.id <= 0 {
+        print("няма фирма — пусни `buchnative seed`")
+    }
+    return co
+}
+
+fn bn_cli_json(db: DrokDB, o: JObj) -> i64 {
+    print(jobj_encode(o))
+    return 0
+}
+
+// ── seed ──────────────────────────────────────────────────────────────────
+
+fn bn_cli_seed() -> i64 !Net !IO !Random !Time {
+    let db = bn_cli_open()?
+    if bn_cli_need_db(db) == 0 {
+        return 1
+    }
+    let email = bn_env_or("BN_ADMIN_EMAIL", "superadmin")?
+    let password = bn_env_or("BN_ADMIN_PASSWORD", "123+123")?
+    let company = bn_env_or("BN_SEED_COMPANY", "BN-DEMO")?
+    let created = bn_now_iso()?
+    let first = bn_auth_register_first(db, email, password, "Супер админ", company, created)?
+    if first == 1 {
+        print(concat("seed: фирма + сметкоплан + потребител ", email))
+    } else {
+        print("seed: вече има данни — без промяна")
+    }
+    drock_close(db)?
+    return 0
+}
+
+// ── сметкоплан ────────────────────────────────────────────────────────────
+
+fn bn_cli_account() -> i64 !Net !IO {
+    let db = bn_cli_open()?
+    if bn_cli_need_db(db) == 0 {
+        return 1
+    }
+    let co = bn_cli_company(db)?
+    if co.id <= 0 {
+        return 1
+    }
+    let sub = bn_cli_arg(1)
+    if sub == "list" {
+        let accs = bn_ac_all(db, co.id)?
+        let mut i: i64 = 0
+        while i < vec_len(accs) {
+            let a = vec_get(accs, i)
+            print(concat(concat(a.code, "  "), concat(a.name, concat("  [", concat(bn_ac_side(a.cls), "]")))))
+            i = i + 1
+        }
+        drock_close(db)?
+        return 0
+    }
+    if sub == "add" {
+        let code = bn_cli_arg(2)
+        let name = bn_cli_arg(3)
+        let cls = parse_int(bn_cli_arg(4))
+        if code == "" || name == "" || cls < 1 || cls > 9 {
+            print("употреба: account add <код> <име> <клас 1..9>")
+            return 1
+        }
+        let a = BnAccount { code: code, name: name, cls: cls, kind: bn_ac_kind(cls), analytic: 0, parent: "", is_active: 1 }
+        bn_ac_save(db, co.id, a)?
+        print(concat("сметка ", code))
+        drock_close(db)?
+        return 0
+    }
+    if sub == "seed" {
+        let added = bn_ac_seed(db, co.id)?
+        print(concat("добавени сметки: ", int_to_str(added)))
+        drock_close(db)?
+        return 0
+    }
+    print("употреба: account list|add|seed")
+    return 1
+}
+
+// ── контрагенти ───────────────────────────────────────────────────────────
+
+fn bn_cli_cp() -> i64 !Net !IO !Time {
+    let db = bn_cli_open()?
+    if bn_cli_need_db(db) == 0 {
+        return 1
+    }
+    let co = bn_cli_company(db)?
+    if co.id <= 0 {
+        return 1
+    }
+    let sub = bn_cli_arg(1)
+    if sub == "list" {
+        let cps = bn_cp_all(db, co.id)?
+        let mut i: i64 = 0
+        while i < vec_len(cps) {
+            let c = vec_get(cps, i)
+            print(concat(concat(int_to_str(c.id), "  "), c.name))
+            i = i + 1
+        }
+        drock_close(db)?
+        return 0
+    }
+    if sub == "add" {
+        let name = bn_cli_arg(2)
+        if name == "" {
+            print("употреба: cp add <име>")
+            return 1
+        }
+        let id = bn_next_id(db, "cp")?
+        let c = BnCounterpart { id: id, name: name, eik: bn_cli_arg(3), vat: "", city: "", address: "", email: "", phone: "", is_customer: 1, is_supplier: 0, created_at: bn_now_iso()? }
+        bn_cp_save(db, co.id, c)?
+        print(concat("контрагент ", int_to_str(id)))
+        drock_close(db)?
+        return 0
+    }
+    print("употреба: cp list|add")
+    return 1
+}
+
+// ── проводка от файл ──────────────────────────────────────────────────────
+
+fn bn_cli_post() -> i64 !Net !IO !Time !Par {
+    let db = bn_cli_open()?
+    if bn_cli_need_db(db) == 0 {
+        return 1
+    }
+    let co = bn_cli_company(db)?
+    if co.id <= 0 {
+        return 1
+    }
+    let path = bn_cli_arg(1)
+    if path == "" {
+        print("употреба: post <file.json>")
+        return 1
+    }
+    let text = read_file(path)?
+    let d = bn_j_body(text)
+    let b = bn_j_root(d)
+    let date = bn_j_str(d, b, "date")
+    if date == "" {
+        print("post: липсва date")
+        return 1
+    }
+    let lines = bn_lines_from_json(d, bn_j_child(d, b, "lines"))
+    let r = bn_je_post(db, co.id, date, bn_j_str(d, b, "doc_type"), bn_j_str(d, b, "doc_number"), bn_j_str(d, b, "description"), lines, "cli", bn_now_iso()?)?
+    if r.ok == 0 {
+        print(concat("post: ", r.err))
+        return 1
+    }
+    print(concat("post: запис №", int_to_str(r.number)))
+    drock_close(db)?
+    return 0
+}
+
+// ── отчети ────────────────────────────────────────────────────────────────

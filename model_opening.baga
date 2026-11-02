@@ -1,0 +1,93 @@
+// model_opening.baga — начални салда за фискална година по сметка.
+
+import "store.baga"
+import "store_scan.baga"
+import "json.baga"
+import "money.baga"
+import "fmrbaga/jsonx.baga"
+import "std/json/json.baga"
+import "std/str/str.baga"
+
+struct BnOpening {
+    company: i64,
+    year: str,
+    account: str,
+    debit: str,
+    credit: str
+}
+
+fn bn_ob_zero(co: i64, year: str, account: str) -> BnOpening {
+    return BnOpening { company: co, year: year, account: account, debit: "0.00", credit: "0.00" }
+}
+
+fn bn_ob_from_json(d: JsonDoc, root: i64, co: i64, year: str, account: str) -> BnOpening {
+    let o = bn_ob_zero(co, year, account)
+    o.debit = bn_money_round2(bn_j_str(d, root, "debit"))
+    o.credit = bn_money_round2(bn_j_str(d, root, "credit"))
+    return o
+}
+
+fn bn_ob_to_json(o: BnOpening) -> JObj {
+    let mut j = jobj_new()
+    j = jobj_i64(j, "company", o.company)
+    j = jobj_str(j, "year", o.year)
+    j = jobj_str(j, "account", o.account)
+    j = jobj_str(j, "debit", o.debit)
+    j = jobj_str(j, "credit", o.credit)
+    return j
+}
+
+fn bn_ob_json_str(o: BnOpening) -> str {
+    return jobj_encode(bn_ob_to_json(o))
+}
+
+fn bn_ob_load(db: DrokDB, co: i64, account: str, year: str) -> BnOpening !Net !IO {
+    let s = bn_get_str(db, bn_k_ob(co, account, year))?
+    if s == "" {
+        return bn_ob_zero(co, year, account)
+    }
+    let d = json_parse(s)
+    return bn_ob_from_json(d, bn_j_root(d), co, year, account)
+}
+
+fn bn_ob_save(db: DrokDB, o: BnOpening) -> i64 !Net !IO {
+    return bn_put_str(db, bn_k_ob(o.company, o.account, o.year), bn_ob_json_str(o))?
+}
+
+fn bn_ob_delete(db: DrokDB, co: i64, account: str, year: str) -> i64 !Net !IO {
+    return bn_del(db, bn_k_ob(co, account, year))?
+}
+
+fn bn_ob_all(db: DrokDB, co: i64, year: str) -> Vec<BnOpening> !Net !IO {
+    let keys = bn_scan_key_strs(db, concat(concat("bn:ob:", int_to_str(co)), ":"))?
+    let prefix = concat(concat("bn:ob:", int_to_str(co)), ":")
+    let out: Vec<BnOpening> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(keys) {
+        let key = vec_get(keys, i)
+        let rest = substr(key, len(prefix), len(key))
+        if bn_ob_year_of(rest) == year {
+            let account = bn_ob_account_of(rest)
+            vec_push(out, bn_ob_load(db, co, account, year)?)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// rest = "<account>:<year>"
+fn bn_ob_year_of(rest: str) -> str {
+    let p = str_find(rest, ":")
+    if p < 0 {
+        return ""
+    }
+    return substr(rest, p + 1, len(rest))
+}
+
+fn bn_ob_account_of(rest: str) -> str {
+    let p = str_find(rest, ":")
+    if p < 0 {
+        return rest
+    }
+    return substr(rest, 0, p)
+}

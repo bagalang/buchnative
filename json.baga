@@ -1,0 +1,110 @@
+// json.baga — JSON field helpers over std/json + fmrbaga/jsonx.
+//
+// std/json exposes a node tree; these helpers keep the boilerplate out of the
+// models and never go through f64 (numbers are read as text then parsed).
+
+import "fmrbaga/jsonx.baga"
+import "std/json/json.baga"
+import "std/json/json_write.baga"
+import "std/str/str.baga"
+
+fn bn_j_child(d: JsonDoc, node: i64, key: str) -> i64 {
+    return json_get(d, node, key)
+}
+
+fn bn_j_has(d: JsonDoc, node: i64, key: str) -> i64 {
+    if json_get(d, node, key) < 0 {
+        return 0
+    }
+    return 1
+}
+
+fn bn_j_i64(d: JsonDoc, node: i64, key: str) -> i64 {
+    let n = json_get(d, node, key)
+    if n < 0 {
+        return 0
+    }
+    let t = json_tag(d, n)
+    if t == 3 || t == 4 {
+        return parse_int(json_str(d, n))
+    }
+    return 0
+}
+
+fn bn_j_str(d: JsonDoc, node: i64, key: str) -> str {
+    let n = json_get(d, node, key)
+    if n < 0 {
+        return ""
+    }
+    if json_tag(d, n) == 4 {
+        return json_str(d, n)
+    }
+    return ""
+}
+
+fn bn_j_raw(d: JsonDoc, node: i64, key: str) -> str {
+    let n = json_get(d, node, key)
+    if n < 0 {
+        return ""
+    }
+    return json_serialize(d, n)
+}
+
+fn bn_j_count(d: JsonDoc, node: i64) -> i64 {
+    if node < 0 {
+        return 0
+    }
+    return json_count(d, node)
+}
+
+fn bn_j_item(d: JsonDoc, node: i64, i: i64) -> i64 {
+    if node < 0 || i < 0 {
+        return 0 - 1
+    }
+    return json_at(d, node, i)
+}
+
+fn bn_j_item_i64(d: JsonDoc, node: i64, i: i64) -> i64 {
+    let n = bn_j_item(d, node, i)
+    if n < 0 {
+        return 0
+    }
+    let t = json_tag(d, n)
+    if t == 3 || t == 4 {
+        return parse_int(json_str(d, n))
+    }
+    return 0
+}
+
+fn bn_j_item_str(d: JsonDoc, node: i64, i: i64) -> str {
+    let n = bn_j_item(d, node, i)
+    if n < 0 {
+        return ""
+    }
+    if json_tag(d, n) == 4 {
+        return json_str(d, n)
+    }
+    return ""
+}
+
+fn bn_j_is_array(d: JsonDoc, node: i64) -> i64 {
+    if node < 0 {
+        return 0
+    }
+    if json_tag(d, node) != 5 {
+        return 0
+    }
+    return 1
+}
+
+fn bn_j_body(s: str) -> JsonDoc {
+    let d = json_parse(s)
+    if json_tag(d, json_root(d)) != 6 {
+        return json_parse("{}")
+    }
+    return d
+}
+
+fn bn_j_root(d: JsonDoc) -> i64 {
+    return json_root(d)
+}

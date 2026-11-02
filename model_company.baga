@@ -1,0 +1,118 @@
+// model_company.baga — фирми: мултитенантски контур на данните.
+
+import "store.baga"
+import "json.baga"
+import "fmrbaga/jsonx.baga"
+import "std/json/json.baga"
+import "std/str/str.baga"
+
+struct BnCompany {
+    id: i64,
+    name: str,
+    eik: str,
+    vat: str,
+    city: str,
+    address: str,
+    owner: str,
+    created_at: str
+}
+
+fn bn_co_zero() -> BnCompany {
+    return BnCompany { id: 0, name: "", eik: "", vat: "", city: "", address: "", owner: "", created_at: "" }
+}
+
+fn bn_co_from_json(d: JsonDoc, root: i64) -> BnCompany {
+    return BnCompany {
+        id: bn_j_i64(d, root, "id"),
+        name: bn_j_str(d, root, "name"),
+        eik: bn_j_str(d, root, "eik"),
+        vat: bn_j_str(d, root, "vat"),
+        city: bn_j_str(d, root, "city"),
+        address: bn_j_str(d, root, "address"),
+        owner: bn_j_str(d, root, "owner"),
+        created_at: bn_j_str(d, root, "created_at")
+    }
+}
+
+fn bn_co_to_json(c: BnCompany) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", c.id)
+    o = jobj_str(o, "name", c.name)
+    o = jobj_str(o, "eik", c.eik)
+    o = jobj_str(o, "vat", c.vat)
+    o = jobj_str(o, "city", c.city)
+    o = jobj_str(o, "address", c.address)
+    o = jobj_str(o, "owner", c.owner)
+    o = jobj_str(o, "created_at", c.created_at)
+    return o
+}
+
+fn bn_co_json_str(c: BnCompany) -> str {
+    return jobj_encode(bn_co_to_json(c))
+}
+
+fn bn_co_load(db: DrokDB, id: i64) -> BnCompany !Net !IO {
+    let s = bn_get_str(db, bn_k_co(id))?
+    if s == "" {
+        return bn_co_zero()
+    }
+    let d = json_parse(s)
+    return bn_co_from_json(d, bn_j_root(d))
+}
+
+fn bn_co_exists(db: DrokDB, id: i64) -> i64 !Net !IO {
+    return bn_exists(db, bn_k_co(id))?
+}
+
+// Store the company and add it to the id index in one MSET.
+fn bn_co_save(db: DrokDB, c: BnCompany) -> i64 !Net !IO {
+    let ids = bn_list_parse(bn_get_str(db, bn_k_co_all())?)
+    let n = bn_list_add(ids, int_to_str(c.id))
+    let ks: Vec<str> = vec_new()
+    let vs: Vec<str> = vec_new()
+    vec_push(ks, bn_k_co(c.id))
+    vec_push(vs, bn_co_json_str(c))
+    vec_push(ks, bn_k_co_all())
+    vec_push(vs, bn_list_encode(n))
+    return bn_mset(db, ks, vs)?
+}
+
+fn bn_co_ids(db: DrokDB) -> Vec<i64> !Net !IO {
+    let raw = bn_list_parse(bn_get_str(db, bn_k_co_all())?)
+    let out: Vec<i64> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(raw) {
+        vec_push(out, parse_int(vec_get(raw, i)))
+        i = i + 1
+    }
+    return out
+}
+
+fn bn_co_all(db: DrokDB) -> Vec<BnCompany> !Net !IO {
+    let ids = bn_co_ids(db)?
+    let out: Vec<BnCompany> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(ids) {
+        let c = bn_co_load(db, vec_get(ids, i))?
+        if c.id > 0 {
+            vec_push(out, c)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn bn_co_first(db: DrokDB) -> BnCompany !Net !IO {
+    let ids = bn_co_ids(db)?
+    if vec_len(ids) == 0 {
+        return bn_co_zero()
+    }
+    return bn_co_load(db, vec_get(ids, 0))?
+}
+
+fn bn_co_delete(db: DrokDB, id: i64) -> i64 !Net !IO {
+    bn_del(db, bn_k_co(id))?
+    let ids = bn_list_parse(bn_get_str(db, bn_k_co_all())?)
+    let n = bn_list_del(ids, int_to_str(id))
+    return bn_put_str(db, bn_k_co_all(), bn_list_encode(n))?
+}

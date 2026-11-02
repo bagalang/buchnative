@@ -1,0 +1,13 @@
+[package]
+name = "buchnative"
+version = "0.1.0"
+entry = "start.baga"
+kind = "bin"
+
+[dependencies]
+drockb = { path = "../../app-product/drockb" }
+fmrbaga = { path = "../../app-product/fmrbaga" }
+jwtbaga = { path = "../../app-product/jwtbaga" }
+bagadecimal = { path = "../../app-product/bagadecimal" }
+chronobaga = { path = "../../app-product/chronobaga" }
+std = { path = "../../std" }

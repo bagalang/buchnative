@@ -1,0 +1,115 @@
+// actions/counterparts.baga — контрагенти на активната фирма.
+
+import "action.baga"
+import "fmrbaga/jsonx.baga"
+import "../model_counterpart.baga"
+import "../json.baga"
+import "../time.baga"
+import "std/json/json.baga"
+import "std/str/str.baga"
+
+fn act_counterparts_index(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net {
+    let a = bn_act_require(ctx, db, BN_R_READ())
+    if a.ok == 0 {
+        return a.out
+    }
+    let co = bn_act_company(db, ctx)?
+    let cps = bn_cp_all(db, co.id)?
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < vec_len(cps) {
+        arr = jarr_obj(arr, bn_cp_to_json(vec_get(cps, i)))
+        i = i + 1
+    }
+    return bn_act_ok(db, bn_act_page_wrap(arr, vec_len(cps), bn_act_page(ctx, 100, 500)))
+}
+
+fn act_counterparts_create(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net !Time {
+    let a = bn_act_require(ctx, db, BN_R_MANAGE())
+    if a.ok == 0 {
+        return a.out
+    }
+    let co = bn_act_company(db, ctx)?
+    let d = bn_act_body(ctx)
+    let b = bn_j_root(d)
+    let name = bn_j_str(d, b, "name")
+    if name == "" {
+        return bn_act_err(db, 422, "name е задължително")
+    }
+    let id = bn_next_id(db, "cp")?
+    let c = BnCounterpart { id: id, name: name, eik: bn_j_str(d, b, "eik"), vat: bn_j_str(d, b, "vat"), city: bn_j_str(d, b, "city"), address: bn_j_str(d, b, "address"), email: bn_j_str(d, b, "email"), phone: bn_j_str(d, b, "phone"), is_customer: bn_j_i64(d, b, "is_customer"), is_supplier: bn_j_i64(d, b, "is_supplier"), created_at: bn_now_iso()? }
+    bn_cp_save(db, co.id, c)?
+    return bn_act_created(db, bn_cp_to_json(c))
+}
+
+fn act_counterparts_show(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net {
+    let a = bn_act_require(ctx, db, BN_R_READ())
+    if a.ok == 0 {
+        return a.out
+    }
+    let co = bn_act_company(db, ctx)?
+    let id = fmr_param_i64(ctx, "id")
+    let c = bn_cp_load(db, co.id, id)?
+    if c.id <= 0 {
+        return bn_act_404(db, "няма такъв контрагент")
+    }
+    return bn_act_ok(db, bn_cp_to_json(c))
+}
+
+fn act_counterparts_update(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net {
+    let a = bn_act_require(ctx, db, BN_R_MANAGE())
+    if a.ok == 0 {
+        return a.out
+    }
+    let co = bn_act_company(db, ctx)?
+    let id = fmr_param_i64(ctx, "id")
+    let c = bn_cp_load(db, co.id, id)?
+    if c.id <= 0 {
+        return bn_act_404(db, "няма такъв контрагент")
+    }
+    let d = bn_act_body(ctx)
+    let b = bn_j_root(d)
+    if bn_j_has(d, b, "name") == 1 {
+        c.name = bn_j_str(d, b, "name")
+    }
+    if bn_j_has(d, b, "eik") == 1 {
+        c.eik = bn_j_str(d, b, "eik")
+    }
+    if bn_j_has(d, b, "vat") == 1 {
+        c.vat = bn_j_str(d, b, "vat")
+    }
+    if bn_j_has(d, b, "city") == 1 {
+        c.city = bn_j_str(d, b, "city")
+    }
+    if bn_j_has(d, b, "address") == 1 {
+        c.address = bn_j_str(d, b, "address")
+    }
+    if bn_j_has(d, b, "email") == 1 {
+        c.email = bn_j_str(d, b, "email")
+    }
+    if bn_j_has(d, b, "phone") == 1 {
+        c.phone = bn_j_str(d, b, "phone")
+    }
+    if bn_j_has(d, b, "is_customer") == 1 {
+        c.is_customer = bn_j_i64(d, b, "is_customer")
+    }
+    if bn_j_has(d, b, "is_supplier") == 1 {
+        c.is_supplier = bn_j_i64(d, b, "is_supplier")
+    }
+    bn_cp_save(db, co.id, c)?
+    return bn_act_ok(db, bn_cp_to_json(c))
+}
+
+fn act_counterparts_delete(ctx: FmrCtx, db: DrokDB) -> BnOut !IO !Net {
+    let a = bn_act_require(ctx, db, BN_R_MANAGE())
+    if a.ok == 0 {
+        return a.out
+    }
+    let co = bn_act_company(db, ctx)?
+    let id = fmr_param_i64(ctx, "id")
+    if bn_cp_exists(db, co.id, id)? == 0 {
+        return bn_act_404(db, "няма такъв контрагент")
+    }
+    bn_cp_delete(db, co.id, id)?
+    return bn_act_no_content(db)
+}
