@@ -1,26 +1,23 @@
 // models/fs_formula_store.baga — fs_line_formulas по фирма.
+// KV (rocksbaga): формулите са рядове на фирмата — GET по индекса на
+// company_id, id-то идва от брояча на таблицата при insert.
 
 import "ormbaga/orm.baga"
-import "ormbaga/sql.baga"
 import "fmrbaga/jsonx.baga"
-import "pgbaga/pg.baga"
 import "std/str/str.baga"
-import "std/os/os.baga"
 
 fn fsf_table() -> str {
     return "fs_line_formulas"
 }
 
-fn fsf_backend_boila() -> i64 !IO {
-    let be = env("ORM_BACKEND")?
-    if be == "boila" || be == "boiladb" || be == "boilaDB" {
-        return 1
-    }
-    return 0
-}
-
-fn fsf_select_sql() -> str {
-    return "SELECT id, company_id, statement, line_code, formula FROM fs_line_formulas"
+fn fsf_cols() -> Vec<str> {
+    let c: Vec<str> = vec_new()
+    vec_push(c, "id")
+    vec_push(c, "company_id")
+    vec_push(c, "statement")
+    vec_push(c, "line_code")
+    vec_push(c, "formula")
+    return c
 }
 
 fn fsf_to_json(q: OrmQuery, row: i64) -> JObj {
@@ -33,59 +30,25 @@ fn fsf_to_json(q: OrmQuery, row: i64) -> JObj {
     return o
 }
 
+// ORDER BY id: action-ите четат реда по line_code, но списъкът трябва да е
+// стабилен между презарежданията.
 fn fsf_by_company(db: OrmDb, company_id: i64) -> OrmQuery !IO !Net {
-    let sql = concat(fsf_select_sql(), " WHERE company_id = $1 ORDER BY id")
-    let vals = vec_new()
-    let nulls = vec_new()
-    pg_param_i64(vals, nulls, company_id)
-    return orm_query_params(db, sql, vals, nulls)?
+    return kv_where_order(db, fsf_table(), "company_id", int_to_str(company_id), "id", fsf_cols())?
 }
 
 fn fsf_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
-    let sql = concat(fsf_select_sql(), " WHERE id = $1")
-    let vals = vec_new()
-    let nulls = vec_new()
-    pg_param_i64(vals, nulls, id)
-    return orm_query_params(db, sql, vals, nulls)?
+    return kv_select_by_id(db, fsf_table(), id, fsf_cols())?
 }
 
+// Следващ PK: броячът на таблицата го раздава при insert, тук само се чете.
 fn fsf_next_id(db: OrmDb) -> OrmCount !IO !Net {
-    return orm_count_sql(db, "SELECT MAX(id) AS count FROM fs_line_formulas")?
+    return kv_count_sql(db, "SELECT MAX(id) AS count FROM fs_line_formulas")?
 }
 
 fn fsf_insert(db: OrmDb, cols: Vec<str>, vals: Vec<str>) -> OrmQuery !IO !Net {
     let nulls = vec_new()
     let mut i: i64 = 0
     let n = vec_len(cols)
-    if fsf_backend_boila()? == 1 {
-        let c = fsf_next_id(db)?
-        if orm_ok_c(c) == 0 {
-            return OrmQErr(OrmQueryFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
-        }
-        let nid = orm_count_n(c) + 1
-        let d = orm_db_c(c)
-        let allc = vec_new()
-        vec_push(allc, "id")
-        i = 0
-        while i < n {
-            vec_push(allc, vec_get(cols, i))
-            i = i + 1
-        }
-        let allv = vec_new()
-        vec_push(allv, int_to_str(nid))
-        i = 0
-        while i < n {
-            vec_push(allv, vec_get(vals, i))
-            i = i + 1
-        }
-        i = 0
-        while i < n + 1 {
-            vec_push(nulls, 0)
-            i = i + 1
-        }
-        return orm_insert_returning_full(d, fsf_table(), allc, allv, nulls)?
-    }
-    i = 0
     while i < n {
         vec_push(nulls, 0)
         i = i + 1

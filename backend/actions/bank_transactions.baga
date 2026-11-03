@@ -133,7 +133,7 @@ fn act_bank_transactions_preview(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     return act_ok(db2, bp_result_to_json(result))
 }
 // ─── Импорт (с авто-осчетоводяване при конфигурирани ГЛ + буферна) ───
-fn act_bank_transactions_import(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_bank_transactions_import(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let auth = act_require_auth(ctx, db)
     if auth.ok == 0 {
         return auth.out
@@ -317,12 +317,7 @@ fn act_bank_transactions_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     let mut db2 = orm_db_exec(bgn)
     // Изтрий свързания счетоводен запис (редове + запис).
     if entry_id > 0 {
-        let ldel = orm_delete_lit(db2, journal_line_table(), "entry_id", int_to_str(entry_id))?
-        if orm_ok(ldel) == 0 {
-            return act_err_rb(orm_db_exec(ldel), 500, orm_err_exec(ldel))
-        }
-        db2 = orm_db_exec(ldel)
-        let jdel = orm_delete_by_id(db2, journal_entry_table(), entry_id)?
+        let jdel = journal_delete_entry(db2, entry_id)?
         if orm_ok(jdel) == 0 {
             return act_err_rb(orm_db_exec(jdel), 500, orm_err_exec(jdel))
         }

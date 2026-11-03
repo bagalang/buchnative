@@ -133,7 +133,7 @@ fn act_idoc_next_number(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     return act_ok(db, o)
 }
 
-fn act_idoc_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_idoc_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let auth = act_require_auth(ctx, db)
     if auth.ok == 0 {
         return auth.out

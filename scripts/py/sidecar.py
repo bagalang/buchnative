@@ -4,8 +4,9 @@
 Baga talks HTTP here (no process spawn). Same idea as su-doxis:
 smtp_service.py + s3_backup.py, one process.
 
-S3 backup is a boilaDB logical dump (COPY TO STDOUT, REPEATABLE READ),
-not a tar of live LSM files under BOILA_PATH.
+S3 backup is a logical dump, chosen by ORM_BACKEND: rocksbaga (drock) минава
+през kvdump.py (RESP2 SCAN + JSON lines), Postgres/boilaDB — през dump.py
+(COPY TO STDOUT). Не е tar на живи LSM файлове.
 """
 
 from __future__ import annotations
@@ -20,7 +21,13 @@ from email.mime.text import MIMEText
 
 from flask import Flask, jsonify, request
 
+import kvdump
 from dump import dump_to_path, pg_cfg
+
+def is_kv_backend() -> bool:
+    be = (os.environ.get("ORM_BACKEND") or "").lower()
+    return be.startswith("drock") or be.startswith("rocks")
+
 
 app = Flask(__name__)
 PORT = int(os.environ.get("BUCHNATIVE_SIDECAR_PORT", "5050"))
@@ -188,24 +195,33 @@ def s3_backup():
     c = s3_cfg(data)
     if not c["bucket"]:
         return _json_error("S3 bucket е задължителен")
+    kv = is_kv_backend()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    filename = f"buchnative_backup_{stamp}.sql.gz"
+    ext = "json.gz" if kv else "sql.gz"
+    filename = f"buchnative_backup_{stamp}.{ext}"
     s3_key = f"{c['prefix']}{filename}"
     tmp = ""
     try:
-        fd, tmp = tempfile.mkstemp(suffix=".sql.gz")
+        fd, tmp = tempfile.mkstemp(suffix="." + ext)
         os.close(fd)
-        st = dump_to_path(pg_cfg(data), tmp)
+        if kv:
+            st = kvdump.dump_to_path(kvdump.kv_cfg(data), tmp)
+            note = f"{st['keys']} ключа, dump през rocksbaga SCAN"
+            kind = "kv"
+        else:
+            st = dump_to_path(pg_cfg(data), tmp)
+            note = f"{st.get('tables') or 0} таблици, dump през boilaDB COPY"
+            kind = "copy"
         client = s3_client(c["endpoint"], c["access_key"], c["secret_key"], c["region"])
         client.upload_file(tmp, c["bucket"], s3_key)
         n = st.get("tables") or 0
         return _ok(
-            f"Бекъп създаден: {filename} ({n} таблици, dump през boilaDB COPY)",
+            f"Бекъп създаден: {filename} ({note})",
             filename=filename,
             s3_key=s3_key,
             size=st.get("size") or 0,
             tables=n,
-            kind="copy",
+            kind=kind,
         )
     except Exception as e:
         return _json_error(str(e))

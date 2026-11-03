@@ -6,18 +6,9 @@
 import "ormbaga/orm.baga"
 import "fmrbaga/jsonx.baga"
 import "std/str/str.baga"
-import "std/os/os.baga"
 
 fn setting_table() -> str {
     return "settings"
-}
-
-fn setting_backend_boila() -> i64 !IO {
-    let be = env("ORM_BACKEND")?
-    if be == "boila" || be == "boiladb" || be == "boilaDB" {
-        return 1
-    }
-    return 0
 }
 
 fn setting_next_id(db: OrmDb) -> OrmCount !IO !Net {

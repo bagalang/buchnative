@@ -1,40 +1,93 @@
-// models/production.baga — рецепти (BOM) и производствени поръчки.
+// models/production.baga — рецепти (BOM) и производствени поръчки върху KV (rocksbaga).
+//
+// Сигнатурите са тези от SQL версията, затова actions/recipes.baga и
+// actions/production*.baga не се пипат: kv_select_* попълва същия OrmQuery,
+// който orm_cell_by/orm_nrows/orm_db_q четат. boilaDB клоните изчезнаха —
+// id-то го раздава броячът на таблицата, не моделът.
 // Суми и количества са NUMERIC като стринг.
 
 import "ormbaga/orm.baga"
-import "ormbaga/sql.baga"
 import "fmrbaga/jsonx.baga"
-import "pgbaga/pg.baga"
+import "kvtime.baga"
 import "std/str/str.baga"
-import "std/os/os.baga"
-
-fn mfg_backend_boila() -> i64 !IO {
-    let be = env("ORM_BACKEND")?
-    if be == "boila" || be == "boiladb" || be == "boilaDB" {
-        return 1
-    }
-    return 0
-}
 
 fn recipe_table() -> str { return "recipes" }
 fn rline_table() -> str { return "recipe_lines" }
 fn pord_table() -> str { return "production_orders" }
 fn pline_table() -> str { return "production_order_lines" }
 
-fn recipe_select_sql() -> str {
-    return "SELECT id, company_id, code, name, output_product_id, output_quantity, output_unit, notes, is_active, created_at FROM recipes"
+// Колоните на реда — заместват SELECT списъците, в същия ред като SQL-а,
+// за да чете action-ът една и съща колона по име.
+fn recipe_cols() -> Vec<str> {
+    let c: Vec<str> = vec_new()
+    vec_push(c, "id")
+    vec_push(c, "company_id")
+    vec_push(c, "code")
+    vec_push(c, "name")
+    vec_push(c, "output_product_id")
+    vec_push(c, "output_quantity")
+    vec_push(c, "output_unit")
+    vec_push(c, "notes")
+    vec_push(c, "is_active")
+    vec_push(c, "created_at")
+    return c
 }
 
-fn rline_select_sql() -> str {
-    return "SELECT id, recipe_id, product_id, quantity, unit, wastage_percent, line_no FROM recipe_lines"
+fn rline_cols() -> Vec<str> {
+    let c: Vec<str> = vec_new()
+    vec_push(c, "id")
+    vec_push(c, "recipe_id")
+    vec_push(c, "product_id")
+    vec_push(c, "quantity")
+    vec_push(c, "unit")
+    vec_push(c, "wastage_percent")
+    vec_push(c, "line_no")
+    return c
 }
 
-fn pord_select_sql() -> str {
-    return "SELECT id, company_id, number, recipe_id, output_product_id, quantity, location_id, order_date, status, notes, material_cost, journal_entry_id, created_at FROM production_orders"
+fn pord_cols() -> Vec<str> {
+    let c: Vec<str> = vec_new()
+    vec_push(c, "id")
+    vec_push(c, "company_id")
+    vec_push(c, "number")
+    vec_push(c, "recipe_id")
+    vec_push(c, "output_product_id")
+    vec_push(c, "quantity")
+    vec_push(c, "location_id")
+    vec_push(c, "order_date")
+    vec_push(c, "status")
+    vec_push(c, "notes")
+    vec_push(c, "material_cost")
+    vec_push(c, "journal_entry_id")
+    vec_push(c, "created_at")
+    return c
 }
 
-fn pline_select_sql() -> str {
-    return "SELECT id, order_id, product_id, product_name, quantity, unit, unit_cost, amount FROM production_order_lines"
+fn pline_cols() -> Vec<str> {
+    let c: Vec<str> = vec_new()
+    vec_push(c, "id")
+    vec_push(c, "order_id")
+    vec_push(c, "product_id")
+    vec_push(c, "product_name")
+    vec_push(c, "quantity")
+    vec_push(c, "unit")
+    vec_push(c, "unit_cost")
+    vec_push(c, "amount")
+    return c
+}
+
+// ORDER BY id DESC за списъка с поръчки (най-новата първа): kv_where_dir
+// иска колони и посоки като два вектора, 1 = DESC.
+fn pord_sort_cols() -> Vec<str> {
+    let c: Vec<str> = vec_new()
+    vec_push(c, "id")
+    return c
+}
+
+fn pord_sort_desc() -> Vec<i64> {
+    let d: Vec<i64> = vec_new()
+    vec_push(d, 1)
+    return d
 }
 
 fn recipe_to_json(q: OrmQuery, row: i64) -> JObj {
@@ -92,90 +145,46 @@ fn pline_to_json(q: OrmQuery, row: i64) -> JObj {
     return o
 }
 
-fn mfg_find(db: OrmDb, sql0: str, id: i64) -> OrmQuery !IO !Net {
-    let sql = concat(sql0, " WHERE id = $1")
-    let vals = vec_new()
-    let nulls = vec_new()
-    pg_param_i64(vals, nulls, id)
-    return orm_query_params(db, sql, vals, nulls)?
+fn recipe_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
+    return kv_select_by_id(db, recipe_table(), id, recipe_cols())?
 }
 
-fn mfg_by_company(db: OrmDb, sql0: str, company_id: i64, order: str) -> OrmQuery !IO !Net {
-    let sql = concat(concat(sql0, " WHERE company_id = $1 "), order)
-    let vals = vec_new()
-    let nulls = vec_new()
-    pg_param_i64(vals, nulls, company_id)
-    return orm_query_params(db, sql, vals, nulls)?
+fn pord_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
+    return kv_select_by_id(db, pord_table(), id, pord_cols())?
 }
 
-fn mfg_by_parent(db: OrmDb, sql0: str, col: str, pid: i64) -> OrmQuery !IO !Net {
-    let sql = concat(concat(sql0, concat(" WHERE ", col)), " = $1 ORDER BY id")
-    let vals = vec_new()
-    let nulls = vec_new()
-    pg_param_i64(vals, nulls, pid)
-    return orm_query_params(db, sql, vals, nulls)?
-}
-
-fn recipe_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net { return mfg_find(db, recipe_select_sql(), id)? }
-fn pord_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net { return mfg_find(db, pord_select_sql(), id)? }
+// Рецептите на фирмата: WHERE company_id = ? ORDER BY name, id — двете са
+// възходящи, затова kv_where_order2 (името е текстов ключ, id се подравнява).
 fn recipe_by_company(db: OrmDb, company_id: i64) -> OrmQuery !IO !Net {
-    return mfg_by_company(db, recipe_select_sql(), company_id, "ORDER BY name, id")?
+    return kv_where_order2(db, recipe_table(), "company_id", int_to_str(company_id), "name", "id", recipe_cols())?
 }
+
 fn pord_by_company(db: OrmDb, company_id: i64) -> OrmQuery !IO !Net {
-    return mfg_by_company(db, pord_select_sql(), company_id, "ORDER BY id DESC")?
+    return kv_where_dir(db, pord_table(), "company_id", int_to_str(company_id), pord_cols(), pord_sort_cols(), pord_sort_desc())?
 }
+
+// Децата се четат по вторичния индекс на бащата (GET, не скан), поредбата е по id.
 fn rline_by_recipe(db: OrmDb, recipe_id: i64) -> OrmQuery !IO !Net {
-    return mfg_by_parent(db, rline_select_sql(), "recipe_id", recipe_id)?
+    return kv_where_order(db, rline_table(), "recipe_id", int_to_str(recipe_id), "id", rline_cols())?
 }
+
 fn pline_by_order(db: OrmDb, order_id: i64) -> OrmQuery !IO !Net {
-    return mfg_by_parent(db, pline_select_sql(), "order_id", order_id)?
+    return kv_where_order(db, pline_table(), "order_id", int_to_str(order_id), "id", pline_cols())?
 }
 
+// Следващ PK / номер на поръчка: броячът се ЧЕТЕ (не INCR), за да не дупчи
+// номерацията при всяка справка.
 fn mfg_next(db: OrmDb, table: str) -> OrmCount !IO !Net {
-    return orm_count_sql(db, concat("SELECT MAX(id) AS count FROM ", table))?
+    return kv_count_sql(db, concat("SELECT MAX(id) AS count FROM ", table))?
 }
 
+// Вмъква и връща реда с готовото id (каквото даваше RETURNING *).
 fn mfg_insert(db: OrmDb, table: str, cols: Vec<str>, vals: Vec<str>) -> OrmQuery !IO !Net {
-    let nulls = vec_new()
-    let mut i: i64 = 0
-    let n = vec_len(cols)
-    if mfg_backend_boila()? == 1 {
-        let c = mfg_next(db, table)?
-        if orm_ok_c(c) == 0 {
-            return OrmQErr(OrmQueryFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
-        }
-        let nid = orm_count_n(c) + 1
-        let mut d = orm_db_c(c)
-        let allc = vec_new()
-        vec_push(allc, "id")
-        i = 0
-        while i < n {
-            vec_push(allc, vec_get(cols, i))
-            i = i + 1
-        }
-        let allv = vec_new()
-        vec_push(allv, int_to_str(nid))
-        i = 0
-        while i < n {
-            vec_push(allv, vec_get(vals, i))
-            i = i + 1
-        }
-        i = 0
-        while i < n + 1 {
-            vec_push(nulls, 0)
-            i = i + 1
-        }
-        return orm_insert_returning_full(d, table, allc, allv, nulls)?
-    }
-    i = 0
-    while i < n {
-        vec_push(nulls, 0)
-        i = i + 1
-    }
-    return orm_insert_returning_full(db, table, cols, vals, nulls)?
+    return orm_insert_returning_strs(db, table, cols, vals)?
 }
 
-fn recipe_create(db: OrmDb, company_id: i64, code: str, name: str, output_product_id: i64, output_quantity: str, output_unit: str, notes: str) -> OrmQuery !IO !Net {
+// created_at: KV няма DEFAULT NOW(), щампата се слага в модела.
+fn recipe_create(db: OrmDb, company_id: i64, code: str, name: str, output_product_id: i64, output_quantity: str, output_unit: str, notes: str) -> OrmQuery !IO !Net !Time {
     let cols = vec_new()
     vec_push(cols, "company_id")
     vec_push(cols, "code")
@@ -185,6 +194,7 @@ fn recipe_create(db: OrmDb, company_id: i64, code: str, name: str, output_produc
     vec_push(cols, "output_unit")
     vec_push(cols, "notes")
     vec_push(cols, "is_active")
+    vec_push(cols, "created_at")
     let vals = vec_new()
     vec_push(vals, int_to_str(company_id))
     vec_push(vals, code)
@@ -194,6 +204,7 @@ fn recipe_create(db: OrmDb, company_id: i64, code: str, name: str, output_produc
     vec_push(vals, output_unit)
     vec_push(vals, notes)
     vec_push(vals, "1")
+    vec_push(vals, kv_now_iso()?)
     return mfg_insert(db, recipe_table(), cols, vals)?
 }
 
@@ -215,7 +226,7 @@ fn rline_create(db: OrmDb, recipe_id: i64, product_id: i64, quantity: str, unit:
     return mfg_insert(db, rline_table(), cols, vals)?
 }
 
-fn pord_create(db: OrmDb, company_id: i64, number: str, recipe_id: i64, output_product_id: i64, quantity: str, location_id: i64, order_date: str, notes: str) -> OrmQuery !IO !Net {
+fn pord_create(db: OrmDb, company_id: i64, number: str, recipe_id: i64, output_product_id: i64, quantity: str, location_id: i64, order_date: str, notes: str) -> OrmQuery !IO !Net !Time {
     let cols = vec_new()
     vec_push(cols, "company_id")
     vec_push(cols, "number")
@@ -228,6 +239,7 @@ fn pord_create(db: OrmDb, company_id: i64, number: str, recipe_id: i64, output_p
     vec_push(cols, "notes")
     vec_push(cols, "material_cost")
     vec_push(cols, "journal_entry_id")
+    vec_push(cols, "created_at")
     let vals = vec_new()
     vec_push(vals, int_to_str(company_id))
     vec_push(vals, number)
@@ -240,6 +252,7 @@ fn pord_create(db: OrmDb, company_id: i64, number: str, recipe_id: i64, output_p
     vec_push(vals, notes)
     vec_push(vals, "0")
     vec_push(vals, "0")
+    vec_push(vals, kv_now_iso()?)
     return mfg_insert(db, pord_table(), cols, vals)?
 }
 
@@ -263,20 +276,13 @@ fn pline_create(db: OrmDb, order_id: i64, product_id: i64, product_name: str, qu
     return mfg_insert(db, pline_table(), cols, vals)?
 }
 
+// KV изтрива по PK, затова редовете минават през индекса на бащата.
 fn rline_delete_by_recipe(db: OrmDb, recipe_id: i64) -> OrmExec !IO !Net {
-    let sql = "DELETE FROM recipe_lines WHERE recipe_id = $1"
-    let vals = vec_new()
-    let nulls = vec_new()
-    pg_param_i64(vals, nulls, recipe_id)
-    return orm_exec_params(db, sql, vals, nulls)?
+    return kv_delete_where(db, rline_table(), "recipe_id", int_to_str(recipe_id))?
 }
 
 fn pline_delete_by_order(db: OrmDb, order_id: i64) -> OrmExec !IO !Net {
-    let sql = "DELETE FROM production_order_lines WHERE order_id = $1"
-    let vals = vec_new()
-    let nulls = vec_new()
-    pg_param_i64(vals, nulls, order_id)
-    return orm_exec_params(db, sql, vals, nulls)?
+    return kv_delete_where(db, pline_table(), "order_id", int_to_str(order_id))?
 }
 
 fn recipe_delete(db: OrmDb, id: i64) -> OrmExec !IO !Net {

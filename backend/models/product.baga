@@ -5,20 +5,10 @@
 import "ormbaga/orm.baga"
 import "kvtime.baga"
 import "fmrbaga/jsonx.baga"
-import "pgbaga/pg.baga"
 import "std/str/str.baga"
-import "std/os/os.baga"
 
 fn product_table() -> str {
     return "products"
-}
-
-fn product_backend_boila() -> i64 !IO {
-    let be = env("ORM_BACKEND")?
-    if be == "boila" || be == "boiladb" || be == "boilaDB" {
-        return 1
-    }
-    return 0
 }
 
 // Следващ PK: таблицата е създадена преди P20 (без BIGSERIAL). NULL max → 0.

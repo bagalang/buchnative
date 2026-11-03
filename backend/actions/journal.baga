@@ -66,7 +66,7 @@ fn act_journal_show(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
 }
 
 // Ръчен счетоводен запис. Трите таба (покупки/продажби/без ДДС) са vat_type.
-fn act_journal_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_journal_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let auth = act_require_perm(ctx, db, "accounting:write")?
     if auth.ok == 0 {
         return auth.out

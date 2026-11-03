@@ -5,13 +5,23 @@ import "company_related.baga"
 import "ormbaga/orm.baga"
 import "fmrbaga/jsonx.baga"
 import "std/str/str.baga"
+import "kvtime.baga"
 
 fn dser_table() -> str {
     return "document_series"
 }
 
-fn dser_select_sql() -> str {
-    return "SELECT id, company_id, name, document_types, pad_width, start_number, is_active, created_at FROM document_series"
+fn dser_cols() -> Vec<str> {
+    let c: Vec<str> = vec_new()
+    vec_push(c, "id")
+    vec_push(c, "company_id")
+    vec_push(c, "name")
+    vec_push(c, "document_types")
+    vec_push(c, "pad_width")
+    vec_push(c, "start_number")
+    vec_push(c, "is_active")
+    vec_push(c, "created_at")
+    return c
 }
 
 fn csv_has(csv: str, needle: str) -> i64 {
@@ -128,14 +138,14 @@ fn dser_active_list(q: OrmQuery, invq: OrmQuery) -> JArr {
 }
 
 fn dser_by_company(db: OrmDb, company_id: i64) -> OrmQuery !IO !Net {
-    return rel_by_company(db, dser_select_sql(), company_id)?
+    return rel_by_company(db, dser_table(), dser_cols(), company_id)?
 }
 
 fn dser_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
-    return rel_find(db, dser_select_sql(), id)?
+    return rel_find(db, dser_table(), dser_cols(), id)?
 }
 
-fn dser_create(db: OrmDb, company_id: i64, name: str, document_types: str, pad_width: i64, start_number: i64) -> OrmExec !IO !Net {
+fn dser_create(db: OrmDb, company_id: i64, name: str, document_types: str, pad_width: i64, start_number: i64) -> OrmExec !IO !Net !Time {
     let cols = vec_new()
     vec_push(cols, "company_id")
     vec_push(cols, "name")
@@ -143,6 +153,7 @@ fn dser_create(db: OrmDb, company_id: i64, name: str, document_types: str, pad_w
     vec_push(cols, "pad_width")
     vec_push(cols, "start_number")
     vec_push(cols, "is_active")
+    vec_push(cols, "created_at")
     let vals = vec_new()
     vec_push(vals, int_to_str(company_id))
     vec_push(vals, name)
@@ -150,6 +161,7 @@ fn dser_create(db: OrmDb, company_id: i64, name: str, document_types: str, pad_w
     vec_push(vals, int_to_str(pad_width))
     vec_push(vals, int_to_str(start_number))
     vec_push(vals, "1")
+    vec_push(vals, kv_now_iso()?)
     return rel_insert(db, dser_table(), cols, vals)?
 }
 

@@ -12,14 +12,6 @@ fn company_table() -> str {
     return "companies"
 }
 
-fn company_backend_boila() -> i64 !IO {
-    let be = env("ORM_BACKEND")?
-    if be == "boila" || be == "boiladb" || be == "boilaDB" {
-        return 1
-    }
-    return 0
-}
-
 // Следващ PK: броячът на таблицата (RESP INCR), четене тук.
 fn company_next_id(db: OrmDb) -> OrmCount !IO !Net {
     return kv_count_sql(db, "SELECT MAX(id) AS count FROM companies")?

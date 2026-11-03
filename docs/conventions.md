@@ -35,9 +35,15 @@ table API (`orm_insert_returning_full`, `orm_update_by_id`,
 | `X_select_sql()` (SELECT списък) | `X_cols()` — ред от `vec_push` |
 | `orm_query_params(db, sql WHERE id=$1, …)` | `kv_select_by_id(db, табл, id, cols)` |
 | `orm_query_params(db, sql WHERE col=$1, …)` | `kv_where_star(db, табл, col, val)` или `kv_select_where` |
+| `… WHERE a=$1 AND b=$2` | `kv_select_where2` / `kv_where2_dir` |
 | `orm_query(db, sql ORDER BY x)` | `kv_select_all_order(db, табл, x, cols)` |
+| `ORDER BY a DESC, b` | `kv_select_all_dir(db, табл, cols, sort_cols, dirs)` |
+| `DELETE FROM child WHERE fk=$1` | `kv_delete_where(db, табл, fk, val, cols)` |
+| `LEFT JOIN` в списъка | `kv_attach` + `kv_map_of` (виж `journal_lines_by_entry`) |
+| `SELECT SUM(col)` | събери наред с `bagadecimal` (виж `invoice_recalc_totals`) |
+| `MAX(col)` / `ORDER BY col DESC LIMIT 1` | `kv_max_value(db, табл, col)` |
 | `orm_insert_returning_full(…)` | `kv_insert(…)` (id се раздава от брояча) |
-| `account_to_json(q, row)` | **непроменено** |
+| `X_to_json(q, row)` | **непроменено** |
 
 Вторичният индекс се поддържа за всяка колона, значи `WHERE col = val` е GET,
 не скан. `created_at` се щампова в модела (`kvtime.baga`) — в KV няма
@@ -49,10 +55,16 @@ table API (`orm_insert_returning_full`, `orm_update_by_id`,
 поведение подменяше живата връзка на работника и целият му worker после даваше
 503. Ако модел още не е мигриран, виждаш точно кой SQL липсва.
 
-**Транзакции няма.** `bb_begin` / `bb_commit` / `act_err_rb` са SQL-семантика;
-върху KV те са no-op или грешка. Проводка на фактура се прави с един `MSET`
-(ред + индекси + салда са атомарни спрямо читателите); ако трябва повече —
-виж `ormbaga/session/kv_write.baga`, не въвеждай имитация на SQL транзакция.
+**Транзакцията е буфер, не BEGIN по wire-а.** `bb_begin` / `bb_commit` /
+`act_err_rb` работят и върху drock: `orm_begin` трупа записите в `OrmDb.tx`
+(`ormbaga/session/kv_tx.baga`), четенето минава през същия буфер, та че action-ът
+вижда собствените си редове преди COMMIT, `orm_commit` ги изсипва с `MSET`/`DEL`,
+а `orm_rollback` ги изхвърля. `Map` в baga е референтен, затова копиранията на
+`OrmDb` (`orm_db_q`, `orm_db_exec`) споделят едно състояние.
+Ограничението е честното: rocksbaga няма MULTI/EXEC, всяка команда се прилага
+отделно, така че **процес, умрял по средата на COMMIT, може да остави частично
+записан буфер**. Не разширявай this с имитации — ако атомарност е задължителна,
+тя трябва да дойде от rocksbaga (write batch), не от слоя.
 
 ## Числа
 

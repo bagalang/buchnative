@@ -26,7 +26,7 @@ fn fa_get_asset(db: OrmDb, id: i64, out: Vec<OrmQuery>) -> FmrOut !IO !Net {
 }
 
 // Преоценка: нова стойност; предишната отива в историята.
-fn act_fa_revalue(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_fa_revalue(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let auth = act_require_auth(ctx, db)
     if auth.ok == 0 {
         return auth.out
@@ -79,7 +79,7 @@ fn act_fa_revalue(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
 }
 
 // Преместване между обекти (запис в историята).
-fn act_fa_move(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_fa_move(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let auth = act_require_auth(ctx, db)
     if auth.ok == 0 {
         return auth.out
@@ -137,7 +137,7 @@ fn act_fa_move(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
 }
 
 // Консервация (спира амортизацията).
-fn act_fa_conserve(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_fa_conserve(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let auth = act_require_auth(ctx, db)
     if auth.ok == 0 {
         return auth.out
@@ -184,7 +184,7 @@ fn act_fa_conserve(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
 }
 
 // Край на консервацията (възобновява амортизацията).
-fn act_fa_end_conserve(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_fa_end_conserve(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let auth = act_require_auth(ctx, db)
     if auth.ok == 0 {
         return auth.out
@@ -230,7 +230,7 @@ fn act_fa_end_conserve(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
 }
 
 // Снемане: продажба/бракуване — статус + история.
-fn act_fa_dispose(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_fa_dispose(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let auth = act_require_auth(ctx, db)
     if auth.ok == 0 {
         return auth.out

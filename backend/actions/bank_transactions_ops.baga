@@ -23,7 +23,7 @@ fn bank_tx_opt_i64(d: JsonDoc, root: i64, key: str) -> JField {
 
 // Ръчно осчетоводяване. Предпочитан payload: {contra_account_id, counterpart_id?}.
 // Старият {debit_account_id, credit_account_id} остава.
-fn act_bank_transactions_book(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_bank_transactions_book(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let auth = act_require_auth(ctx, db)
     if auth.ok == 0 {
         return auth.out

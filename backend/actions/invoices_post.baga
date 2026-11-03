@@ -73,7 +73,7 @@ fn company_valuation_method(db: OrmDb) -> InvResult !IO !Net {
     return InvResult { ok: 1, err: "", db: orm_db_q(cq), cost: method }
 }
 
-fn act_invoices_post(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_invoices_post(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let auth = act_require_perm(ctx, db, "accounting:post")?
     if auth.ok == 0 {
         return auth.out
@@ -87,7 +87,7 @@ fn act_invoices_post(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
 
 // Ядрото на осчетоводяването по id. Ползва се и от груповото пост.
 // user_sub се подава, за да се намери активната фирма (собственик на записа).
-fn invoice_post_one(db: OrmDb, id: i64, user_sub: str) -> FmrOut !IO !Net {
+fn invoice_post_one(db: OrmDb, id: i64, user_sub: str) -> FmrOut !IO !Net !Time {
     if orm_ok_db(db) == 0 {
         return act_err(db, 503, "database unavailable")
     }

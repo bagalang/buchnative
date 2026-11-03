@@ -162,7 +162,7 @@ fn act_pnmap_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     return act_ok(orm_db_q(q), pnmap_list_json(q))
 }
 
-fn act_pnmap_save(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_pnmap_save(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let auth = act_require_auth(ctx, db)
     if auth.ok == 0 {
         return auth.out

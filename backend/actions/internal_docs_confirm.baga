@@ -30,7 +30,7 @@ fn idoc_loc_name(db: OrmDb, id: i64) -> str !IO !Net {
     return orm_cell_by(q, 0, "name")
 }
 
-fn act_idoc_confirm(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_idoc_confirm(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let auth = act_require_auth(ctx, db)
     if auth.ok == 0 {
         return auth.out

@@ -1,12 +1,14 @@
-// models/journal.baga — journal_entries + journal_lines helpers over ormbaga.
-// Table DDL живее в schema.baga на buchnative. direction е 'debit'/'credit'.
+// models/journal.baga — journal_entries + journal_lines върху KV (rocksbaga).
+//
+// Сигнатурите съвпадат със SQL версията, затова actions/*.baga не се пипат:
+// kv_select_* попълва същия OrmQuery, който същите accessor-и четат. KV няма
+// JOIN, така че двете свързвания (редовете по запис и редовете за САФТ) се
+// сглобяват в паметта с map по готов списък ключове.
 
 import "ormbaga/orm.baga"
-import "ormbaga/sql.baga"
 import "fmrbaga/jsonx.baga"
-import "pgbaga/pg.baga"
+import "kvtime.baga"
 import "std/str/str.baga"
-import "std/os/os.baga"
 
 fn journal_entry_table() -> str {
     return "journal_entries"
@@ -16,20 +18,47 @@ fn journal_line_table() -> str {
     return "journal_lines"
 }
 
-fn journal_backend_boila() -> i64 !IO {
-    let be = env("ORM_BACKEND")?
-    if be == "boila" || be == "boiladb" || be == "boilaDB" {
-        return 1
-    }
-    return 0
+fn journal_entry_cols() -> Vec<str> {
+    let c: Vec<str> = vec_new()
+    vec_push(c, "id")
+    vec_push(c, "entry_date")
+    vec_push(c, "document_type")
+    vec_push(c, "document_id")
+    vec_push(c, "description")
+    vec_push(c, "vat_type")
+    vec_push(c, "counterpart_id")
+    vec_push(c, "counterpart_name")
+    vec_push(c, "counterpart_vat_number")
+    vec_push(c, "document_number")
+    vec_push(c, "document_date")
+    vec_push(c, "vat_period")
+    vec_push(c, "total_amount")
+    vec_push(c, "total_vat_amount")
+    vec_push(c, "company_id")
+    vec_push(c, "created_at")
+    return c
+}
+
+fn journal_line_cols() -> Vec<str> {
+    let c: Vec<str> = vec_new()
+    vec_push(c, "id")
+    vec_push(c, "entry_id")
+    vec_push(c, "account_id")
+    vec_push(c, "direction")
+    vec_push(c, "amount")
+    vec_push(c, "vat_amount")
+    vec_push(c, "counterpart_id")
+    vec_push(c, "product_id")
+    vec_push(c, "location_id")
+    return c
 }
 
 fn journal_next_id(db: OrmDb) -> OrmCount !IO !Net {
-    return orm_count_sql(db, "SELECT MAX(id) AS count FROM journal_entries")?
+    return kv_count_sql(db, "SELECT MAX(id) AS count FROM journal_entries")?
 }
 
 fn journal_line_next_id(db: OrmDb) -> OrmCount !IO !Net {
-    return orm_count_sql(db, "SELECT MAX(id) AS count FROM journal_lines")?
+    return kv_count_sql(db, "SELECT MAX(id) AS count FROM journal_lines")?
 }
 
 fn journal_entry_to_json(q: OrmQuery, row: i64) -> JObj {
@@ -94,92 +123,76 @@ fn journal_line_to_json(q: OrmQuery, row: i64) -> JObj {
     return o
 }
 
-fn journal_select_sql() -> str {
-    return "SELECT id, entry_date, document_type, document_id, description, vat_type, counterpart_id, counterpart_name, counterpart_vat_number, document_number, document_date, vat_period, total_amount, total_vat_amount, company_id, created_at FROM journal_entries"
-}
-
 fn journal_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
-    let sql = concat(journal_select_sql(), " WHERE id = $1")
-    let vals = vec_new()
-    let nulls = vec_new()
-    pg_param_i64(vals, nulls, id)
-    return orm_query_params(db, sql, vals, nulls)?
+    return kv_select_by_id(db, journal_entry_table(), id, journal_entry_cols())?
 }
 
 fn journal_all(db: OrmDb) -> OrmQuery !IO !Net {
-    return orm_query(db, concat(journal_select_sql(), " ORDER BY id"))?
+    return kv_select_all_order(db, journal_entry_table(), "id", journal_entry_cols())?
 }
 
 fn journal_all_dated(db: OrmDb) -> OrmQuery !IO !Net {
-    return orm_query(db, concat(journal_select_sql(), " ORDER BY entry_date, id"))?
+    return kv_select_all_order2(db, journal_entry_table(), "entry_date", "id", journal_entry_cols())?
 }
 
 fn journal_lines_all(db: OrmDb) -> OrmQuery !IO !Net {
-    return orm_query(db, "SELECT id, entry_id, account_id, direction, amount, vat_amount, counterpart_id, product_id, location_id FROM journal_lines ORDER BY id")?
+    return kv_select_all_order(db, journal_line_table(), "id", journal_line_cols())?
 }
 
-fn journal_lines_for_saft(db: OrmDb) -> OrmQuery !IO !Net {
-    return orm_query(db, "SELECT account_id, direction, amount, entry_date, company_id, counterpart_id FROM journal_lines LEFT JOIN journal_entries ON entry_id = id")?
-}
-
+// journal_lines + сметката на всеки ред (number, name) — заменя LEFT JOIN accounts.
 fn journal_lines_by_entry(db: OrmDb, entry_id: i64) -> OrmQuery !IO !Net {
-    let sql = "SELECT id, entry_id, account_id, direction, amount, vat_amount, counterpart_id, product_id, location_id, number, name FROM journal_lines LEFT JOIN accounts ON account_id = id WHERE entry_id = $1 ORDER BY id"
-    let vals = vec_new()
-    let nulls = vec_new()
-    pg_param_i64(vals, nulls, entry_id)
-    return orm_query_params(db, sql, vals, nulls)?
+    let lq = kv_where_order(db, journal_line_table(), "entry_id", int_to_str(entry_id), "id", journal_line_cols())?
+    if orm_ok_q(lq) == 0 {
+        return lq
+    }
+    let acols: Vec<str> = vec_new()
+    vec_push(acols, "id")
+    vec_push(acols, "number")
+    vec_push(acols, "name")
+    let ac = kv_select_all(orm_db_q(lq), "accounts", acols)?
+    if orm_ok_q(ac) == 0 {
+        return lq
+    }
+    let keys = kv_col_values(lq, "account_id")
+    let with_num = kv_attach(lq, journal_line_cols(), keys, kv_map_of(ac, "id", "number"), "number")
+    let cols2 = kv_cols_plus(journal_line_cols(), "number")
+    return kv_attach(with_num, cols2, keys, kv_map_of(ac, "id", "name"), "name")
 }
 
-// Вмъхва journal_entry и връща реда през RETURNING (id вътре).
-fn journal_entry_insert(db: OrmDb, entry_date: str, document_type: str, document_id: i64, description: str, vat_type: str, counterpart_id: i64, counterpart_name: str, counterpart_vat_number: str, document_number: str, document_date: str, vat_period: str, total_amount: str, total_vat_amount: str, company_id: i64) -> OrmQuery !IO !Net {
-    if journal_backend_boila()? == 1 {
-        let c = journal_next_id(db)?
-        if orm_ok_c(c) == 0 {
-            return OrmQErr(OrmQueryFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
-        }
-        let nid = orm_count_n(c) + 1
-        let mut d = orm_db_c(c)
-        let cols = vec_new()
-        vec_push(cols, "id")
-        vec_push(cols, "entry_date")
-        vec_push(cols, "document_type")
-        vec_push(cols, "document_id")
-        vec_push(cols, "description")
-        vec_push(cols, "vat_type")
-        vec_push(cols, "counterpart_id")
-        vec_push(cols, "counterpart_name")
-        vec_push(cols, "counterpart_vat_number")
-        vec_push(cols, "document_number")
-        vec_push(cols, "document_date")
-        vec_push(cols, "vat_period")
-        vec_push(cols, "total_amount")
-        vec_push(cols, "total_vat_amount")
-        vec_push(cols, "company_id")
-        let vals = vec_new()
-        vec_push(vals, int_to_str(nid))
-        vec_push(vals, entry_date)
-        vec_push(vals, document_type)
-        vec_push(vals, int_to_str(document_id))
-        vec_push(vals, description)
-        vec_push(vals, vat_type)
-        vec_push(vals, int_to_str(counterpart_id))
-        vec_push(vals, counterpart_name)
-        vec_push(vals, counterpart_vat_number)
-        vec_push(vals, document_number)
-        vec_push(vals, document_date)
-        vec_push(vals, vat_period)
-        vec_push(vals, total_amount)
-        vec_push(vals, total_vat_amount)
-        vec_push(vals, int_to_str(company_id))
-        let nulls = vec_new()
-        let mut i: i64 = 0
-        while i < 15 {
-            vec_push(nulls, 0)
-            i = i + 1
-        }
-        return orm_insert_returning_full(d, journal_entry_table(), cols, vals, nulls)?
+// journal_lines + датата и фирмата от заглавния ред — заменя LEFT JOIN journal_entries.
+fn journal_lines_for_saft(db: OrmDb) -> OrmQuery !IO !Net {
+    let base: Vec<str> = vec_new()
+    vec_push(base, "account_id")
+    vec_push(base, "direction")
+    vec_push(base, "amount")
+    vec_push(base, "counterpart_id")
+    vec_push(base, "entry_id")
+    let lq = kv_select_all_order(db, journal_line_table(), "id", base)?
+    if orm_ok_q(lq) == 0 {
+        return lq
     }
-    let cols = vec_new()
+    let ecols: Vec<str> = vec_new()
+    vec_push(ecols, "id")
+    vec_push(ecols, "entry_date")
+    vec_push(ecols, "company_id")
+    let eq = kv_select_all(orm_db_q(lq), journal_entry_table(), ecols)?
+    if orm_ok_q(eq) == 0 {
+        return lq
+    }
+    let show: Vec<str> = vec_new()
+    vec_push(show, "account_id")
+    vec_push(show, "direction")
+    vec_push(show, "amount")
+    vec_push(show, "counterpart_id")
+    let keys = kv_col_values(lq, "entry_id")
+    let with_date = kv_attach(lq, show, keys, kv_map_of(eq, "id", "entry_date"), "entry_date")
+    let cols2 = kv_cols_plus(show, "entry_date")
+    return kv_attach(with_date, cols2, keys, kv_map_of(eq, "id", "company_id"), "company_id")
+}
+
+// Вмъхва journal_entry и връща реда (id-то идва от брояча на таблицата).
+fn journal_entry_insert(db: OrmDb, entry_date: str, document_type: str, document_id: i64, description: str, vat_type: str, counterpart_id: i64, counterpart_name: str, counterpart_vat_number: str, document_number: str, document_date: str, vat_period: str, total_amount: str, total_vat_amount: str, company_id: i64) -> OrmQuery !IO !Net !Time {
+    let cols: Vec<str> = vec_new()
     vec_push(cols, "entry_date")
     vec_push(cols, "document_type")
     vec_push(cols, "document_id")
@@ -194,7 +207,8 @@ fn journal_entry_insert(db: OrmDb, entry_date: str, document_type: str, document
     vec_push(cols, "total_amount")
     vec_push(cols, "total_vat_amount")
     vec_push(cols, "company_id")
-    let vals = vec_new()
+    vec_push(cols, "created_at")
+    let vals: Vec<str> = vec_new()
     vec_push(vals, entry_date)
     vec_push(vals, document_type)
     vec_push(vals, int_to_str(document_id))
@@ -209,47 +223,19 @@ fn journal_entry_insert(db: OrmDb, entry_date: str, document_type: str, document
     vec_push(vals, total_amount)
     vec_push(vals, total_vat_amount)
     vec_push(vals, int_to_str(company_id))
-    let nulls = vec_new()
+    vec_push(vals, kv_now_iso()?)
+    let nulls: Vec<i64> = vec_new()
     let mut i: i64 = 0
-    while i < 14 {
+    while i < 15 {
         vec_push(nulls, 0)
         i = i + 1
     }
-    return orm_insert_returning_full(db, journal_entry_table(), cols, vals, nulls)?
+    return kv_insert(db, journal_entry_table(), cols, vals, nulls)?
 }
 
 // Вмъква journal_line; counterpart_id/product_id са с нищо (0 → без стойност).
 fn journal_line_insert(db: OrmDb, entry_id: i64, account_id: i64, direction: str, amount: str, vat_amount: str, counterpart_id: i64, product_id: i64, location_id: i64) -> OrmExec !IO !Net {
-    if journal_backend_boila()? == 1 {
-        let c = journal_line_next_id(db)?
-        if orm_ok_c(c) == 0 {
-            return OrmEErr(OrmExecFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
-        }
-        let nid = orm_count_n(c) + 1
-        let mut d = orm_db_c(c)
-        let cols = vec_new()
-        vec_push(cols, "id")
-        vec_push(cols, "entry_id")
-        vec_push(cols, "account_id")
-        vec_push(cols, "direction")
-        vec_push(cols, "amount")
-        vec_push(cols, "vat_amount")
-        vec_push(cols, "counterpart_id")
-        vec_push(cols, "product_id")
-        vec_push(cols, "location_id")
-        let vals = vec_new()
-        vec_push(vals, int_to_str(nid))
-        vec_push(vals, int_to_str(entry_id))
-        vec_push(vals, int_to_str(account_id))
-        vec_push(vals, direction)
-        vec_push(vals, amount)
-        vec_push(vals, vat_amount)
-        vec_push(vals, int_to_str(counterpart_id))
-        vec_push(vals, int_to_str(product_id))
-        vec_push(vals, int_to_str(location_id))
-        return orm_insert_strs(d, journal_line_table(), cols, vals)?
-    }
-    let cols = vec_new()
+    let cols: Vec<str> = vec_new()
     vec_push(cols, "entry_id")
     vec_push(cols, "account_id")
     vec_push(cols, "direction")
@@ -258,7 +244,7 @@ fn journal_line_insert(db: OrmDb, entry_id: i64, account_id: i64, direction: str
     vec_push(cols, "counterpart_id")
     vec_push(cols, "product_id")
     vec_push(cols, "location_id")
-    let vals = vec_new()
+    let vals: Vec<str> = vec_new()
     vec_push(vals, int_to_str(entry_id))
     vec_push(vals, int_to_str(account_id))
     vec_push(vals, direction)
@@ -267,18 +253,19 @@ fn journal_line_insert(db: OrmDb, entry_id: i64, account_id: i64, direction: str
     vec_push(vals, int_to_str(counterpart_id))
     vec_push(vals, int_to_str(product_id))
     vec_push(vals, int_to_str(location_id))
-    return orm_insert_strs(db, journal_line_table(), cols, vals)?
+    let nulls: Vec<i64> = vec_new()
+    let mut i: i64 = 0
+    while i < 8 {
+        vec_push(nulls, 0)
+        i = i + 1
+    }
+    return kv_insert_exec(db, journal_line_table(), cols, vals, nulls)?
 }
 
 // Записи по ДДС период (за дневниците покупки/продажби); филтърът по
-// ДДС_тип е в приложението — boila не поддържа две '=' условия в WHERE.
+// ДДС_тип е в приложението — KVWhere гледа само една колона.
 fn journal_by_period(db: OrmDb, period: str) -> OrmQuery !IO !Net {
-    let sql = concat(journal_select_sql(), " WHERE vat_period = $1 ORDER BY entry_date, id")
-    let vals = vec_new()
-    vec_push(vals, period)
-    let nulls = vec_new()
-    vec_push(nulls, 0)
-    return orm_query_params(db, sql, vals, nulls)?
+    return kv_where_order2(db, journal_entry_table(), "vat_period", period, "entry_date", "id", journal_entry_cols())?
 }
 
 fn journal_row_in_company(q: OrmQuery, row: i64, cid: i64) -> i64 {
@@ -323,12 +310,9 @@ fn journal_lines_list_json(q: OrmQuery) -> JArr {
     return arr
 }
 
+// KV изтрива по PK, затова редовете на записа минават през индекса на entry_id.
 fn journal_lines_delete_by_entry(db: OrmDb, entry_id: i64) -> OrmExec !IO !Net {
-    let sql = "DELETE FROM journal_lines WHERE entry_id = $1"
-    let vals = vec_new()
-    let nulls = vec_new()
-    pg_param_i64(vals, nulls, entry_id)
-    return orm_exec_params(db, sql, vals, nulls)?
+    return kv_delete_where(db, journal_line_table(), "entry_id", int_to_str(entry_id))?
 }
 
 // journal_delete: пълно изтриване на запис — редове + заглавен ред.
@@ -339,11 +323,11 @@ fn journal_delete_entry(db: OrmDb, id: i64) -> OrmExec !IO !Net {
     if orm_ok(dl) == 0 {
         return dl
     }
-    return orm_delete_by_id(orm_db_exec(dl), journal_entry_table(), id)?
+    return kv_delete_by_id(orm_db_exec(dl), journal_entry_table(), id)?
 }
 
 fn journal_entry_update(db: OrmDb, id: i64, entry_date: str, description: str, vat_type: str, counterpart_id: i64, counterpart_name: str, counterpart_vat_number: str, document_number: str, document_date: str, vat_period: str, total_amount: str, total_vat_amount: str) -> OrmExec !IO !Net {
-    let cols = vec_new()
+    let cols: Vec<str> = vec_new()
     vec_push(cols, "entry_date")
     vec_push(cols, "description")
     vec_push(cols, "vat_type")
@@ -355,7 +339,7 @@ fn journal_entry_update(db: OrmDb, id: i64, entry_date: str, description: str, v
     vec_push(cols, "vat_period")
     vec_push(cols, "total_amount")
     vec_push(cols, "total_vat_amount")
-    let vals = vec_new()
+    let vals: Vec<str> = vec_new()
     vec_push(vals, entry_date)
     vec_push(vals, description)
     vec_push(vals, vat_type)
@@ -367,5 +351,11 @@ fn journal_entry_update(db: OrmDb, id: i64, entry_date: str, description: str, v
     vec_push(vals, vat_period)
     vec_push(vals, total_amount)
     vec_push(vals, total_vat_amount)
-    return orm_update_by_id(db, journal_entry_table(), id, cols, vals)?
+    let nulls: Vec<i64> = vec_new()
+    let mut i: i64 = 0
+    while i < 11 {
+        vec_push(nulls, 0)
+        i = i + 1
+    }
+    return kv_update_by_id(db, journal_entry_table(), id, cols, vals, nulls)?
 }

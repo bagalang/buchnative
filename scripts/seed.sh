@@ -204,6 +204,7 @@ echo "    изходяща #$INV_OUT осчетоводена (Ана ООД, 10
 INV_IN=$(auth -X POST "$BASE/v1/invoices" -d "{
   \"direction\": \"in\",
   \"document_type\": \"01\",
+  \"number\": \"TM-2026-0818\",
   \"issue_date\": \"2026-08-18\",
   \"due_date\": \"2026-09-01\",
   \"tax_event_date\": \"2026-08-18\",

@@ -1,28 +1,23 @@
 // models/product_name_mapping.baga — име от сканиран документ → наш артикул.
 // UNIQUE (counterpart_id, scanned_name). Две '=' в WHERE не се ползват:
 // търсене по counterpart_id, съвпадението на името е в приложението.
+//
+// KV (rocksbaga): вторичният индекс дава редовете на контрагента с едно GET, а
+// уникалността я пази приложението (pnmap_find_name преди insert) — KV няма
+// UNIQUE. boilaDB клонката отпадна: id-то го раздава броячът на таблицата.
 
 import "ormbaga/orm.baga"
-import "ormbaga/sql.baga"
 import "fmrbaga/jsonx.baga"
-import "pgbaga/pg.baga"
+import "kvtime.baga"
 import "std/str/str.baga"
-import "std/os/os.baga"
 
 fn pnmap_table() -> str {
     return "product_name_mappings"
 }
 
-fn pnmap_backend_boila() -> i64 !IO {
-    let be = env("ORM_BACKEND")?
-    if be == "boila" || be == "boiladb" || be == "boilaDB" {
-        return 1
-    }
-    return 0
-}
-
+// Следващ PK: броячът на таблицата (INCR при insert), тук само се чете.
 fn pnmap_next_id(db: OrmDb) -> OrmCount !IO !Net {
-    return orm_count_sql(db, "SELECT MAX(id) AS count FROM product_name_mappings")?
+    return kv_count_sql(db, "SELECT MAX(id) AS count FROM product_name_mappings")?
 }
 
 fn scan_norm_name(s: str) -> str {
@@ -59,16 +54,19 @@ fn pnmap_to_json(q: OrmQuery, row: i64) -> JObj {
     return o
 }
 
-fn pnmap_select_sql() -> str {
-    return "SELECT id, counterpart_id, scanned_name, product_id, created_at FROM product_name_mappings"
+// Колоните на реда — заместват SELECT списъка, в същия ред като SQL-а.
+fn pnmap_cols() -> Vec<str> {
+    let c: Vec<str> = vec_new()
+    vec_push(c, "id")
+    vec_push(c, "counterpart_id")
+    vec_push(c, "scanned_name")
+    vec_push(c, "product_id")
+    vec_push(c, "created_at")
+    return c
 }
 
 fn pnmap_by_counterpart(db: OrmDb, counterpart_id: i64) -> OrmQuery !IO !Net {
-    let sql = concat(pnmap_select_sql(), " WHERE counterpart_id = $1")
-    let vals = vec_new()
-    let nulls = vec_new()
-    pg_param_i64(vals, nulls, counterpart_id)
-    return orm_query_params(db, sql, vals, nulls)?
+    return kv_select_where(db, pnmap_table(), "counterpart_id", int_to_str(counterpart_id), pnmap_cols())?
 }
 
 fn pnmap_find_name(q: OrmQuery, scanned_name: str) -> i64 {
@@ -83,35 +81,20 @@ fn pnmap_find_name(q: OrmQuery, scanned_name: str) -> i64 {
     return -1
 }
 
-fn pnmap_insert(db: OrmDb, counterpart_id: i64, scanned_name: str, product_id: i64) -> OrmExec !IO !Net {
+// Името се нормализира преди запис — така същото сканиране се познава и следващия път.
+// created_at: KV няма DEFAULT NOW(), щампата се слага в модела.
+fn pnmap_insert(db: OrmDb, counterpart_id: i64, scanned_name: str, product_id: i64) -> OrmExec !IO !Net !Time {
     let name = scan_norm_name(scanned_name)
-    if pnmap_backend_boila()? == 1 {
-        let c = pnmap_next_id(db)?
-        if orm_ok_c(c) == 0 {
-            return OrmEErr(OrmExecFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
-        }
-        let nid = orm_count_n(c) + 1
-        let mut d = orm_db_c(c)
-        let cols = vec_new()
-        vec_push(cols, "id")
-        vec_push(cols, "counterpart_id")
-        vec_push(cols, "scanned_name")
-        vec_push(cols, "product_id")
-        let vals = vec_new()
-        vec_push(vals, int_to_str(nid))
-        vec_push(vals, int_to_str(counterpart_id))
-        vec_push(vals, name)
-        vec_push(vals, int_to_str(product_id))
-        return orm_insert_strs(d, pnmap_table(), cols, vals)?
-    }
     let cols = vec_new()
     vec_push(cols, "counterpart_id")
     vec_push(cols, "scanned_name")
     vec_push(cols, "product_id")
+    vec_push(cols, "created_at")
     let vals = vec_new()
     vec_push(vals, int_to_str(counterpart_id))
     vec_push(vals, name)
     vec_push(vals, int_to_str(product_id))
+    vec_push(vals, kv_now_iso()?)
     return orm_insert_strs(db, pnmap_table(), cols, vals)?
 }
 

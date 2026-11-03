@@ -55,7 +55,7 @@ fn mfg_valuation(db: OrmDb) -> InvResult !IO !Net {
     return InvResult { ok: 1, err: "", db: orm_db_q(cq), cost: method }
 }
 
-fn act_pord_confirm(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_pord_confirm(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let auth = act_require_auth(ctx, db)
     if auth.ok == 0 {
         return auth.out

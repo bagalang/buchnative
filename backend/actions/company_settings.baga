@@ -64,7 +64,7 @@ fn act_company_settings_get(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     return act_ok(orm_db_q(nq), o)
 }
 
-fn act_cloc_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_cloc_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let auth = act_require_auth(ctx, db)
     if auth.ok == 0 {
         return auth.out
@@ -246,7 +246,7 @@ fn act_cloc_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     return act_no_content(orm_db_exec(del))
 }
 
-fn act_bown_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_bown_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let auth = act_require_auth(ctx, db)
     if auth.ok == 0 {
         return auth.out
@@ -404,7 +404,7 @@ fn act_bown_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     return act_no_content(orm_db_exec(del))
 }
 
-fn act_upar_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_upar_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let auth = act_require_auth(ctx, db)
     if auth.ok == 0 {
         return auth.out

@@ -69,6 +69,34 @@
   български Excel/Google се вижда запетая. Периодът на справката се
   сравнява с `xml_str_lt`, не с `<` върху низове.
 
+## База: rocksbaga (2026-11-03)
+
+Приложението вече работи върху **rocksbaga** (KV, RESP2) с `ORM_BACKEND=drock`,
+без да е загубило framework-а (`fmrbaga`) или frontend-а (Next.js). Всички
+`backend/models/*.baga` минаха към KV слоя на `ormbaga` — в app-а не остана суров
+SQL освен health пинга (`SELECT 1`).
+
+Миграцията покрива:
+- ред = JSON под `kv:t:<таблица>:<id>`, WHERE = вторичен индекс, `ORDER BY`
+  (мулти-ключ и надолу), `DELETE … WHERE fk` и `MAX(col)` — в `ormbaga/session/kv_*.baga`
+- LEFT JOIN-овете на дневника, фактурите и банките — `kv_attach` (map в паметта)
+- `SUM`-овете на тоталите и ДДС дневниците — `bagadecimal` в модела
+- транзакция на ниво заявка: `bb_begin` / `bb_commit` / `act_err_rb` с буфер
+  (`session/kv_tx.baga`)
+- верзирани KV миграции (`schema_kv.baga`, `kv:mig:<таблица>`) — forward-only
+- S3 архив: `scripts/py/kvdump.py` (SCAN + JSON lines) + същият CLI за restore.
+  Проверявано живо: dump → празно `LSMPATH` → същите бројки по `/v1/*`.
+
+Отворено и честно:
+- **COMMIT не е атомен.** rocksbaga няма MULTI/EXEC; буферът се изсипва с
+  `MSET`/`DEL`, така че срив на процеса по средата може да остави частичен запис
+  (`ormbaga/docs/gaps.md` G12). Атомарност идва от write batch в engine-а, не от слоя.
+- **Няма DB-level UNIQUE/CHECK.** Двойката (валута, дата), (фирма, сканирано име)
+  и email-ът се пазят от приложението (проверка или upsert преди insert).
+- **64 аргумента на команда.** rocksbaga затваря връзката над тавана, а мъртва
+  връзка отравя worker-а до рестарт — `kv_mget` / `kv_mset` / `kv_raw_del_many`
+  режат под `KV_CMD_MAX_ARGS`. Покрито от `tests/orm_drock_test.baga`.
+
 ## SAF-T към 2028
 
 Задължението за средни и малки фирми е от 2028. Има повече от година.

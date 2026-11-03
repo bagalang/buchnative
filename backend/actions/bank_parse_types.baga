@@ -30,18 +30,46 @@ fn parse_result_new(format_name: str) -> ParseResult {
     return ParseResult { format_name: format_name, account_iban: "", account_currency: "", txs: vec_new(), total_count: 0, duplicate_count: 0, new_count: 0 }
 }
 // ─── Общи помощници ───
+// Банковите CSV-та идват с български заглавки ("Дата;Описание;Дебит;Кредит"), а
+// str_find сравнява байт по байт — без малък кириличски регистър "Дебит" никога
+// не среща "дебит". chr(n) смята n за codepoint, затова низът се минава с
+// UTF-8 помощниците от std: двойките D0/D1 са кирилица и имат пълни двойки.
 fn bp_lower(s: str) -> str {
     let mut out = ""
-    for i in 0..len(s) {
-        let c = char_at(s, i)
-        if c >= 65 && c <= 90 {
-            out = concat(out, chr(c + 32))
+    let n = len(s)
+    let mut pos: i64 = 0
+    while pos < n {
+        let w = str_utf8_width(s, pos)
+        if w == 2 {
+            let b0 = byte_at(s, pos)
+            let b1 = byte_at(s, pos + 1)
+            let cp = ((b0 - 192) * 64) + (b1 - 128)
+            let mut o = cp
+            if cp >= 1040 && cp <= 1071 {
+                o = cp + 32
+            } else {
+                if cp >= 1024 && cp <= 1039 {
+                    o = cp + 16
+                }
+            }
+            out = concat(out, str_from_codepoint(o))
         } else {
-            out = concat(out, chr(c))
+            if w == 1 {
+                let c = byte_at(s, pos)
+                if c >= 65 && c <= 90 {
+                    out = concat(out, byte_chr(c + 32))
+                } else {
+                    out = concat(out, byte_chr(c))
+                }
+            } else {
+                out = concat(out, substr(s, pos, pos + w))
+            }
         }
+        pos = pos + w
     }
     return out
 }
+
 fn bp_is_digit(c: i64) -> i64 {
     if c >= 48 && c <= 57 {
         return 1

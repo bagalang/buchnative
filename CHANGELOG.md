@@ -1,5 +1,30 @@
 # История на версиите — buchnative
 
+## 0.9.0 — 2026-11-03
+
+Базата е rocksbaga. Същото приложение — `fmrbaga` backend, Next.js frontend,
+всички екрани — но без PG wire и без стотиците нишки на boilaDB, които при
+товарено счетоводно приложение затваряха заявките.
+
+- `ormbaga` получава KV backend (`ORM_BACKEND=drock`): табличен слой върху
+  rocksbaga през `drockb`. Ключове `kv:t:<таблица>:<id>` (JSON ред),
+  `:all`, `:ix:<колона>:<стойност>`, `:seq`, `kv:mig:<таблица>`.
+- Моделите (`backend/models/*.baga`) мигрират един по един; action-ите и
+  frontend-ът не се пипат — accessor-ите четат същия `OrmQuery`.
+- `kv_tx.baga`: BEGIN/COMMIT/ROLLBACK като буфер в `OrmDb` (rocksbaga няма
+  MULTI/EXEC). Четенето в рамките на заявката вижда собствените си запис.
+- `kv_sort.baga` (ORDER BY с мулти-ключ и посоки), `kv_join.baga` (LEFT JOIN в
+  паметта), `kv_migrate.baga` (верзирани KV миграции), `kv_delete_where`.
+- Тоталите на фактура вече се събират с `bagadecimal` вместо SQL `SUM`.
+- Архивът onto S3 минава през `scripts/py/kvdump.py` (SCAN + JSON lines) с
+  `restore` и `--flush`; проверено с round-trip върху празно `LSMPATH`.
+- Корекции, намерени при live тестовете: CSV импортът на банкови извлечения
+  не разпознаваше български заглавки (`bp_lower` не сваляше кирилица;
+  `Дебит`/`Кредит` липсваха в детектора); фалшиво-зелени check-ове в тестете;
+  rocksbaga 64-аргументният лимит (ряза на MGET/MSET/DEL).
+- Документацията (README, deploy, conventions, data-model, status) е презписана
+  за rocksbaga — BoilaSQL глави изчезнаха.
+
 ## 0.8.9 — 2026-09-21
 
 SAF-T BG по схема V1.0.1. Подаването за средни и малки фирми е от 2028.

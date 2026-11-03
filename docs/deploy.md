@@ -48,7 +48,20 @@ proxy на VPS.
 dump на редовете (по ключ `kv:t:<таблица>:<id>`). Sidecar-ът **не** монтира
 `rocks-data` и не тарва LSM файлове — това не е snapshot, докато сървърът пише.
 
-Възстановяване върху празно `LSMPATH`, rocksbaga пуснат, backend още не:
-dump-ът се разархивира и редовете се записват обратно през drockb. При
-съмнение за цялост — `chunk` от `drockb` (`CHECKPOINT`) върху спрян сървър
-(`BACKUP` / `CHECKPOINT`), не върху жив `LSMPATH`.
+Възстановяване — rocksbaga пуснат към празно (или изтрито) `LSMPATH`, backend
+спрян:
+
+```bash
+DROCK_PORT=16579 python3 scripts/py/kvdump.py restore бекъп.json.gz
+# [--flush] изтрива съществуващите kv:* ключове преди replay-а
+```
+
+Ключовете на ormbaga (`kv:t:<таблица>:<id>`, `:all`, `:ix:<колона>:<стойност>`,
+`:seq`, `kv:mig:<таблица>`) са част от dump-а, затова редовете, вторичните
+индекси и PK броячите се възстановяват с един replay — нищо не се преизгражда.
+Същият модул работи и като CLI за ръчен архив: `python3 scripts/py/kvdump.py
+dump изход.json.gz`.
+
+Физическият snapshot е друг път: `tools/backup.baga` на rocksbaga
+(`BACKUP_MODE=create|verify|ship|restore`) върху **спрян** сървър — живият
+`LSMPATH` не се тарва.

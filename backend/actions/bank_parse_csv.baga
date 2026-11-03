@@ -45,7 +45,7 @@ fn bp_parse_csv(content: str) -> ParseResult {
     while i < vec_len(lines) {
         let lower = bp_lower(vec_get(lines, i))
         let has_date = str_find(lower, "дата") >= 0 || str_find(lower, "date") >= 0
-        let has_amt = str_find(lower, "дебит") >= 0 || str_find(lower, "кредит") >= 0 || str_find(lower, "сума") >= 0 || str_find(lower, "amount") >= 0
+        let has_amt = str_find(lower, "дебит") >= 0 || str_find(lower, "кредит") >= 0 || str_find(lower, "сума") >= 0 || str_find(lower, "amount") >= 0 || str_find(lower, "debit") >= 0 || str_find(lower, "credit") >= 0
         if has_date != 0 && has_amt != 0 {
             header_idx = i
             i = vec_len(lines)

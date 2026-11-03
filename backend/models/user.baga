@@ -3,21 +3,11 @@
 import "ormbaga/orm.baga"
 import "kvtime.baga"
 import "fmrbaga/jsonx.baga"
-import "pgbaga/pg.baga"
 import "std/str/str.baga"
-import "std/os/os.baga"
 import "std/crypto/sha256.baga"
 
 fn user_table() -> str {
     return "users"
-}
-
-fn user_backend_boila() -> i64 !IO {
-    let be = env("ORM_BACKEND")?
-    if be == "boila" || be == "boiladb" || be == "boilaDB" {
-        return 1
-    }
-    return 0
 }
 
 fn user_next_id(db: OrmDb) -> OrmCount !IO !Net {

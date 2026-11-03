@@ -1,35 +1,29 @@
 // models/exchange_rate.baga — обменни курсове на ЕЦБ (за 1 EUR).
 // Курсът е TEXT (десимална точност, без float). Уникалност (currency_code, date)
-// е UNIQUE INDEX (P21-1). BoilaSQL още отказва две '=' условия
-// ("повторно = условие") и AND на = с <= по втора колона тихо игнорира
-// втората — as-of е WHERE currency_code = $1 ORDER BY date DESC, после
-// date <= в приложението.
+// я пази upsert-ът: преди импорта се зарежда цялата таблица и двойката се
+// търси в нея. As-of е WHERE currency_code = ? ORDER BY date DESC, после
+// date <= в приложението (kv_where_dir).
 
 import "ormbaga/orm.baga"
-import "ormbaga/sql.baga"
 import "fmrbaga/jsonx.baga"
-import "pgbaga/pg.baga"
 import "std/str/str.baga"
-import "std/os/os.baga"
 
 fn exchange_rate_table() -> str {
     return "exchange_rates"
 }
 
-fn exchange_rate_backend_boila() -> i64 !IO {
-    let be = env("ORM_BACKEND")?
-    if be == "boila" || be == "boiladb" || be == "boilaDB" {
-        return 1
-    }
-    return 0
-}
-
 fn exchange_rate_next_id(db: OrmDb) -> OrmCount !IO !Net {
-    return orm_count_sql(db, "SELECT MAX(id) AS count FROM exchange_rates")?
+    return kv_count_sql(db, "SELECT MAX(id) AS count FROM exchange_rates")?
 }
 
-fn exchange_rate_select_sql() -> str {
-    return "SELECT id, currency_code, rate, date, created_at FROM exchange_rates"
+fn exchange_rate_cols() -> Vec<str> {
+    let c: Vec<str> = vec_new()
+    vec_push(c, "id")
+    vec_push(c, "currency_code")
+    vec_push(c, "rate")
+    vec_push(c, "date")
+    vec_push(c, "created_at")
+    return c
 }
 
 fn exchange_rate_to_json(q: OrmQuery, row: i64) -> JObj {
@@ -42,32 +36,42 @@ fn exchange_rate_to_json(q: OrmQuery, row: i64) -> JObj {
 }
 
 fn exchange_rate_all(db: OrmDb) -> OrmQuery !IO !Net {
-    return orm_query(db, concat(exchange_rate_select_sql(), " ORDER BY date DESC, currency_code"))?
+    let sc: Vec<str> = vec_new()
+    vec_push(sc, "date")
+    vec_push(sc, "currency_code")
+    let dirs: Vec<i64> = vec_new()
+    vec_push(dirs, 1)
+    vec_push(dirs, 0)
+    return kv_select_all_dir(db, exchange_rate_table(), exchange_rate_cols(), sc, dirs)?
 }
 
 fn exchange_rate_by_date(db: OrmDb, date: str) -> OrmQuery !IO !Net {
-    let sql = concat(exchange_rate_select_sql(), " WHERE date = $1 ORDER BY currency_code")
-    let vals = vec_new()
-    vec_push(vals, date)
-    let nulls = vec_new()
-    vec_push(nulls, 0)
-    return orm_query_params(db, sql, vals, nulls)?
+    return kv_where_order(db, exchange_rate_table(), "date", date, "currency_code", exchange_rate_cols())?
 }
 
-// Последната дата с курсове; еднореден SELECT вместо пълен scan в приложението.
+// Последната дата с курсове: максимум по колоната, без sort на цялото.
 fn exchange_rate_latest_q(db: OrmDb) -> OrmQuery !IO !Net {
-    return orm_query(db, "SELECT date FROM exchange_rates ORDER BY date DESC LIMIT 1")?
+    let d = kv_max_value(db, exchange_rate_table(), "date")?
+    let cols: Vec<str> = vec_new()
+    vec_push(cols, "date")
+    if d == "" {
+        return kv_query_empty(db, cols)
+    }
+    let cells: Vec<str> = vec_new()
+    vec_push(cells, d)
+    let nulls: Vec<i64> = vec_new()
+    vec_push(nulls, 0)
+    return kv_query_ok(db, cols, cells, nulls, 1)
 }
 
 // Курсове за една валута, най-новите първи. date <= се прилага в asof_pick
 // (две колони в WHERE още не са надеждни в BoilaSQL).
 fn exchange_rate_by_currency(db: OrmDb, currency: str) -> OrmQuery !IO !Net {
-    let sql = concat(exchange_rate_select_sql(), " WHERE currency_code = $1 ORDER BY date DESC")
-    let vals = vec_new()
-    vec_push(vals, currency)
-    let nulls = vec_new()
-    vec_push(nulls, 0)
-    return orm_query_params(db, sql, vals, nulls)?
+    let sc: Vec<str> = vec_new()
+    vec_push(sc, "date")
+    let dirs: Vec<i64> = vec_new()
+    vec_push(dirs, 1)
+    return kv_where_dir(db, exchange_rate_table(), "currency_code", currency, exchange_rate_cols(), sc, dirs)?
 }
 
 // Лексикографско сравнение (низовите < > в baga гледат само първия байт).
@@ -125,43 +129,15 @@ fn exchange_rate_row_of_pair(q: OrmQuery, currency: str, date: str) -> i64 {
 }
 
 fn exchange_rate_insert(db: OrmDb, currency: str, rate: str, date: str) -> OrmExec !IO !Net {
-    if exchange_rate_backend_boila()? == 1 {
-        let c = exchange_rate_next_id(db)?
-        if orm_ok_c(c) == 0 {
-            return OrmEErr(OrmExecFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
-        }
-        let nid = orm_count_n(c) + 1
-        let d = orm_db_c(c)
-        let cols = vec_new()
-        vec_push(cols, "id")
-        vec_push(cols, "currency_code")
-        vec_push(cols, "rate")
-        vec_push(cols, "date")
-        let vals = vec_new()
-        vec_push(vals, int_to_str(nid))
-        vec_push(vals, currency)
-        vec_push(vals, rate)
-        vec_push(vals, date)
-        let nulls = vec_new()
-        vec_push(nulls, 0)
-        vec_push(nulls, 0)
-        vec_push(nulls, 0)
-        vec_push(nulls, 0)
-        return orm_insert_full(d, exchange_rate_table(), cols, vals, nulls)?
-    }
-    let cols = vec_new()
+    let cols: Vec<str> = vec_new()
     vec_push(cols, "currency_code")
     vec_push(cols, "rate")
     vec_push(cols, "date")
-    let vals = vec_new()
+    let vals: Vec<str> = vec_new()
     vec_push(vals, currency)
     vec_push(vals, rate)
     vec_push(vals, date)
-    let nulls = vec_new()
-    vec_push(nulls, 0)
-    vec_push(nulls, 0)
-    vec_push(nulls, 0)
-    return orm_insert_full(db, exchange_rate_table(), cols, vals, nulls)?
+    return orm_insert_strs(db, exchange_rate_table(), cols, vals)?
 }
 
 // Ъпсърт по (currency, date) срещу предварително заредена заявка q
