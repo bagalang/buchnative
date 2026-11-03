@@ -57,7 +57,7 @@
 - икон-бутони за редакция/изтриване и сродни действия в таблиците
 - тема, BG/EN
 - глобални настройки (SMTP/S3 през Python sidecar :5050; S3 архивът е
-  логически dump през boilaDB COPY, не tar на LSM)
+  логически dump на редовете, не tar на LSM файловете на rocksbaga)
 - справки: оборотна ведомост (6 колони), главна книга, главна книга по
   кореспонденции (без дати/документи; водещ дебит и водещ кредит), баланс /
   ОПР / паричен поток / собствен капитал (формули в Настройки), хронологичен
@@ -124,7 +124,8 @@
 | Тема | Къде |
 |------|------|
 | Маршрути | `backend/routes.baga` |
-| Миграции | `backend/schema_pg_*.baga`, `schema_boila_*.baga` |
+| Схема | `backend/schema*.baga` — справка за колоните; върху rocksbaga не се прилагат |
+| KV слой | `ormbaga/session/kv*.baga`, модел в `backend/models/account.baga` |
 | Пост на фактура | `backend/actions/invoices_post.baga` |
 | Склад | `backend/actions/inventory.baga`, `models/inventory.baga` |
 | Вътрешен документ | `backend/actions/internal_docs.baga`, `internal_docs_confirm.baga` |

@@ -10,8 +10,8 @@
    `dev-secret` / `baga-secret`. Backend-ът пише WARNING ако е default.
 2. **Смени паролата на `superadmin`** след първи вход (`123+123` е само за
    seed). Създай отделен счетоводител, не работи с супер-админ всеки ден.
-3. **Том за boilaDB** — `boila-data`. Без него рестартът на контейнера трие
-   дневника.
+3. **Том за rocksbaga** — `rocks-data` (`LSMPATH`). Без него рестартът на
+   контейнера трие дневника.
 4. **TLS** — Caddy/nginx пред `:3000`. `FMR_CORS` = публичният https origin,
    не `*`.
 5. Frontend проксира `/v1` към `backend:8080` (rewrite). Браузърът не трябва
@@ -34,7 +34,7 @@ docker compose -f app-product/buchnative/deploy/docker-compose.yml \
 
 | Услуга | Роля | Порт |
 |--------|------|------|
-| boiladb | база, PostgreSQL wire | 6575 вътре |
+| rocksbaga | база, KV по RESP2 | 16579 вътре |
 | backend | Baga API; PDF печатът ползва DejaVu Sans | 8080 вътре |
 | sidecar | SMTP/S3 + dump Python | 5050 вътре |
 | frontend | Next.js | 3000 публичен |
@@ -44,18 +44,11 @@ proxy на VPS.
 
 ## Архив (S3)
 
-Админ → S3 / Архиви качва `buchnative_backup_YYYYMMDD_HHMMSS.sql.gz` — логически
-dump през живата boilaDB (`COPY TO STDOUT` в REPEATABLE READ). Sidecar-ът **не**
-монтира `boila-data` и не тарва LSM файлове.
+Админ → S3 / Архиви качва `buchnative_backup_YYYYMMDD_HHMMSS.json.gz` — логически
+dump на редовете (по ключ `kv:t:<таблица>:<id>`). Sidecar-ът **не** монтира
+`rocks-data` и не тарва LSM файлове — това не е snapshot, докато сървърът пише.
 
-Възстановяване върху празен `BOILA_PATH`, boiladb пуснат, backend още не:
-
-```bash
-gunzip -c buchnative_backup_….sql.gz | \
-  psql "host=127.0.0.1 port=6575 user=boila dbname=boila sslmode=disable"
-```
-
-После старт на backend (migrate е no-op, ако dump-ът има `baga_schema_migrations`).
-
-Офлайн физически checkpoint (спрян сървър): `boilaDB/tools/backup.baga`
-`BACKUP_MODE=create|verify|restore`. Не се пуска срещу жив `BOILA_PATH`.
+Възстановяване върху празно `LSMPATH`, rocksbaga пуснат, backend още не:
+dump-ът се разархивира и редовете се записват обратно през drockb. При
+съмнение за цялост — `chunk` от `drockb` (`CHECKPOINT`) върху спрян сървър
+(`BACKUP` / `CHECKPOINT`), не върху жив `LSMPATH`.

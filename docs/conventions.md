@@ -2,8 +2,9 @@
 
 ## Filesize gate 600
 
-`.baga` файл над ~600 реда не минава. Затова схемата е `schema_pg_a/b/c`
-(+ boila близнаци), а големите action файлове се цепят
+`.baga` файл над ~600 реда не минава. Затова и ormbaga KV слоят е разцепен
+(`session/db.baga`, `result.baga`, `kv_row.baga`, `kv.baga`, `kv_write.baga`),
+а големите action файлове се цепят
 (`fixed_assets` / `fixed_assets_ops`, `internal_docs` / `internal_docs_confirm`,
 `invoices` / `invoices_update` / `invoices_post` / `invoices_print`,
 `reports` / `reports_util` / `reports_trial` / `reports_book` /
@@ -14,16 +15,44 @@
 
 Преди да надуеш файл — `wc -l`. `invoices.baga` вече е на ръба.
 
-## BoilaSQL
+## KV слоят (как работи)
 
-- **Едно `=` в WHERE.** Второ равенство (AND колона =) е ненадеждно
-  („повторно = условие“). Вторият филтър е в приложението: партиди по
-  обект, ДДС тип по запис, курс `date <=` след `ORDER BY date DESC`.
-- `ALTER TABLE ADD COLUMN` е **само nullable**. Затова dual наборът стои:
-  Postgres миграцията има `NOT NULL DEFAULT`, boila — гола колона.
-- Качените `CREATE TABLE` не се пипат.
-- Транзакции: `bb_begin` / `bb_commit` / `act_err_rb` около
-  фактура, пост, ръчен запис, протокол.
+Базата е **rocksbaga** (KV, RESP2) през `drockb`; `ORM_BACKEND=drock` включва
+KV backend-а в `ormbaga`. SQL няма — редът е JSON под ключ
+`kv:t:<таблица>:<id:012d>`, колоните са ключовете му.
+
+**Защо action файловете не се пипат.** `PgRows` е обикновена структура, затова
+`kv_select_*` попълва **същия `OrmQuery`**, който `orm_cell_by` / `orm_nrows` /
+`orm_db_q` четат — accessor-ите не отличават backend-а. Това важи и за общия
+table API (`orm_insert_returning_full`, `orm_update_by_id`,
+`orm_delete_by_id`, `orm_count_sql`, `orm_find_i64`, `orm_where_eq_str`):
+всеки има KV път в `ormbaga/session/orm.baga`.
+
+**Как се мигрира модел.** Погледни `models/account.baga` като шаблон:
+
+| SQL версия | KV версия |
+|---|---|
+| `X_select_sql()` (SELECT списък) | `X_cols()` — ред от `vec_push` |
+| `orm_query_params(db, sql WHERE id=$1, …)` | `kv_select_by_id(db, табл, id, cols)` |
+| `orm_query_params(db, sql WHERE col=$1, …)` | `kv_where_star(db, табл, col, val)` или `kv_select_where` |
+| `orm_query(db, sql ORDER BY x)` | `kv_select_all_order(db, табл, x, cols)` |
+| `orm_insert_returning_full(…)` | `kv_insert(…)` (id се раздава от брояча) |
+| `account_to_json(q, row)` | **непроменено** |
+
+Вторичният индекс се поддържа за всяка колона, значи `WHERE col = val` е GET,
+не скан. `created_at` се щампова в модела (`kvtime.baga`) — в KV няма
+`DEFAULT NOW()`.
+
+**Суров SQL е грешка, не празен резултат.** `orm_query_params` върху drock
+връща ясна грешка и **не пипа db**. Това е нарочно: `orm_query_from` строи
+`OrmDb` от `PgResult` с `backend=PG` и мъртъв `kv`, значи предишното
+поведение подменяше живата връзка на работника и целият му worker после даваше
+503. Ако модел още не е мигриран, виждаш точно кой SQL липсва.
+
+**Транзакции няма.** `bb_begin` / `bb_commit` / `act_err_rb` са SQL-семантика;
+върху KV те са no-op или грешка. Проводка на фактура се прави с един `MSET`
+(ред + индекси + салда са атомарни спрямо читателите); ако трябва повече —
+виж `ormbaga/session/kv_write.baga`, не въвеждай имитация на SQL транзакция.
 
 ## Числа
 
@@ -112,11 +141,16 @@ Baga `<` `>` `<=` `>=` върху `str` сравняват **указатели*
 Python sidecar `scripts/py/sidecar.py` на `:5050` (Flask + boto3). Backend-ът
 говори HTTP (`BUCHNATIVE_SIDECAR`). `dev.sh` го пуска.
 
-S3 архивът е **логически dump** към живата boilaDB през PostgreSQL wire
-(`COPY TO STDOUT` в `BEGIN ISOLATION LEVEL REPEATABLE READ`, `dump.py`).
-Не се тарват LSM файловете под `BOILA_PATH` — това не е snapshot, докато
-`serve_pg` пише. Физическият checkpoint (`boilaDB/tools/backup.baga`, P26)
-остава офлайн: CLI-то само отваря стора, не се пуска срещу жив `BOILA_PATH`.
+S3 архивът е **логически dump**: обхождат се редовете и се събират като JSON.
+Не се тарват файловете под `LSMPATH` — това не е snapshot, докато сървърът
+пише. rocksbaga има свой физически checkpoint (`CHECKPOINT` / `BACKUP` през
+drockb, виж `app-product/drockb`), но той е офлайн/сървърна операция, не
+алтернатива на логическия dump за архив.
+
+**Известна дупка:** `scripts/py/dump.py` (Python sidecar) още говори PG wire
+и прави `COPY TO STDOUT` — това е оцелял код от boilaDB епохата и трябва да
+смени на обхождане на KV редовете. `dev.sh` вече му подава `LSMPATH` /
+`DROCK_PORT`, а не PG env — значи самият скрипт е следващата стъпка.
 
 ## SAF-T номенклатури
 

@@ -3,29 +3,28 @@
 #
 # Задължително в .env: FMR_JWT_SECRET (дълъг случаен низ). Не ползвай dev-secret.
 #
-# boiladb държи данните в rocksbaga (LSM: WAL + SST) под /data.
-# network_mode: host — портовете са директно на машината (3000 / 8080 / 6575 / 5050).
+# rocksbaga държи данните в LSM (WAL + SST) под /data.
+# network_mode: host — портовете са директно на машината (3000 / 8080 / 16579 / 5050).
 
 name: buchnative
 
 services:
-  boiladb:
-    container_name: buchnative-boiladb
+  rocksbaga:
+    container_name: buchnative-rocksbaga
     build:
       context: ../../..
       dockerfile: app-product/buchnative/deploy/Dockerfile.baga
       args:
-        BAGA_ENTRY: app-product/boilaDB/tools/serve_pg.baga
+        BAGA_ENTRY: app-product/rocksbaga/tools/serve.baga
     restart: unless-stopped
     network_mode: host
     environment:
-      BOILA_PGPORT: "6575"
-      BOILA_WORKERS: "8"
-      BOILA_PATH: /data
+      LSMPORT: "16579"
+      LSMPATH: /data
     volumes:
-      - boila-data:/data
+      - rocks-data:/data
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/127.0.0.1/6575'"]
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/127.0.0.1/16579'"]
       interval: 10s
       timeout: 3s
       retries: 20
@@ -42,15 +41,13 @@ services:
     restart: unless-stopped
     network_mode: host
     depends_on:
-      boiladb:
+      rocksbaga:
         condition: service_healthy
     environment:
       PORT: "8080"
-      ORM_BACKEND: boila
-      BOILA_PGHOST: "127.0.0.1"
-      BOILA_PGPORT: "6575"
-      BOILA_PGUSER: boila
-      BOILA_PGDATABASE: boila
+      ORM_BACKEND: drock
+      DROCK_HOST: "127.0.0.1"
+      DROCK_PORT: "16579"
       FMR_WORKERS: "8"
       FMR_LOG: "1"
       FMR_CORS: ${FMR_CORS:-}
@@ -72,17 +69,18 @@ services:
     restart: unless-stopped
     network_mode: host
     depends_on:
-      boiladb:
+      rocksbaga:
         condition: service_healthy
     working_dir: /app
     volumes:
       - ../scripts/py:/app:ro
     environment:
       BUCHNATIVE_SIDECAR_PORT: "5050"
-      BOILA_PGHOST: "127.0.0.1"
-      BOILA_PGPORT: "6575"
-      BOILA_PGUSER: boila
-      BOILA_PGDATABASE: boila
+      # dump.py още говори PG wire (виж docs/conventions.md — известна дупка);
+      # env-ът вече е rocksbaga, така че скриптът е следващата стъпка.
+      LSMPATH: /data
+      DROCK_HOST: "127.0.0.1"
+      DROCK_PORT: "16579"
     command: ["sh", "-c", "pip install -q -r requirements.txt && python sidecar.py"]
 
   frontend:
@@ -101,4 +99,4 @@ services:
       BUCHNATIVE_API_PROXY: http://127.0.0.1:8080
 
 volumes:
-  boila-data:
+  rocks-data:

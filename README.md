@@ -21,7 +21,7 @@
 
 ## Архитектура
 
-**Приложенията остават универсални** — fmrbaga, boilaDB и останалите пакети от
+**Приложенията остават универсални** — fmrbaga, ormbaga и останалите пакети от
 `app-product/` не се копират и не се променят. buchnative ги използва както са:
 
 - **компилация** — чрез path-зависимости в `backend/sandak.toml` (baga монорепото)
@@ -30,7 +30,7 @@
 
 | Услуга | Порт | Протокол |
 |--------|------|----------|
-| boilaDB | 6575 | PostgreSQL v3 wire (`serve_pg`) |
+| rocksbaga | 16579 | RESP2 (`tools/serve.baga`) |
 | backend API | 8080 | HTTP/JSON (fmrbaga) |
 | frontend (dev) | 3000 | HTTP (Next.js) |
 
@@ -39,9 +39,15 @@
 | Слой | Технология |
 |------|-----------|
 | Backend | Baga + fmrbaga framework (HTTP/JSON, route-id dispatch, OpenAPI, JWT) |
-| База данни | boilaDB (BoilaSQL) — отделен процес, PostgreSQL v3 wire; P20 SERIAL/FK, P28 JOIN/EXISTS, P31 mux, P43 O(1) point GET |
+| База данни | **rocksbaga** — дълготраен LSM KV, RESP2, през `drockb`; `ORM_BACKEND=drock` в ormbaga |
 | Frontend | Next.js (App Router, React 19, чист CSS) |
 | Автентикация | JWT (jwtbaga HS256) |
+
+Базата е сменена спрямо bagabuch: rocksbaga е един писател върху LSM, без
+SQL engine и без нишки, които се състезават. boilaDB държи стотици такива —
+за сонда на езика е добре, за счетоводно приложение значи забиване.
+Редовете са JSON по ключ (`kv:t:<таблица>:<id>`); как работи слоят — виж
+[docs/conventions.md](docs/conventions.md#kv-слоят-как-работи).
 
 ## Функции
 
@@ -121,9 +127,10 @@
 ./scripts/seed.sh    # демо данни (след като backend е на :8080)
 ```
 
-Стартира трите услуги на техните портове (boilaDB → backend → frontend).
+Стартира трите услуги на техните портове (rocksbaga → backend → frontend).
 Отвори `http://localhost:3000`. За разработка: изтрий `db/` (пази
-`.gitignore`), пусни `dev.sh`, после `./scripts/seed.sh` — фирма Бага ООД,
+`.gitignore` — това е `LSMPATH` на rocksbaga), пусни `dev.sh`, после
+`./scripts/seed.sh` — фирма Бага ООД,
 сметкоплан, контрагенти, фактури.
 Вход: **`superadmin` / `123+123`**.
 
@@ -135,10 +142,10 @@
 ```
 buchnative/
 ├── backend/               # Baga приложение върху fmrbaga
-│   ├── sandak.toml        # path deps → app-product/fmrbaga, ormbaga, std
-│   ├── start.baga         # миграции → fmr_run
+│   ├── sandak.toml        # path deps → fmrbaga, ormbaga, drockb, std
+│   ├── start.baga         # проверка на връзката → fmr_run
 │   ├── routes.baga        # route table + dispatch (стабилни route id-та)
-│   ├── schema.baga        # миграции (dual set: BoilaSQL + Postgres)
+│   ├── schema*.baga       # само справка за колоните (KV е безсхематичен)
 │   ├── actions/           # handlers по модул
 │   └── models/            # table helpers
 ├── frontend/              # Next.js
@@ -185,16 +192,11 @@ buchnative е **отделно репозиторий** (`github.com:bagalang/bu
 - ormbaga `a2e68b0` — multi-column UPDATE (презаписваше SET списъка)
 - boilaDB `c7d5fbb` — числови низове с водещи нули вече не се инференцират като числа
 
-Dual наборът миграции (Postgres vs исторически BoilaSQL) остава: качените
-CREATE TABLE в boila набора са от преди P20 (без SERIAL/DEFAULT/NOT NULL/
-REFERENCES), а `ALTER TABLE ADD COLUMN` в boila все още е само nullable.
-Нови boila миграции ползват текущия диалект (UNIQUE INDEX, IF NOT EXISTS,
-DROP INDEX … ON t). Приложението още подава явен PK (`MAX(id)+1`) за
-таблиците без SERIAL — броячът се закача само при CREATE TABLE … BIGSERIAL.
+Миграциите от bagabuch (dual набор `schema_pg_*` / `schema_boila_*`) **не се
+прилагат** върху rocksbaga — KV е безсхематичен, а `ORM_BACKEND=drock` ги
+пропуска в `start.baga`. Остават в дървото само като справка за колоните и
+техните по подразбиране стойности.
 
-Стар `BOILA_PATH` (без маркера `p43|dual`) работи с scan fallback на
-versioned GET; нова директория получава O(1) point GET (P43). Жив архив от
-админа: Python sidecar dump през boilaDB `COPY TO STDOUT` (REPEATABLE READ)
-→ S3 `*.sql.gz`. Офлайн физически checkpoint:
-`app-product/boilaDB/tools/backup.baga` (`BACKUP_MODE=create|verify|restore`)
-— не срещу жив `BOILA_PATH`.
+Жив архив от админа: Python sidecar dump към rocksbaga (`LSMPATH`) → S3.
+Физическият checkpoint е операция на сървъра (`CHECKPOINT` / `BACKUP` през
+drockb) — не замества логическия dump.

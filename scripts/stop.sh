@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# stop.sh — спира стека на buchnative (boilaDB, backend, frontend).
+# stop.sh — спира стека на buchnative (rocksbaga, backend, frontend).
 # Работи и ако dev.sh върви в друг терминал: PID файл + слушатели на портовете.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PIDFILE="$ROOT/.dev.pids"
 
-BOILA_PGPORT="${BOILA_PGPORT:-6575}"
+ROCKS_PORT="${ROCKS_PORT:-16579}"
 PORT="${PORT:-8080}"
 FRONTEND_PORT="${FRONTEND_PORT:-3000}"
 SIDECAR_PORT="${BUCHNATIVE_SIDECAR_PORT:-5050}"
@@ -71,7 +71,7 @@ if [ -f "$PIDFILE" ]; then
   rm -f "$PIDFILE"
 fi
 
-for spec in "boilaDB:$BOILA_PGPORT" "backend:$PORT" "frontend:$FRONTEND_PORT" "sidecar:$SIDECAR_PORT"; do
+for spec in "rocksbaga:$ROCKS_PORT" "backend:$PORT" "frontend:$FRONTEND_PORT" "sidecar:$SIDECAR_PORT"; do
   name="${spec%%:*}"
   port="${spec##*:}"
   for pid in $(pids_on_port "$port"); do
@@ -91,7 +91,7 @@ for pid in "${killed[@]:-}"; do
     still=1
   fi
 done
-for spec in "$BOILA_PGPORT" "$PORT" "$FRONTEND_PORT" "$SIDECAR_PORT"; do
+for spec in "$ROCKS_PORT" "$PORT" "$FRONTEND_PORT" "$SIDECAR_PORT"; do
   for pid in $(pids_on_port "$spec"); do
     if have_pid "$pid"; then
       kill -KILL "$pid" 2>/dev/null || true
@@ -105,7 +105,7 @@ if [ "$still" = 1 ]; then
 fi
 
 up=()
-for spec in "boilaDB:$BOILA_PGPORT" "backend:$PORT" "frontend:$FRONTEND_PORT" "sidecar:$SIDECAR_PORT"; do
+for spec in "rocksbaga:$ROCKS_PORT" "backend:$PORT" "frontend:$FRONTEND_PORT" "sidecar:$SIDECAR_PORT"; do
   name="${spec%%:*}"
   port="${spec##*:}"
   if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# dev.sh — локално стартира boilaDB + backend + frontend, всеки на свой порт.
-# Никакви мостове: boilaDB говори PostgreSQL v3 wire, backend HTTP/JSON, frontend HTTP.
+# dev.sh — локално стартира rocksbaga + backend + frontend, всеки на свой порт.
+# Никакви мостове: rocksbaga говори RESP2, backend HTTP/JSON, frontend HTTP.
 set -euo pipefail
 
 # Node 22 (nvm) за Next.js — чист shell без .bashrc вижда /usr/bin/node (18)
@@ -15,14 +15,14 @@ command -v stdbuf >/dev/null 2>&1 || STDBUF=""
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BAGA_ROOT="$(cd "$ROOT/../.." && pwd)"
 
-BOILA_PGPORT="${BOILA_PGPORT:-6575}"
+ROCKS_PORT="${ROCKS_PORT:-16579}"
 PORT="${PORT:-8080}"
 FRONTEND_PORT="${FRONTEND_PORT:-3000}"
 
-# Данните на boilaDB живеят в приложението (buchnative/db), не в /tmp
-BOILA_PATH="${BOILA_PATH:-$ROOT/db}"
-mkdir -p "$BOILA_PATH"
-export BOILA_PATH
+# Данните на rocksbaga живеят в приложението (buchnative/db), не в /tmp
+LSMPATH="${LSMPATH:-$ROOT/db}"
+mkdir -p "$LSMPATH"
+export LSMPATH LSMPORT="$ROCKS_PORT"
 
 PIDFILE="$ROOT/.dev.pids"
 : > "$PIDFILE"
@@ -55,32 +55,25 @@ wait_tcp() {
   return 1
 }
 
-echo "==> boilaDB serve_pg на :$BOILA_PGPORT"
-# P31 connection mux: idle keep-alive fds стоят в poll; worker-ите въртят
-# по едно заявление и паркират fd-то. Не е 1 worker на връзка — 8 стигат
-# за backend + psql. P30: BOILA_SYNC_EVERY остава 1 (счетоводна издръжливост).
-# P43 dual-get: нови BOILA_PATH директории; стара база без маркера p43|dual
-# пада към scan (коректно, по-бавно).
+echo "==> rocksbaga на :$ROCKS_PORT"
+# LSM engine: един писател, RESP2 сървър. Събира се в мерките секунди.
 (
   cd "$BAGA_ROOT"
-  export BOILA_PGPORT BOILA_WORKERS="${BOILA_WORKERS:-8}"
   if [ -n "$STDBUF" ]; then
-    exec stdbuf -oL -eL ./baga -I . -I app-product app-product/boilaDB/tools/serve_pg.baga
+    exec stdbuf -oL -eL ./baga -I . -I app-product app-product/rocksbaga/tools/serve.baga
   else
-    exec ./baga -I . -I app-product app-product/boilaDB/tools/serve_pg.baga
+    exec ./baga -I . -I app-product app-product/rocksbaga/tools/serve.baga
   fi
 ) &
 record_pid $!
 
-echo "    чакам boilaDB да отговори на TCP :$BOILA_PGPORT ..."
-# boilaDB се компилира при старт (минути при студена кеш) — чакаме до 10 мин
-wait_tcp 127.0.0.1 "$BOILA_PGPORT" 1200
+echo "    чакам rocksbaga да отговори на TCP :$ROCKS_PORT ..."
+wait_tcp 127.0.0.1 "$ROCKS_PORT" 600
 
-echo "==> backend на :$PORT (ORM_BACKEND=boila)"
+echo "==> backend на :$PORT (ORM_BACKEND=drock)"
 (
   cd "$BAGA_ROOT"
-  export PORT ORM_BACKEND=boila BOILA_PGHOST=127.0.0.1 BOILA_PGPORT
-  export BOILA_PGUSER="${BOILA_PGUSER:-boila}" BOILA_PGDATABASE="${BOILA_PGDATABASE:-boila}"
+  export PORT ORM_BACKEND=drock DROCK_HOST=127.0.0.1 DROCK_PORT="$ROCKS_PORT"
   # 8 workers: Next.js + React Strict Mode fire many parallel GETs per page;
   # 4 pinned on keep-alive and new pages (and /health) hung.
   export FMR_WORKERS="${FMR_WORKERS:-8}" FMR_LOG="${FMR_LOG:-1}" FMR_CORS="${FMR_CORS:-*}"
@@ -98,10 +91,7 @@ echo "==> Python sidecar SMTP+S3+dump на :$SIDECAR_PORT"
 (
   cd "$ROOT/scripts/py"
   export BUCHNATIVE_SIDECAR_PORT="$SIDECAR_PORT"
-  export BOILA_PGHOST="${BOILA_PGHOST:-127.0.0.1}"
-  export BOILA_PGPORT
-  export BOILA_PGUSER="${BOILA_PGUSER:-boila}"
-  export BOILA_PGDATABASE="${BOILA_PGDATABASE:-boila}"
+  export LSMPATH DROCK_HOST=127.0.0.1 DROCK_PORT="$ROCKS_PORT"
   if [ -n "$STDBUF" ]; then
     exec stdbuf -oL -eL python3 sidecar.py
   else
@@ -116,7 +106,7 @@ record_pid $!
 
 echo
 echo "Стартирани (универсални приложения, само през портове):"
-echo "  boilaDB  : PostgreSQL v3 wire на :$BOILA_PGPORT"
+echo "  rocksbaga: RESP2 на :$ROCKS_PORT (LSMPATH=$LSMPATH)"
 echo "  backend  : HTTP/JSON на :$PORT          (/health /ready /v1/meta /openapi.json)"
 echo "  sidecar  : SMTP+S3+dump Python на :$SIDECAR_PORT"
 echo "  frontend : Next.js на :$FRONTEND_PORT"

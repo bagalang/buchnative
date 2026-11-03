@@ -3,32 +3,50 @@
 ## Правило
 
 Приложенията в `app-product/` остават универсални. buchnative **не** копира,
-не вгражда и не кърпи fmrbaga / boilaDB / ormbaga. Връзката е:
+не вгражда и не кърпи fmrbaga / ormbaga / drockb. Връзката е:
 
 - **build** — path deps в `backend/sandak.toml`
-- **runtime** — само през портове по стандартни протоколи
+- **runtime** — само през портове по стандартните протоколи (RESP2 към базата)
 
 ## Стек
 
 | Слой | Технология | Порт |
 |------|------------|------|
-| База | boilaDB, PostgreSQL v3 wire (`serve_pg`) | 6575 |
+| База | **rocksbaga** (KV, RESP2) през **drockb** | 16579 |
 | API | Baga + fmrbaga (HTTP/JSON, JWT, OpenAPI, route-id dispatch) | 8080 |
 | UI | Next.js App Router, React 19, чист CSS | 3000 |
 
-Данните на boilaDB живеят в `buchnative/db/` (`BOILA_PATH`), не в `/tmp`.
+Данните на rocksbaga живеят в `buchnative/db/` (`LSMPATH`), не в `/tmp`.
+
+## База: rocksbaga, не boilaDB
+
+buchnative е мигриран от bagabuch върху **rocksbaga** — дълготраен LSM KV
+сървър, говорещ RESP2 (същия wire като `redis-cli`). Защо не boilaDB: boilaDB
+е SQL engine, който държи стотици нишки, състезаващи се за един locks-път.
+За сонда на езика това е полезно; за счетоводно приложение означава
+забиване под товар. rocksbaga е един писател върху LSM — няма какво да се бори.
+
+Драйверът е `drockb` (бинарно-сигурни ключове/стойности, batch, SCAN итератор,
+CF команди). Моделите не говорят SQL — виж
+[конвенциите за KV слоя](conventions.md#kv-слоят-как-работи).
+
+`ORM_BACKEND=drock` избира този backend в `ormbaga`; тогава `OrmDb` носи
+`DrokDB` вместо PostgreSQL socket. Другите стойности (`pg`, `boila`) остават
+работещи за останалите приложения в монорепото.
 
 ## Пакети (backend)
 
 От `backend/sandak.toml`:
 
 - `fmrbaga` — HTTP, JWT, JSON, маршрути
-- `ormbaga` — заявки към boilaDB/Postgres
+- `ormbaga` — table слой; с `ORM_BACKEND=drock` работи върху rocksbaga
+- `drockb` — RESP2 драйвер към rocksbaga
 - `bagadecimal` — пари като стринг, без float
 - `xmlbaga` + `reportbaga` — печат PDF/DOCX/ODT от HTML
 - `std` — стандартната библиотека на Baga
 
-Сумите в базата са `NUMERIC`, в JSON и в кода — **стрингове**.
+Сумите в базата са **стрингове** (десетични, без `f64`) — същото правило
+като в bagabuch, само че вече се съхраняват като JSON текст в KV реда.
 
 ## Мултитенант
 

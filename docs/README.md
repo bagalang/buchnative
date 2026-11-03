@@ -17,16 +17,16 @@
 | [opening-and-periods.md](opening-and-periods.md) | Начални салда по НСС и заключване на месеци |
 | [financial-statements.md](financial-statements.md) | Баланс, ОПР, паричен поток, собствен капитал — формули |
 | [objects.md](objects.md) | Търговски обекти, склад по обект, ДМА, протокол |
-| [data-model.md](data-model.md) | Таблици и ключови колони |
+| [data-model.md](data-model.md) | Таблици и ключови колони (редовете са JSON в rocksbaga) |
 | [api.md](api.md) | HTTP пътища |
-| [conventions.md](conventions.md) | Baga/Boila ограничения, които не бива да се забравят |
+| [conventions.md](conventions.md) | Baga ограничения и как работи KV слоят върху rocksbaga |
 | [ai.md](ai.md) | Защо Mistral (ЕС, евтин); ключ по фирма; VIES и скан |
 | [status.md](status.md) | Направено / нарочно отложено / липсва |
 
 ## Стартиране
 
 ```bash
-./scripts/dev.sh      # boilaDB :6575 → backend :8080 → frontend :3000
+./scripts/dev.sh      # rocksbaga :16579 → backend :8080 → frontend :3000
 ./scripts/seed.sh     # демо данни, след като backend е готов
 ./scripts/stop.sh
 ```

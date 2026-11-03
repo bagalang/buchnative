@@ -1,15 +1,15 @@
 # Модел на данните
 
-Миграциите са dual набор: `schema_pg_a/b/c.baga` (Postgres DDL с
-NOT NULL/DEFAULT) и `schema_boila_a/b/c.baga` (исторически набор:
-`ALTER ADD COLUMN` е само nullable). `schema.baga` ги сглобява според
-`ORM_BACKEND`.
+Редовете се съхраняват в **rocksbaga** (KV) като JSON текст, по един ключ на
+ред: `kv:t:<таблица>:<id:012d>`. Няма DDL — колоните се появяват при първия
+запис. `schema*.baga` (Postgres/boila миграциите от bagabuch) остават в дървото
+само като **справка за колоните**; при `ORM_BACKEND=drock` те не се прилагат.
 
-Качените `CREATE TABLE` **не се пипат**. Нови колони — нов `ALTER`.
-Нови таблици в boila набора ползват текущия диалект.
+Как работи слоят, защо accessor-ите не отличават backend-а, и как се
+мигрира модел — виж [conventions.md](conventions.md#kv-слоят-как-работи).
 
-PK за таблици от преди P20: `MAX(id)+1` в приложението. Нови таблици с
-`BIGSERIAL` в Postgres набора.
+PK: таблицата има брояч `kv:t:<таблица>:seq` (RESP `INCR`) — `kv_insert` го
+взема и връща id-то в реда, както `INSERT … RETURNING`.
 
 ## Основни таблици
 
@@ -136,6 +136,6 @@ production_order_lines (
 
 ## Пари и дати
 
-Суми: `NUMERIC` в SQL, стринг в JSON. Датите по документи са `TEXT`
-(`YYYY-MM-DD`), не timestamptz — заради boila и за да съвпадат с
-данъчното събитие / месеца.
+Суми: **десетичен низ** (`bagadecimal`) в JSON и в реда — няма `f64` и няма
+SQL `NUMERIC`. Датите по документи са `TEXT` (`YYYY-MM-DD`), не timestamptz —
+за да съвпадат с данъчното събитие / месеца.
