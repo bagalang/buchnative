@@ -43,7 +43,7 @@ fn act_counterparts_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     return act_ok(orm_db_q(q), o)
 }
 
-fn act_counterparts_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_counterparts_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let auth = act_require_perm(ctx, db, "accounting:write")?
     if auth.ok == 0 {
         return auth.out
@@ -505,7 +505,7 @@ fn act_counterparts_vies_lookup(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Rand
 
 // POST /v1/counterparts/vies — създава контрагент от VIES данни.
 // Дългият адрес отива в vies_address и address; split полетата — от Mistral.
-fn act_counterparts_vies_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
+fn act_counterparts_vies_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     let auth = act_require_perm(ctx, db, "accounting:read")?
     if auth.ok == 0 {
         return auth.out

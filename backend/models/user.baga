@@ -1,7 +1,7 @@
 // models/user.baga — потребители (email login, роля, супер-админ).
 
 import "ormbaga/orm.baga"
-import "ormbaga/sql.baga"
+import "kvtime.baga"
 import "fmrbaga/jsonx.baga"
 import "pgbaga/pg.baga"
 import "std/str/str.baga"
@@ -21,15 +21,28 @@ fn user_backend_boila() -> i64 !IO {
 }
 
 fn user_next_id(db: OrmDb) -> OrmCount !IO !Net {
-    return orm_count_sql(db, "SELECT MAX(id) AS count FROM users")?
+    return kv_count_sql(db, "SELECT MAX(id) AS count FROM users")?
 }
 
 fn user_hash_password(email: str, password: str) -> str {
     return sha256_hex(concat(concat("buchnative|", email), concat("|", password)))
 }
 
-fn user_select_sql() -> str {
-    return "SELECT id, email, name, password_hash, role, is_active, is_super_admin, role_id, totp_enabled, totp_secret_b32, totp_pending_b32, created_at FROM users"
+fn user_cols() -> Vec<str> {
+    let c: Vec<str> = vec_new()
+    vec_push(c, "id")
+    vec_push(c, "email")
+    vec_push(c, "name")
+    vec_push(c, "password_hash")
+    vec_push(c, "role")
+    vec_push(c, "is_active")
+    vec_push(c, "is_super_admin")
+    vec_push(c, "role_id")
+    vec_push(c, "totp_enabled")
+    vec_push(c, "totp_secret_b32")
+    vec_push(c, "totp_pending_b32")
+    vec_push(c, "created_at")
+    return c
 }
 
 fn user_to_json(q: OrmQuery, row: i64) -> JObj {
@@ -50,64 +63,19 @@ fn user_to_json(q: OrmQuery, row: i64) -> JObj {
 }
 
 fn user_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
-    let sql = concat(user_select_sql(), " WHERE id = $1")
-    let vals = vec_new()
-    let nulls = vec_new()
-    pg_param_i64(vals, nulls, id)
-    return orm_query_params(db, sql, vals, nulls)?
+    return kv_select_by_id(db, user_table(), id, user_cols())?
 }
 
 fn user_by_email(db: OrmDb, email: str) -> OrmQuery !IO !Net {
-    let sql = concat(user_select_sql(), " WHERE email = $1")
-    let vals = vec_new()
-    vec_push(vals, email)
-    let nulls = vec_new()
-    vec_push(nulls, 0)
-    return orm_query_params(db, sql, vals, nulls)?
+    return kv_where_star(db, user_table(), "email", email)?
 }
 
 fn user_all(db: OrmDb) -> OrmQuery !IO !Net {
-    return orm_query(db, concat(user_select_sql(), " ORDER BY name"))?
+    return kv_select_all_order(db, user_table(), "name", user_cols())?
 }
 
-fn user_create(db: OrmDb, email: str, name: str, password_hash: str, role: str, is_active: i64, is_super_admin: i64, role_id: i64) -> OrmQuery !IO !Net {
-    if user_backend_boila()? == 1 {
-        let c = user_next_id(db)?
-        if orm_ok_c(c) == 0 {
-            return OrmQErr(OrmQueryFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
-        }
-        let nid = orm_count_n(c) + 1
-        let d = orm_db_c(c)
-        let cols = vec_new()
-        vec_push(cols, "id")
-        vec_push(cols, "email")
-        vec_push(cols, "name")
-        vec_push(cols, "password_hash")
-        vec_push(cols, "role")
-        vec_push(cols, "is_active")
-        vec_push(cols, "is_super_admin")
-        vec_push(cols, "role_id")
-        let vals = vec_new()
-        vec_push(vals, int_to_str(nid))
-        vec_push(vals, email)
-        vec_push(vals, name)
-        vec_push(vals, password_hash)
-        vec_push(vals, role)
-        vec_push(vals, int_to_str(is_active))
-        vec_push(vals, int_to_str(is_super_admin))
-        vec_push(vals, int_to_str(role_id))
-        let nulls = vec_new()
-        vec_push(nulls, 0)
-        vec_push(nulls, 0)
-        vec_push(nulls, 0)
-        vec_push(nulls, 0)
-        vec_push(nulls, 0)
-        vec_push(nulls, 0)
-        vec_push(nulls, 0)
-        vec_push(nulls, 0)
-        return orm_insert_returning_full(d, user_table(), cols, vals, nulls)?
-    }
-    let cols = vec_new()
+fn user_create(db: OrmDb, email: str, name: str, password_hash: str, role: str, is_active: i64, is_super_admin: i64, role_id: i64) -> OrmQuery !IO !Net !Time {
+    let cols: Vec<str> = vec_new()
     vec_push(cols, "email")
     vec_push(cols, "name")
     vec_push(cols, "password_hash")
@@ -115,7 +83,8 @@ fn user_create(db: OrmDb, email: str, name: str, password_hash: str, role: str, 
     vec_push(cols, "is_active")
     vec_push(cols, "is_super_admin")
     vec_push(cols, "role_id")
-    let vals = vec_new()
+    vec_push(cols, "created_at")
+    let vals: Vec<str> = vec_new()
     vec_push(vals, email)
     vec_push(vals, name)
     vec_push(vals, password_hash)
@@ -123,19 +92,18 @@ fn user_create(db: OrmDb, email: str, name: str, password_hash: str, role: str, 
     vec_push(vals, int_to_str(is_active))
     vec_push(vals, int_to_str(is_super_admin))
     vec_push(vals, int_to_str(role_id))
-    let nulls = vec_new()
-    vec_push(nulls, 0)
-    vec_push(nulls, 0)
-    vec_push(nulls, 0)
-    vec_push(nulls, 0)
-    vec_push(nulls, 0)
-    vec_push(nulls, 0)
-    vec_push(nulls, 0)
-    return orm_insert_returning_full(db, user_table(), cols, vals, nulls)?
+    vec_push(vals, kv_now_iso()?)
+    let nulls: Vec<i64> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(cols) {
+        vec_push(nulls, 0)
+        i = i + 1
+    }
+    return kv_insert(db, user_table(), cols, vals, nulls)?
 }
 
 fn user_delete(db: OrmDb, id: i64) -> OrmExec !IO !Net {
-    return orm_delete_by_id(db, user_table(), id)?
+    return kv_delete_by_id(db, user_table(), id)?
 }
 
 fn user_list_json(q: OrmQuery) -> JObj {

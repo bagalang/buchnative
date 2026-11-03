@@ -1,7 +1,7 @@
 // models/role.baga — роли и права (permissions е JSON текст).
 
 import "ormbaga/orm.baga"
-import "ormbaga/sql.baga"
+import "kvtime.baga"
 import "fmrbaga/jsonx.baga"
 import "pgbaga/pg.baga"
 import "std/str/str.baga"
@@ -20,11 +20,17 @@ fn role_backend_boila() -> i64 !IO {
 }
 
 fn role_next_id(db: OrmDb) -> OrmCount !IO !Net {
-    return orm_count_sql(db, "SELECT MAX(id) AS count FROM roles")?
+    return kv_count_sql(db, "SELECT MAX(id) AS count FROM roles")?
 }
 
-fn role_select_sql() -> str {
-    return "SELECT id, name, description, permissions, created_at FROM roles"
+fn role_cols() -> Vec<str> {
+    let c: Vec<str> = vec_new()
+    vec_push(c, "id")
+    vec_push(c, "name")
+    vec_push(c, "description")
+    vec_push(c, "permissions")
+    vec_push(c, "created_at")
+    return c
 }
 
 fn role_to_json(q: OrmQuery, row: i64) -> JObj {
@@ -42,63 +48,38 @@ fn role_to_json(q: OrmQuery, row: i64) -> JObj {
 }
 
 fn role_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
-    let sql = concat(role_select_sql(), " WHERE id = $1")
-    let vals = vec_new()
-    let nulls = vec_new()
-    pg_param_i64(vals, nulls, id)
-    return orm_query_params(db, sql, vals, nulls)?
+    return kv_select_by_id(db, role_table(), id, role_cols())?
 }
 
 fn role_all(db: OrmDb) -> OrmQuery !IO !Net {
-    return orm_query(db, concat(role_select_sql(), " ORDER BY name"))?
+    return kv_select_all_order(db, role_table(), "name", role_cols())?
 }
 
-fn role_create(db: OrmDb, name: str, description: str, permissions: str) -> OrmQuery !IO !Net {
+fn role_create(db: OrmDb, name: str, description: str, permissions: str) -> OrmQuery !IO !Net !Time {
     let mut perms = permissions
     if perms == "" {
         perms = "[]"
     }
-    if role_backend_boila()? == 1 {
-        let c = role_next_id(db)?
-        if orm_ok_c(c) == 0 {
-            return OrmQErr(OrmQueryFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
-        }
-        let nid = orm_count_n(c) + 1
-        let d = orm_db_c(c)
-        let cols = vec_new()
-        vec_push(cols, "id")
-        vec_push(cols, "name")
-        vec_push(cols, "description")
-        vec_push(cols, "permissions")
-        let vals = vec_new()
-        vec_push(vals, int_to_str(nid))
-        vec_push(vals, name)
-        vec_push(vals, description)
-        vec_push(vals, perms)
-        let nulls = vec_new()
-        vec_push(nulls, 0)
-        vec_push(nulls, 0)
-        vec_push(nulls, 0)
-        vec_push(nulls, 0)
-        return orm_insert_returning_full(d, role_table(), cols, vals, nulls)?
-    }
-    let cols = vec_new()
+    let cols: Vec<str> = vec_new()
     vec_push(cols, "name")
     vec_push(cols, "description")
     vec_push(cols, "permissions")
-    let vals = vec_new()
+    vec_push(cols, "created_at")
+    let vals: Vec<str> = vec_new()
     vec_push(vals, name)
     vec_push(vals, description)
     vec_push(vals, perms)
-    let nulls = vec_new()
+    vec_push(vals, kv_now_iso()?)
+    let nulls: Vec<i64> = vec_new()
     vec_push(nulls, 0)
     vec_push(nulls, 0)
     vec_push(nulls, 0)
-    return orm_insert_returning_full(db, role_table(), cols, vals, nulls)?
+    vec_push(nulls, 0)
+    return kv_insert(db, role_table(), cols, vals, nulls)?
 }
 
 fn role_delete(db: OrmDb, id: i64) -> OrmExec !IO !Net {
-    return orm_delete_by_id(db, role_table(), id)?
+    return kv_delete_by_id(db, role_table(), id)?
 }
 
 fn role_list_json(q: OrmQuery) -> JObj {

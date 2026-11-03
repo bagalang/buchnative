@@ -19,7 +19,7 @@ fn ob_backend_boila() -> i64 !IO {
 }
 
 fn ob_next_id(db: OrmDb) -> OrmCount !IO !Net {
-    return orm_count_sql(db, "SELECT MAX(id) AS count FROM opening_balances")?
+    return kv_count_sql(db, "SELECT MAX(id) AS count FROM opening_balances")?
 }
 
 // Нормална страна по българския сметкоплан (НСС класове 1–7).
@@ -110,57 +110,30 @@ fn ob_to_json(q: OrmQuery, row: i64) -> JObj {
     return o
 }
 
-fn ob_select_sql() -> str {
-    return "SELECT id, fiscal_year, account_id, debit, credit, counterpart_id, product_id, quantity, description FROM opening_balances"
+fn ob_cols() -> Vec<str> {
+    let c: Vec<str> = vec_new()
+    vec_push(c, "id")
+    vec_push(c, "fiscal_year")
+    vec_push(c, "account_id")
+    vec_push(c, "debit")
+    vec_push(c, "credit")
+    vec_push(c, "counterpart_id")
+    vec_push(c, "product_id")
+    vec_push(c, "quantity")
+    vec_push(c, "description")
+    return c
 }
 
 fn ob_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
-    let sql = concat(ob_select_sql(), " WHERE id = $1")
-    let vals = vec_new()
-    let nulls = vec_new()
-    pg_param_i64(vals, nulls, id)
-    return orm_query_params(db, sql, vals, nulls)?
+    return kv_select_by_id(db, ob_table(), id, ob_cols())?
 }
 
 fn ob_by_year(db: OrmDb, year: i64) -> OrmQuery !IO !Net {
-    let sql = concat(ob_select_sql(), " WHERE fiscal_year = $1 ORDER BY id")
-    let vals = vec_new()
-    let nulls = vec_new()
-    pg_param_i64(vals, nulls, year)
-    return orm_query_params(db, sql, vals, nulls)?
+    return kv_where_order(db, ob_table(), "fiscal_year", int_to_str(year), "id", ob_cols())?
 }
 
 fn ob_insert(db: OrmDb, fiscal_year: i64, account_id: i64, debit: str, credit: str, counterpart_id: i64, product_id: i64, quantity: str, description: str) -> OrmExec !IO !Net {
-    if ob_backend_boila()? == 1 {
-        let c = ob_next_id(db)?
-        if orm_ok_c(c) == 0 {
-            return OrmEErr(OrmExecFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
-        }
-        let nid = orm_count_n(c) + 1
-        let mut d = orm_db_c(c)
-        let cols = vec_new()
-        vec_push(cols, "id")
-        vec_push(cols, "fiscal_year")
-        vec_push(cols, "account_id")
-        vec_push(cols, "debit")
-        vec_push(cols, "credit")
-        vec_push(cols, "counterpart_id")
-        vec_push(cols, "product_id")
-        vec_push(cols, "quantity")
-        vec_push(cols, "description")
-        let vals = vec_new()
-        vec_push(vals, int_to_str(nid))
-        vec_push(vals, int_to_str(fiscal_year))
-        vec_push(vals, int_to_str(account_id))
-        vec_push(vals, debit)
-        vec_push(vals, credit)
-        vec_push(vals, int_to_str(counterpart_id))
-        vec_push(vals, int_to_str(product_id))
-        vec_push(vals, quantity)
-        vec_push(vals, description)
-        return orm_insert_strs(d, ob_table(), cols, vals)?
-    }
-    let cols = vec_new()
+    let cols: Vec<str> = vec_new()
     vec_push(cols, "fiscal_year")
     vec_push(cols, "account_id")
     vec_push(cols, "debit")
@@ -169,7 +142,7 @@ fn ob_insert(db: OrmDb, fiscal_year: i64, account_id: i64, debit: str, credit: s
     vec_push(cols, "product_id")
     vec_push(cols, "quantity")
     vec_push(cols, "description")
-    let vals = vec_new()
+    let vals: Vec<str> = vec_new()
     vec_push(vals, int_to_str(fiscal_year))
     vec_push(vals, int_to_str(account_id))
     vec_push(vals, debit)
@@ -178,9 +151,15 @@ fn ob_insert(db: OrmDb, fiscal_year: i64, account_id: i64, debit: str, credit: s
     vec_push(vals, int_to_str(product_id))
     vec_push(vals, quantity)
     vec_push(vals, description)
-    return orm_insert_strs(db, ob_table(), cols, vals)?
+    let nulls: Vec<i64> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(cols) {
+        vec_push(nulls, 0)
+        i = i + 1
+    }
+    return kv_insert_exec(db, ob_table(), cols, vals, nulls)?
 }
 
 fn ob_delete(db: OrmDb, id: i64) -> OrmExec !IO !Net {
-    return orm_delete_by_id(db, ob_table(), id)?
+    return kv_delete_by_id(db, ob_table(), id)?
 }

@@ -3,7 +3,7 @@
 // изведен от is_client/is_supplier — съхранението остава като два флага.
 
 import "ormbaga/orm.baga"
-import "ormbaga/sql.baga"
+import "kvtime.baga"
 import "fmrbaga/jsonx.baga"
 import "pgbaga/pg.baga"
 import "std/str/str.baga"
@@ -23,7 +23,7 @@ fn counterpart_backend_boila() -> i64 !IO {
 
 // Следващ PK: таблицата е създадена преди P20 (без BIGSERIAL). NULL max → 0.
 fn counterpart_next_id(db: OrmDb) -> OrmCount !IO !Net {
-    return orm_count_sql(db, "SELECT MAX(id) AS count FROM counterparts")?
+    return kv_count_sql(db, "SELECT MAX(id) AS count FROM counterparts")?
 }
 
 // Тип → флагове (customer/supplier/both → is_client/is_supplier).
@@ -81,98 +81,53 @@ fn counterpart_to_json(q: OrmQuery, row: i64) -> JObj {
     return o
 }
 
-// Dual-safe: без ::text кастове (граматиката на boila за кастове е по-тясна).
-fn counterpart_select_sql() -> str {
-    return "SELECT id, name, is_client, is_supplier, eik, vat_number, address, vies_address, city, country, post_code, street_name, building_number, address_building, additional_address_detail, address_type, region, contact_person, email, phone, company_id, created_at FROM counterparts"
+fn counterpart_cols() -> Vec<str> {
+    let c: Vec<str> = vec_new()
+    vec_push(c, "id")
+    vec_push(c, "name")
+    vec_push(c, "is_client")
+    vec_push(c, "is_supplier")
+    vec_push(c, "eik")
+    vec_push(c, "vat_number")
+    vec_push(c, "address")
+    vec_push(c, "vies_address")
+    vec_push(c, "city")
+    vec_push(c, "country")
+    vec_push(c, "post_code")
+    vec_push(c, "street_name")
+    vec_push(c, "building_number")
+    vec_push(c, "region")
+    vec_push(c, "address_building")
+    vec_push(c, "additional_address_detail")
+    vec_push(c, "address_type")
+    vec_push(c, "contact_person")
+    vec_push(c, "email")
+    vec_push(c, "phone")
+    vec_push(c, "company_id")
+    vec_push(c, "created_at")
+    return c
 }
 
 fn counterpart_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
-    let sql = concat(counterpart_select_sql(), " WHERE id = $1")
-    let vals = vec_new()
-    let nulls = vec_new()
-    pg_param_i64(vals, nulls, id)
-    return orm_query_params(db, sql, vals, nulls)?
+    return kv_select_by_id(db, counterpart_table(), id, counterpart_cols())?
 }
 
 fn counterpart_all(db: OrmDb) -> OrmQuery !IO !Net {
-    return orm_query(db, concat(counterpart_select_sql(), " ORDER BY id"))?
+    return kv_select_all_order(db, counterpart_table(), "id", counterpart_cols())?
 }
 
 fn counterpart_by_vat(db: OrmDb, vat_number: str) -> OrmQuery !IO !Net {
-    let sql = concat(counterpart_select_sql(), " WHERE vat_number = $1")
-    let vals = vec_new()
-    vec_push(vals, vat_number)
-    let nulls = vec_new()
-    vec_push(nulls, 0)
-    return orm_query_params(db, sql, vals, nulls)?
+    return kv_where_star(db, counterpart_table(), "vat_number", vat_number)?
 }
 
 fn counterpart_by_eik(db: OrmDb, eik: str) -> OrmQuery !IO !Net {
-    let sql = concat(counterpart_select_sql(), " WHERE eik = $1")
-    let vals = vec_new()
-    vec_push(vals, eik)
-    let nulls = vec_new()
-    vec_push(nulls, 0)
-    return orm_query_params(db, sql, vals, nulls)?
+    return kv_where_star(db, counterpart_table(), "eik", eik)?
 }
 
-fn counterpart_create(db: OrmDb, name: str, counterpart_type: str, eik: str, vat_number: str, address: str, vies_address: str, city: str, country: str, post_code: str, street_name: str, building_number: str, region: str, address_building: str, additional_address_detail: str, address_type: str, contact_person: str, email: str, phone: str, company_id: i64) -> OrmExec !IO !Net {
+fn counterpart_create(db: OrmDb, name: str, counterpart_type: str, eik: str, vat_number: str, address: str, vies_address: str, city: str, country: str, post_code: str, street_name: str, building_number: str, region: str, address_building: str, additional_address_detail: str, address_type: str, contact_person: str, email: str, phone: str, company_id: i64) -> OrmExec !IO !Net !Time {
     let ic = counterpart_is_client(counterpart_type)
     let is_ = counterpart_is_supplier(counterpart_type)
-    if counterpart_backend_boila()? == 1 {
-        let c = counterpart_next_id(db)?
-        if orm_ok_c(c) == 0 {
-            return OrmEErr(OrmExecFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
-        }
-        let nid = orm_count_n(c) + 1
-        let mut d = orm_db_c(c)
-        let cols = vec_new()
-        vec_push(cols, "id")
-        vec_push(cols, "name")
-        vec_push(cols, "is_client")
-        vec_push(cols, "is_supplier")
-        vec_push(cols, "eik")
-        vec_push(cols, "vat_number")
-        vec_push(cols, "address")
-        vec_push(cols, "vies_address")
-        vec_push(cols, "city")
-        vec_push(cols, "country")
-        vec_push(cols, "post_code")
-        vec_push(cols, "street_name")
-        vec_push(cols, "building_number")
-        vec_push(cols, "region")
-        vec_push(cols, "address_building")
-        vec_push(cols, "additional_address_detail")
-        vec_push(cols, "address_type")
-        vec_push(cols, "contact_person")
-        vec_push(cols, "email")
-        vec_push(cols, "phone")
-        vec_push(cols, "company_id")
-        let vals = vec_new()
-        vec_push(vals, int_to_str(nid))
-        vec_push(vals, name)
-        vec_push(vals, int_to_str(ic))
-        vec_push(vals, int_to_str(is_))
-        vec_push(vals, eik)
-        vec_push(vals, vat_number)
-        vec_push(vals, address)
-        vec_push(vals, vies_address)
-        vec_push(vals, city)
-        vec_push(vals, country)
-        vec_push(vals, post_code)
-        vec_push(vals, street_name)
-        vec_push(vals, building_number)
-        vec_push(vals, region)
-        vec_push(vals, address_building)
-        vec_push(vals, additional_address_detail)
-        vec_push(vals, address_type)
-        vec_push(vals, contact_person)
-        vec_push(vals, email)
-        vec_push(vals, phone)
-        vec_push(vals, int_to_str(company_id))
-        return orm_insert_strs(d, counterpart_table(), cols, vals)?
-    }
-    let cols = vec_new()
+    let cols: Vec<str> = vec_new()
     vec_push(cols, "name")
     vec_push(cols, "is_client")
     vec_push(cols, "is_supplier")
@@ -193,7 +148,8 @@ fn counterpart_create(db: OrmDb, name: str, counterpart_type: str, eik: str, vat
     vec_push(cols, "email")
     vec_push(cols, "phone")
     vec_push(cols, "company_id")
-    let vals = vec_new()
+    vec_push(cols, "created_at")
+    let vals: Vec<str> = vec_new()
     vec_push(vals, name)
     vec_push(vals, int_to_str(ic))
     vec_push(vals, int_to_str(is_))
@@ -214,11 +170,18 @@ fn counterpart_create(db: OrmDb, name: str, counterpart_type: str, eik: str, vat
     vec_push(vals, email)
     vec_push(vals, phone)
     vec_push(vals, int_to_str(company_id))
-    return orm_insert_strs(db, counterpart_table(), cols, vals)?
+    vec_push(vals, kv_now_iso()?)
+    let nulls: Vec<i64> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(cols) {
+        vec_push(nulls, 0)
+        i = i + 1
+    }
+    return kv_insert_exec(db, counterpart_table(), cols, vals, nulls)?
 }
 
 fn counterpart_delete(db: OrmDb, id: i64) -> OrmExec !IO !Net {
-    return orm_delete_by_id(db, counterpart_table(), id)?
+    return kv_delete_by_id(db, counterpart_table(), id)?
 }
 
 fn counterpart_list_json_co(q: OrmQuery, cid: i64) -> JObj {

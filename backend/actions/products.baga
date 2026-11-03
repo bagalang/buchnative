@@ -105,7 +105,7 @@ fn act_products_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     return act_ok(orm_db_q(q), o)
 }
 
-fn act_products_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_products_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let auth = act_require_perm(ctx, db, "accounting:write")?
     if auth.ok == 0 {
         return auth.out

@@ -19,7 +19,7 @@ fn aper_backend_boila() -> i64 !IO {
 }
 
 fn aper_next_id(db: OrmDb) -> OrmCount !IO !Net {
-    return orm_count_sql(db, "SELECT MAX(id) AS count FROM accounting_periods")?
+    return kv_count_sql(db, "SELECT MAX(id) AS count FROM accounting_periods")?
 }
 
 fn aper_to_json(q: OrmQuery, row: i64) -> JObj {
@@ -33,55 +33,41 @@ fn aper_to_json(q: OrmQuery, row: i64) -> JObj {
     return o
 }
 
-fn aper_select_sql() -> str {
-    return "SELECT id, year, month, status, closed_at, notes FROM accounting_periods"
+fn aper_cols() -> Vec<str> {
+    let c: Vec<str> = vec_new()
+    vec_push(c, "id")
+    vec_push(c, "year")
+    vec_push(c, "month")
+    vec_push(c, "status")
+    vec_push(c, "closed_at")
+    vec_push(c, "notes")
+    return c
 }
 
 fn aper_by_year(db: OrmDb, year: i64) -> OrmQuery !IO !Net {
-    let sql = concat(aper_select_sql(), " WHERE year = $1 ORDER BY month")
-    let vals = vec_new()
-    let nulls = vec_new()
-    pg_param_i64(vals, nulls, year)
-    return orm_query_params(db, sql, vals, nulls)?
+    return kv_where_order(db, aper_table(), "year", int_to_str(year), "month", aper_cols())?
 }
 
 fn aper_insert(db: OrmDb, year: i64, month: i64, status: str, closed_at: str, notes: str) -> OrmExec !IO !Net {
-    if aper_backend_boila()? == 1 {
-        let c = aper_next_id(db)?
-        if orm_ok_c(c) == 0 {
-            return OrmEErr(OrmExecFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
-        }
-        let nid = orm_count_n(c) + 1
-        let mut d = orm_db_c(c)
-        let cols = vec_new()
-        vec_push(cols, "id")
-        vec_push(cols, "year")
-        vec_push(cols, "month")
-        vec_push(cols, "status")
-        vec_push(cols, "closed_at")
-        vec_push(cols, "notes")
-        let vals = vec_new()
-        vec_push(vals, int_to_str(nid))
-        vec_push(vals, int_to_str(year))
-        vec_push(vals, int_to_str(month))
-        vec_push(vals, status)
-        vec_push(vals, closed_at)
-        vec_push(vals, notes)
-        return orm_insert_strs(d, aper_table(), cols, vals)?
-    }
-    let cols = vec_new()
+    let cols: Vec<str> = vec_new()
     vec_push(cols, "year")
     vec_push(cols, "month")
     vec_push(cols, "status")
     vec_push(cols, "closed_at")
     vec_push(cols, "notes")
-    let vals = vec_new()
+    let vals: Vec<str> = vec_new()
     vec_push(vals, int_to_str(year))
     vec_push(vals, int_to_str(month))
     vec_push(vals, status)
     vec_push(vals, closed_at)
     vec_push(vals, notes)
-    return orm_insert_strs(db, aper_table(), cols, vals)?
+    let nulls: Vec<i64> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(cols) {
+        vec_push(nulls, 0)
+        i = i + 1
+    }
+    return kv_insert_exec(db, aper_table(), cols, vals, nulls)?
 }
 
 fn aper_list_json(q: OrmQuery, year: i64) -> JObj {

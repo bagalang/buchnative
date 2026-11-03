@@ -70,7 +70,7 @@ fn auth_issue_mfa(ctx: FmrCtx, db: OrmDb, sub: str) -> FmrOut !Time !IO {
     return act_ok(db, o)
 }
 
-fn auth_provision_superadmin(db: OrmDb) -> FmrOut !IO !Net {
+fn auth_provision_superadmin(db: OrmDb) -> FmrOut !IO !Net !Time {
     let sub = auth_default_sub()
     let hash = user_hash_password(sub, auth_default_pass())
     let uq = user_by_email(db, sub)?

@@ -3,7 +3,7 @@
 // подават се като стрингове за точност (без float загуби).
 
 import "ormbaga/orm.baga"
-import "ormbaga/sql.baga"
+import "kvtime.baga"
 import "fmrbaga/jsonx.baga"
 import "pgbaga/pg.baga"
 import "std/str/str.baga"
@@ -23,7 +23,7 @@ fn product_backend_boila() -> i64 !IO {
 
 // Следващ PK: таблицата е създадена преди P20 (без BIGSERIAL). NULL max → 0.
 fn product_next_id(db: OrmDb) -> OrmCount !IO !Net {
-    return orm_count_sql(db, "SELECT MAX(id) AS count FROM products")?
+    return kv_count_sql(db, "SELECT MAX(id) AS count FROM products")?
 }
 
 fn product_to_json(q: OrmQuery, row: i64) -> JObj {
@@ -56,23 +56,37 @@ fn product_to_json(q: OrmQuery, row: i64) -> JObj {
 }
 
 // Dual-safe: без ::text кастове (граматиката на boila за кастове е по-тясна).
-fn product_select_sql() -> str {
-    return "SELECT id, name, code, description, unit, price, cost_price, vat_rate, is_service, is_inventory, inventory_account_id, revenue_account_id, stock_quantity, stock_value, is_active, company_id, created_at FROM products"
+fn product_cols() -> Vec<str> {
+    let c: Vec<str> = vec_new()
+    vec_push(c, "id")
+    vec_push(c, "name")
+    vec_push(c, "code")
+    vec_push(c, "description")
+    vec_push(c, "unit")
+    vec_push(c, "price")
+    vec_push(c, "cost_price")
+    vec_push(c, "vat_rate")
+    vec_push(c, "is_service")
+    vec_push(c, "is_inventory")
+    vec_push(c, "inventory_account_id")
+    vec_push(c, "revenue_account_id")
+    vec_push(c, "stock_quantity")
+    vec_push(c, "stock_value")
+    vec_push(c, "is_active")
+    vec_push(c, "company_id")
+    vec_push(c, "created_at")
+    return c
 }
 
 fn product_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
-    let sql = concat(product_select_sql(), " WHERE id = $1")
-    let vals = vec_new()
-    let nulls = vec_new()
-    pg_param_i64(vals, nulls, id)
-    return orm_query_params(db, sql, vals, nulls)?
+    return kv_select_by_id(db, product_table(), id, product_cols())?
 }
 
 fn product_all(db: OrmDb) -> OrmQuery !IO !Net {
-    return orm_query(db, concat(product_select_sql(), " ORDER BY id"))?
+    return kv_select_all_order(db, product_table(), "id", product_cols())?
 }
 
-fn product_cols() -> Vec<str> {
+fn product_ins_cols() -> Vec<str> {
     let cols = vec_new()
     vec_push(cols, "name")
     vec_push(cols, "code")
@@ -112,37 +126,22 @@ fn product_vals(name: str, code: str, description: str, unit: str, price: str, c
     return vals
 }
 
-fn product_create(db: OrmDb, name: str, code: str, description: str, unit: str, price: str, cost_price: str, vat_rate: str, is_service: i64, is_inventory: i64, inventory_account_id: i64, revenue_account_id: i64, stock_quantity: str, stock_value: str, is_active: i64, company_id: i64) -> OrmExec !IO !Net {
-    if product_backend_boila()? == 1 {
-        let c = product_next_id(db)?
-        if orm_ok_c(c) == 0 {
-            return OrmEErr(OrmExecFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
-        }
-        let nid = orm_count_n(c) + 1
-        let mut d = orm_db_c(c)
-        let cols = product_cols()
-        let head = vec_new()
-        vec_push(head, "id")
-        let mut i: i64 = 0
-        while i < vec_len(cols) {
-            vec_push(head, vec_get(cols, i))
-            i = i + 1
-        }
-        let body = product_vals(name, code, description, unit, price, cost_price, vat_rate, is_service, is_inventory, inventory_account_id, revenue_account_id, stock_quantity, stock_value, is_active, company_id)
-        let vals = vec_new()
-        vec_push(vals, int_to_str(nid))
-        i = 0
-        while i < vec_len(body) {
-            vec_push(vals, vec_get(body, i))
-            i = i + 1
-        }
-        return orm_insert_strs(d, product_table(), head, vals)?
+fn product_create(db: OrmDb, name: str, code: str, description: str, unit: str, price: str, cost_price: str, vat_rate: str, is_service: i64, is_inventory: i64, inventory_account_id: i64, revenue_account_id: i64, stock_quantity: str, stock_value: str, is_active: i64, company_id: i64) -> OrmExec !IO !Net !Time {
+    let cols = product_ins_cols()
+    vec_push(cols, "created_at")
+    let vals = product_vals(name, code, description, unit, price, cost_price, vat_rate, is_service, is_inventory, inventory_account_id, revenue_account_id, stock_quantity, stock_value, is_active, company_id)
+    vec_push(vals, kv_now_iso()?)
+    let nulls: Vec<i64> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(cols) {
+        vec_push(nulls, 0)
+        i = i + 1
     }
-    return orm_insert_strs(db, product_table(), product_cols(), product_vals(name, code, description, unit, price, cost_price, vat_rate, is_service, is_inventory, inventory_account_id, revenue_account_id, stock_quantity, stock_value, is_active, company_id))?
+    return kv_insert_exec(db, product_table(), cols, vals, nulls)?
 }
 
 fn product_delete(db: OrmDb, id: i64) -> OrmExec !IO !Net {
-    return orm_delete_by_id(db, product_table(), id)?
+    return kv_delete_by_id(db, product_table(), id)?
 }
 
 fn product_set_stock(db: OrmDb, id: i64, qty: str, value: str, cost_price: str) -> OrmExec !IO !Net {
@@ -154,7 +153,7 @@ fn product_set_stock(db: OrmDb, id: i64, qty: str, value: str, cost_price: str) 
     vec_push(vals, qty)
     vec_push(vals, value)
     vec_push(vals, cost_price)
-    return orm_update_by_id(db, product_table(), id, cols, vals)?
+    return kv_update_strs(db, product_table(), id, cols, vals)?
 }
 
 fn product_list_json_co(q: OrmQuery, cid: i64) -> JObj {
