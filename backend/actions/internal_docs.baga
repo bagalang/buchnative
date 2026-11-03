@@ -1,0 +1,434 @@
+// actions/internal_docs.baga — CRUD на приемо-предавателен протокол.
+// Потвърждението е в internal_docs_confirm.baga (filesize gate).
+
+import "../models/internal_doc.baga"
+import "../models/document_series.baga"
+import "../models/product.baga"
+import "../models/inventory.baga"
+import "inventory.baga"
+import "document_series.baga"
+import "txn.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/json/json.baga"
+import "std/str/str.baga"
+import "bagadecimal/src/decimal.baga"
+
+fn idoc_auto_number(db: OrmDb) -> str !IO !Net {
+    let nq = idoc_numbers(db)?
+    if orm_ok_q(nq) == 0 {
+        return invoice_pad(1, 10)
+    }
+    let mut mx = idoc_max_number(nq)
+    let mut d = orm_db_q(nq)
+    let cid = dser_company_id(d)?
+    let mut pad: i64 = 10
+    let mut start: i64 = 1
+    if cid > 0 {
+        let sq = dser_by_company(d, cid)?
+        if orm_ok_q(sq) == 1 {
+            let row = dser_find_for_type(sq, "internal")
+            if row >= 0 {
+                pad = orm_cell_by_i64(sq, row, "pad_width")
+                start = orm_cell_by_i64(sq, row, "start_number")
+            }
+        }
+    }
+    if pad <= 0 { pad = 10 }
+    if start <= 0 { start = 1 }
+    if mx < start - 1 {
+        mx = start - 1
+    }
+    return invoice_pad(mx + 1, pad)
+}
+
+fn idoc_parse_lines(db: OrmDb, b: JBody, doc_id: i64) -> InvResult !IO !Net {
+    let lines_node = json_get(b.doc, b.root, "lines")
+    if lines_node < 0 || json_tag(b.doc, lines_node) != 5 {
+        return inv_err(db, "lines е задължителен масив")
+    }
+    let n = json_count(b.doc, lines_node)
+    if n < 1 {
+        return inv_err(db, "протоколът трябва да има поне един ред")
+    }
+    let mut db2 = db
+    let mut i: i64 = 0
+    while i < n {
+        let elem = json_at(b.doc, lines_node, i)
+        if json_tag(b.doc, elem) != 6 {
+            return inv_err(db2, "lines[i] трябва да е обект")
+        }
+        let kind = jopt_str(b.doc, elem, "line_kind", "product")
+        if kind.val != "product" && kind.val != "fixed_asset" {
+            return inv_err(db2, "line_kind трябва да е product или fixed_asset")
+        }
+        let pid = jreq_i64(b.doc, elem, "product_id")
+        let mut product_id: i64 = 0
+        if pid.present == 1 {
+            if pid.ok == 0 {
+                return inv_err(db2, "невалиден product_id")
+            }
+            product_id = pid.num
+        }
+        let aid = jreq_i64(b.doc, elem, "asset_id")
+        let mut asset_id: i64 = 0
+        if aid.present == 1 {
+            if aid.ok == 0 {
+                return inv_err(db2, "невалиден asset_id")
+            }
+            asset_id = aid.num
+        }
+        if kind.val == "product" {
+            if product_id <= 0 {
+                return inv_err(db2, "артикулният ред изисква product_id")
+            }
+        } else {
+            if asset_id <= 0 {
+                return inv_err(db2, "редът за ДМА изисква asset_id")
+            }
+        }
+        let quantity = jopt_str(b.doc, elem, "quantity", "1")
+        let unit_cost = jopt_str(b.doc, elem, "unit_cost", "0")
+        let amount = jopt_str(b.doc, elem, "amount", "0")
+        let description = jopt_str(b.doc, elem, "description", "")
+        let ins = idoc_line_insert(db2, doc_id, kind.val, product_id, asset_id, quantity.val, unit_cost.val, amount.val, description.val)?
+        if orm_ok(ins) == 0 {
+            return inv_err(orm_db_exec(ins), orm_err_exec(ins))
+        }
+        db2 = orm_db_exec(ins)
+        i = i + 1
+    }
+    return inv_ok(db2, "")
+}
+
+fn act_idoc_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let q = idoc_all(db)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    return act_ok(orm_db_q(q), idoc_list_json(q))
+}
+
+fn act_idoc_next_number(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let number = idoc_auto_number(db)?
+    let mut o = jobj_new()
+    o = jobj_str(o, "number", number)
+    return act_ok(db, o)
+}
+
+fn act_idoc_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let from_id = jreq_i64(b.doc, b.root, "from_location_id")
+    if from_id.ok == 0 {
+        return act_422_field(db, "from_location_id", from_id)
+    }
+    let to_id = jreq_i64(b.doc, b.root, "to_location_id")
+    if to_id.ok == 0 {
+        return act_422_field(db, "to_location_id", to_id)
+    }
+    if from_id.num == to_id.num {
+        return act_err(db, 422, "обектът-източник и обектът-приемник трябва да са различни")
+    }
+    let doc_date = jreq_str(b.doc, b.root, "doc_date")
+    if doc_date.ok == 0 {
+        return act_422_field(db, "doc_date", doc_date)
+    }
+    let number_in = jopt_str(b.doc, b.root, "number", "")
+    let notes = jopt_str(b.doc, b.root, "notes", "")
+    let handed_by = jopt_str(b.doc, b.root, "handed_by", "")
+    let received_by = jopt_str(b.doc, b.root, "received_by", "")
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let mut number = number_in.val
+    if number == "" {
+        number = idoc_auto_number(db)?
+    }
+    let bgn = bb_begin(db)?
+    if orm_ok(bgn) == 0 {
+        return act_err(orm_db_exec(bgn), 500, orm_err_exec(bgn))
+    }
+    let mut db2 = orm_db_exec(bgn)
+    let hq = idoc_insert(db2, number, doc_date.val, from_id.num, to_id.num, notes.val, handed_by.val, received_by.val)?
+    if orm_ok_q(hq) == 0 || orm_nrows(hq) < 1 {
+        return act_err_rb(orm_db_q(hq), 500, "insert failed")
+    }
+    let new_id = orm_cell_by_i64(hq, 0, "id")
+    db2 = orm_db_q(hq)
+    let pl = idoc_parse_lines(db2, b, new_id)?
+    if pl.ok == 0 {
+        return act_err_rb(pl.db, 422, pl.err)
+    }
+    db2 = pl.db
+    let cmt = bb_commit(db2)?
+    if orm_ok(cmt) == 0 {
+        return act_err_rb(orm_db_exec(cmt), 500, orm_err_exec(cmt))
+    }
+    db2 = orm_db_exec(cmt)
+    let q = idoc_find(db2, new_id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_err(orm_db_q(q), 500, "row missing after create")
+    }
+    let mut o = idoc_to_json(q, 0)
+    let lq = idoc_lines_by_doc(orm_db_q(q), new_id)?
+    o = jobj_arr(o, "lines", idoc_lines_list_json(lq))
+    return act_created(orm_db_q(lq), o)
+}
+
+fn act_idoc_show(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let q = idoc_find(db, id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "Internal document not found")
+    }
+    let mut o = idoc_to_json(q, 0)
+    let lq = idoc_lines_by_doc(orm_db_q(q), id)?
+    o = jobj_arr(o, "lines", idoc_lines_list_json(lq))
+    return act_ok(orm_db_q(lq), o)
+}
+
+fn act_idoc_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let q0 = idoc_find(db, id)?
+    if orm_ok_q(q0) == 0 {
+        return act_err(orm_db_q(q0), 500, orm_err_q(q0))
+    }
+    if orm_nrows(q0) < 1 {
+        return act_404(orm_db_q(q0), "Internal document not found")
+    }
+    if orm_cell_by(q0, 0, "status") != "draft" {
+        return act_err(orm_db_q(q0), 409, "потвърденият протокол не се редактира")
+    }
+    let mut dbu = orm_db_q(q0)
+    let cols = vec_new()
+    let vals = vec_new()
+    let number = jreq_str(b.doc, b.root, "number")
+    if number.present == 1 {
+        if number.ok == 0 { return act_422_field(dbu, "number", number) }
+        vec_push(cols, "number")
+        vec_push(vals, number.val)
+    }
+    let doc_date = jreq_str(b.doc, b.root, "doc_date")
+    if doc_date.present == 1 {
+        if doc_date.ok == 0 { return act_422_field(dbu, "doc_date", doc_date) }
+        vec_push(cols, "doc_date")
+        vec_push(vals, doc_date.val)
+    }
+    let notes = jreq_str(b.doc, b.root, "notes")
+    if notes.present == 1 {
+        if notes.ok == 0 { return act_422_field(dbu, "notes", notes) }
+        vec_push(cols, "notes")
+        vec_push(vals, notes.val)
+    }
+    let handed_by = jreq_str(b.doc, b.root, "handed_by")
+    if handed_by.present == 1 {
+        if handed_by.ok == 0 { return act_422_field(dbu, "handed_by", handed_by) }
+        vec_push(cols, "handed_by")
+        vec_push(vals, handed_by.val)
+    }
+    let received_by = jreq_str(b.doc, b.root, "received_by")
+    if received_by.present == 1 {
+        if received_by.ok == 0 { return act_422_field(dbu, "received_by", received_by) }
+        vec_push(cols, "received_by")
+        vec_push(vals, received_by.val)
+    }
+    let from_id = jreq_i64(b.doc, b.root, "from_location_id")
+    if from_id.present == 1 {
+        if from_id.ok == 0 { return act_422_field(dbu, "from_location_id", from_id) }
+        vec_push(cols, "from_location_id")
+        vec_push(vals, int_to_str(from_id.num))
+    }
+    let to_id = jreq_i64(b.doc, b.root, "to_location_id")
+    if to_id.present == 1 {
+        if to_id.ok == 0 { return act_422_field(dbu, "to_location_id", to_id) }
+        vec_push(cols, "to_location_id")
+        vec_push(vals, int_to_str(to_id.num))
+    }
+    let lines_node = json_get(b.doc, b.root, "lines")
+    let mut has_lines: i64 = 0
+    if lines_node >= 0 && json_tag(b.doc, lines_node) == 5 {
+        has_lines = 1
+    }
+    let bgn = bb_begin(dbu)?
+    if orm_ok(bgn) == 0 {
+        return act_err(orm_db_exec(bgn), 500, orm_err_exec(bgn))
+    }
+    dbu = orm_db_exec(bgn)
+    if vec_len(cols) > 0 {
+        let upd = orm_update_by_id(dbu, idoc_table(), id, cols, vals)?
+        if orm_ok(upd) == 0 {
+            return act_err_rb(orm_db_exec(upd), 500, orm_err_exec(upd))
+        }
+        dbu = orm_db_exec(upd)
+    }
+    if has_lines == 1 {
+        let dl = idoc_delete_lines(dbu, id)?
+        if orm_ok(dl) == 0 {
+            return act_err_rb(orm_db_exec(dl), 500, orm_err_exec(dl))
+        }
+        dbu = orm_db_exec(dl)
+        let pl = idoc_parse_lines(dbu, b, id)?
+        if pl.ok == 0 {
+            return act_err_rb(pl.db, 422, pl.err)
+        }
+        dbu = pl.db
+    }
+    let cmt = bb_commit(dbu)?
+    if orm_ok(cmt) == 0 {
+        return act_err_rb(orm_db_exec(cmt), 500, orm_err_exec(cmt))
+    }
+    dbu = orm_db_exec(cmt)
+    let q = idoc_find(dbu, id)?
+    let mut o = idoc_to_json(q, 0)
+    let lq = idoc_lines_by_doc(orm_db_q(q), id)?
+    o = jobj_arr(o, "lines", idoc_lines_list_json(lq))
+    return act_ok(orm_db_q(lq), o)
+}
+
+fn act_idoc_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let q = idoc_find(db, id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "Internal document not found")
+    }
+    if orm_cell_by(q, 0, "status") != "draft" {
+        return act_err(orm_db_q(q), 409, "потвърденият протокол не се трие")
+    }
+    let dl = idoc_delete_lines(orm_db_q(q), id)?
+    if orm_ok(dl) == 0 {
+        return act_err(orm_db_exec(dl), 500, orm_err_exec(dl))
+    }
+    let del = idoc_delete(orm_db_exec(dl), id)?
+    if orm_ok(del) == 0 {
+        return act_err(orm_db_exec(del), 500, orm_err_exec(del))
+    }
+    return act_no_content(orm_db_exec(del))
+}
+
+fn act_inventory_at_location(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let loc_s = fmr_query(ctx, "location_id")
+    let location_id = parse_int(loc_s)
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let pq = product_all(db)?
+    if orm_ok_q(pq) == 0 {
+        return act_err(orm_db_q(pq), 500, orm_err_q(pq))
+    }
+    let lq = lot_all(orm_db_q(pq))?
+    if orm_ok_q(lq) == 0 {
+        return act_err(orm_db_q(lq), 500, orm_err_q(lq))
+    }
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(pq) {
+        if orm_cell_by_i64(pq, i, "is_inventory") == 1 {
+            let pid = orm_cell_by_i64(pq, i, "id")
+            let mut qty = dec_zero()
+            let mut j: i64 = 0
+            while j < orm_nrows(lq) {
+                if orm_cell_by_i64(lq, j, "product_id") == pid {
+                    if orm_cell_by_i64(lq, j, "location_id") == location_id {
+                        let rem = inv_dec_or_zero(orm_cell_by(lq, j, "quantity_remaining"))
+                        let a = dec_add(qty, rem)
+                        if a.ok == 1 {
+                            qty = a.value
+                        }
+                    }
+                }
+                j = j + 1
+            }
+            if dec_cmp(qty, dec_zero()) > 0 {
+                let mut o = jobj_new()
+                o = jobj_i64(o, "product_id", pid)
+                o = jobj_str(o, "name", orm_cell_by(pq, i, "name"))
+                o = jobj_str(o, "code", orm_cell_by(pq, i, "code"))
+                o = jobj_str(o, "unit", orm_cell_by(pq, i, "unit"))
+                o = jobj_str(o, "quantity", inv_qty(qty))
+                o = jobj_str(o, "unit_cost", orm_cell_by(pq, i, "cost_price"))
+                arr = jarr_obj(arr, o)
+            }
+        }
+        i = i + 1
+    }
+    let mut out = jobj_new()
+    out = jobj_raw(out, "items", jarr_encode(arr))
+    out = jobj_i64(out, "location_id", location_id)
+    return act_ok(orm_db_q(lq), out)
+}

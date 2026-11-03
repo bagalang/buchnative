@@ -1,0 +1,225 @@
+// actions/users.baga — потребители CRUD.
+
+import "../models/user.baga"
+import "acl.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/json/json.baga"
+
+fn act_users_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "user:read")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let q = user_all(db)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    return act_ok(orm_db_q(q), user_list_json(q))
+}
+
+fn act_users_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "user:create")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let email = jreq_str(b.doc, b.root, "email")
+    if email.ok == 0 {
+        return act_422_field(db, "email", email)
+    }
+    let name = jreq_str(b.doc, b.root, "name")
+    if name.ok == 0 {
+        return act_422_field(db, "name", name)
+    }
+    let password = jreq_str(b.doc, b.root, "password")
+    if password.ok == 0 || len(password.val) < 6 {
+        return act_err(db, 422, "паролата трябва да е поне 6 символа")
+    }
+    let role = jopt_str(b.doc, b.root, "role", "user")
+    let iv = jreq_bool(b.doc, b.root, "is_active")
+    let mut is_active: i64 = 1
+    if iv.present == 1 {
+        if iv.ok == 0 {
+            return act_422_field(db, "is_active", iv)
+        }
+        is_active = iv.num
+    }
+    let sa = jreq_bool(b.doc, b.root, "is_super_admin")
+    let mut is_super: i64 = 0
+    if sa.present == 1 {
+        if sa.ok == 0 {
+            return act_422_field(db, "is_super_admin", sa)
+        }
+        is_super = sa.num
+    }
+    let rid = jreq_i64(b.doc, b.root, "role_id")
+    let mut role_id: i64 = 0
+    if rid.present == 1 {
+        if rid.ok == 0 {
+            return act_422_field(db, "role_id", rid)
+        }
+        role_id = rid.num
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let hash = user_hash_password(email.val, password.val)
+    let ins = user_create(db, email.val, name.val, hash, role.val, is_active, is_super, role_id)?
+    if orm_ok_q(ins) == 0 || orm_nrows(ins) < 1 {
+        return act_err(orm_db_q(ins), 500, "user insert failed")
+    }
+    let new_id = orm_cell_by_i64(ins, 0, "id")
+    let q = user_find(orm_db_q(ins), new_id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_err(orm_db_q(q), 500, "user missing after create")
+    }
+    return act_created(orm_db_q(q), user_to_json(q, 0))
+}
+
+fn act_users_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "user:update")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let cols = vec_new()
+    let vals = vec_new()
+    let nulls = vec_new()
+    let email = jreq_str(b.doc, b.root, "email")
+    if email.present == 1 {
+        if email.ok == 0 {
+            return act_422_field(db, "email", email)
+        }
+        vec_push(cols, "email")
+        vec_push(vals, email.val)
+        vec_push(nulls, 0)
+    }
+    let name = jreq_str(b.doc, b.root, "name")
+    if name.present == 1 {
+        if name.ok == 0 {
+            return act_422_field(db, "name", name)
+        }
+        vec_push(cols, "name")
+        vec_push(vals, name.val)
+        vec_push(nulls, 0)
+    }
+    let role = jreq_str(b.doc, b.root, "role")
+    if role.present == 1 {
+        if role.ok == 0 {
+            return act_422_field(db, "role", role)
+        }
+        vec_push(cols, "role")
+        vec_push(vals, role.val)
+        vec_push(nulls, 0)
+    }
+    let iv = jreq_bool(b.doc, b.root, "is_active")
+    if iv.present == 1 {
+        if iv.ok == 0 {
+            return act_422_field(db, "is_active", iv)
+        }
+        vec_push(cols, "is_active")
+        vec_push(vals, int_to_str(iv.num))
+        vec_push(nulls, 0)
+    }
+    let sa = jreq_bool(b.doc, b.root, "is_super_admin")
+    if sa.present == 1 {
+        if sa.ok == 0 {
+            return act_422_field(db, "is_super_admin", sa)
+        }
+        vec_push(cols, "is_super_admin")
+        vec_push(vals, int_to_str(sa.num))
+        vec_push(nulls, 0)
+    }
+    let rid = jreq_i64(b.doc, b.root, "role_id")
+    if rid.present == 1 {
+        if rid.ok == 0 {
+            return act_422_field(db, "role_id", rid)
+        }
+        vec_push(cols, "role_id")
+        vec_push(vals, int_to_str(rid.num))
+        vec_push(nulls, 0)
+    }
+    let password = jreq_str(b.doc, b.root, "password")
+    if password.present == 1 && password.ok == 1 && password.val != "" {
+        let mut em = ""
+        if email.present == 1 {
+            em = email.val
+        } else {
+            if orm_ok_db(db) == 0 {
+                return act_err(db, 503, "database unavailable")
+            }
+            let uq = user_find(db, id)?
+            if orm_ok_q(uq) == 0 || orm_nrows(uq) < 1 {
+                return act_404(orm_db_q(uq), "User not found")
+            }
+            em = orm_cell_by(uq, 0, "email")
+            db = orm_db_q(uq)
+        }
+        vec_push(cols, "password_hash")
+        vec_push(vals, user_hash_password(em, password.val))
+        vec_push(nulls, 0)
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    if vec_len(cols) == 0 {
+        let q0 = user_find(db, id)?
+        if orm_ok_q(q0) == 0 || orm_nrows(q0) < 1 {
+            return act_404(orm_db_q(q0), "User not found")
+        }
+        return act_ok(orm_db_q(q0), user_to_json(q0, 0))
+    }
+    let upd = orm_update_by_id_full(db, user_table(), id, cols, vals, nulls)?
+    if orm_ok(upd) == 0 {
+        return act_err(orm_db_exec(upd), 500, orm_err_exec(upd))
+    }
+    let q = user_find(orm_db_exec(upd), id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "User not found")
+    }
+    return act_ok(orm_db_q(q), user_to_json(q, 0))
+}
+
+fn act_users_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "user:delete")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let del = user_delete(db, id)?
+    if orm_ok(del) == 0 {
+        return act_err(orm_db_exec(del), 500, orm_err_exec(del))
+    }
+    return act_no_content(orm_db_exec(del))
+}

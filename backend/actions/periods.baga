@@ -1,0 +1,214 @@
+// actions/periods.baga — отваряне/затваряне на счетоводен месец.
+// Липсващ ред = отворен. Затворен месец спира пост на фактура, ръчен запис,
+// амортизация и потвърждение на вътрешен документ.
+
+import "../models/accounting_period.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+struct PeriodChk {
+    ok: i64,
+    err: str,
+    db: OrmDb
+}
+
+fn period_chk_ok(db: OrmDb) -> PeriodChk {
+    return PeriodChk { ok: 1, err: "", db: db }
+}
+
+fn period_chk_err(db: OrmDb, err: str) -> PeriodChk {
+    return PeriodChk { ok: 0, err: err, db: db }
+}
+
+fn period_from_date(date: str) -> str {
+    if len(date) >= 7 {
+        return substr(date, 0, 7)
+    }
+    return date
+}
+
+fn period_parse_year(key: str) -> i64 {
+    if len(key) >= 4 {
+        return parse_int(substr(key, 0, 4))
+    }
+    return 0
+}
+
+fn period_parse_month(key: str) -> i64 {
+    if len(key) >= 7 {
+        return parse_int(substr(key, 5, 7))
+    }
+    return 0
+}
+
+fn period_assert_open(db: OrmDb, date_or_month: str) -> PeriodChk !IO !Net {
+    let key = period_from_date(date_or_month)
+    let year = period_parse_year(key)
+    let month = period_parse_month(key)
+    if year < 1 || month < 1 || month > 12 {
+        return period_chk_ok(db)
+    }
+    let q = aper_by_year(db, year)?
+    if orm_ok_q(q) == 0 {
+        return period_chk_err(orm_db_q(q), orm_err_q(q))
+    }
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        if orm_cell_by_i64(q, i, "month") == month {
+            if orm_cell_by(q, i, "status") == "closed" {
+                return period_chk_err(orm_db_q(q), concat("периодът ", concat(key, " е затворен")))
+            }
+        }
+        i = i + 1
+    }
+    return period_chk_ok(orm_db_q(q))
+}
+
+fn act_periods_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let ys = fmr_query(ctx, "year")
+    let mut year = parse_int(ys)
+    if year < 2000 {
+        year = 2026
+    }
+    let q = aper_by_year(db, year)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    return act_ok(orm_db_q(q), aper_list_json(q, year))
+}
+
+fn act_period_close(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let yf = jreq_i64(b.doc, b.root, "year")
+    if yf.ok == 0 {
+        return act_422_field(db, "year", yf)
+    }
+    let mf = jreq_i64(b.doc, b.root, "month")
+    if mf.ok == 0 {
+        return act_422_field(db, "month", mf)
+    }
+    if mf.num < 1 || mf.num > 12 {
+        return act_err(db, 422, "month трябва да е 1–12")
+    }
+    let notes = jopt_str(b.doc, b.root, "notes", "")
+    let closed_at = jopt_str(b.doc, b.root, "closed_at", "")
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let q = aper_by_year(db, yf.num)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let mut found: i64 = 0
+    let mut rid: i64 = 0
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        if orm_cell_by_i64(q, i, "month") == mf.num {
+            found = 1
+            rid = orm_cell_by_i64(q, i, "id")
+        }
+        i = i + 1
+    }
+    let mut db2 = orm_db_q(q)
+    if found == 1 {
+        let cols = vec_new()
+        vec_push(cols, "status")
+        vec_push(cols, "closed_at")
+        vec_push(cols, "notes")
+        let vals = vec_new()
+        vec_push(vals, "closed")
+        vec_push(vals, closed_at.val)
+        vec_push(vals, notes.val)
+        let up = orm_update_by_id(db2, aper_table(), rid, cols, vals)?
+        if orm_ok(up) == 0 {
+            return act_err(orm_db_exec(up), 500, orm_err_exec(up))
+        }
+        db2 = orm_db_exec(up)
+    } else {
+        let ins = aper_insert(db2, yf.num, mf.num, "closed", closed_at.val, notes.val)?
+        if orm_ok(ins) == 0 {
+            return act_err(orm_db_exec(ins), 500, orm_err_exec(ins))
+        }
+        db2 = orm_db_exec(ins)
+    }
+    let q2 = aper_by_year(db2, yf.num)?
+    return act_ok(orm_db_q(q2), aper_list_json(q2, yf.num))
+}
+
+fn act_period_reopen(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let yf = jreq_i64(b.doc, b.root, "year")
+    if yf.ok == 0 {
+        return act_422_field(db, "year", yf)
+    }
+    let mf = jreq_i64(b.doc, b.root, "month")
+    if mf.ok == 0 {
+        return act_422_field(db, "month", mf)
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let q = aper_by_year(db, yf.num)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let mut rid: i64 = 0
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        if orm_cell_by_i64(q, i, "month") == mf.num {
+            rid = orm_cell_by_i64(q, i, "id")
+        }
+        i = i + 1
+    }
+    let mut db2 = orm_db_q(q)
+    if rid > 0 {
+        let cols = vec_new()
+        vec_push(cols, "status")
+        vec_push(cols, "closed_at")
+        vec_push(cols, "notes")
+        let vals = vec_new()
+        vec_push(vals, "open")
+        vec_push(vals, "")
+        vec_push(vals, "")
+        let up = orm_update_by_id(db2, aper_table(), rid, cols, vals)?
+        if orm_ok(up) == 0 {
+            return act_err(orm_db_exec(up), 500, orm_err_exec(up))
+        }
+        db2 = orm_db_exec(up)
+    }
+    let q2 = aper_by_year(db2, yf.num)?
+    return act_ok(orm_db_q(q2), aper_list_json(q2, yf.num))
+}

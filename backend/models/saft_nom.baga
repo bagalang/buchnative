@@ -1,0 +1,163 @@
+// models/saft_nom.baga — SAF-T BG номенклатури (НАП Structure_Definition V1.0.1).
+// Кодовете са стандартни: няма таблица. Същото като units / vat-exemptions.
+
+import "saft_nom_movements.baga"
+import "saft_nom_docs.baga"
+import "saft_nom_tax_b.baga"
+import "saft_nom_accounts_b.baga"
+import "unit_catalog.baga"
+import "fmrbaga/jsonx.baga"
+import "std/str/str.baga"
+
+fn saft_nom_ascii_lower(s: str) -> str {
+    let mut out = ""
+    let mut i: i64 = 0
+    while i < len(s) {
+        let c = char_at(s, i)
+        if c >= 65 && c <= 90 {
+            out = concat(out, chr(c + 32))
+        } else {
+            out = concat(out, substr(s, i, i + 1))
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn saft_nom_at(p: Vec<str>, i: i64) -> str {
+    if i < vec_len(p) {
+        return vec_get(p, i)
+    }
+    return ""
+}
+
+fn saft_nom_known(kind: str) -> i64 {
+    if kind == "stock_movements" { return 1 }
+    if kind == "asset_movements" { return 1 }
+    if kind == "tax_regimes" { return 1 }
+    if kind == "payment_methods" { return 1 }
+    if kind == "invoice_types" { return 1 }
+    if kind == "tax_types" { return 1 }
+    if kind == "tax_codes" { return 1 }
+    if kind == "product_types" { return 1 }
+    if kind == "units" { return 1 }
+    if kind == "regions" { return 1 }
+    if kind == "accounts" { return 1 }
+    return 0
+}
+
+fn saft_nom_rows(kind: str) -> Vec<str> {
+    if kind == "stock_movements" { return saft_stock_movement_rows() }
+    if kind == "asset_movements" { return saft_asset_movement_rows() }
+    if kind == "tax_regimes" { return saft_tax_regime_rows() }
+    if kind == "payment_methods" { return saft_payment_method_rows() }
+    if kind == "invoice_types" { return saft_invoice_type_rows() }
+    if kind == "tax_types" { return saft_tax_type_rows() }
+    if kind == "tax_codes" { return saft_tax_code_rows() }
+    if kind == "product_types" { return saft_product_type_rows() }
+    if kind == "units" { return unit_catalog_rows() }
+    if kind == "regions" { return saft_region_rows() }
+    if kind == "accounts" { return saft_nra_account_rows() }
+    return vec_new()
+}
+
+fn saft_nom_parse(kind: str, line: str) -> JObj {
+    let p = str_split(line, "|")
+    let mut o = jobj_new()
+    if kind == "payment_methods" {
+        o = jobj_str(o, "method_code", saft_nom_at(p, 0))
+        o = jobj_str(o, "mechanism_code", saft_nom_at(p, 1))
+        o = jobj_str(o, "name", saft_nom_at(p, 2))
+        o = jobj_str(o, "name_en", saft_nom_at(p, 3))
+        return o
+    }
+    if kind == "tax_codes" {
+        o = jobj_str(o, "tax_type", saft_nom_at(p, 0))
+        o = jobj_str(o, "code", saft_nom_at(p, 1))
+        o = jobj_str(o, "description", saft_nom_at(p, 2))
+        o = jobj_str(o, "rate", saft_nom_at(p, 3))
+        o = jobj_str(o, "note", saft_nom_at(p, 4))
+        return o
+    }
+    if kind == "accounts" {
+        o = jobj_str(o, "code", saft_nom_at(p, 0))
+        o = jobj_str(o, "name", saft_nom_at(p, 1))
+        o = jobj_str(o, "section", saft_nom_at(p, 2))
+        o = jobj_str(o, "section_name", saft_nom_at(p, 3))
+        o = jobj_str(o, "group", saft_nom_at(p, 4))
+        o = jobj_str(o, "group_name", saft_nom_at(p, 5))
+        return o
+    }
+    if kind == "units" {
+        o = jobj_str(o, "code", saft_nom_at(p, 0))
+        o = jobj_str(o, "name", saft_nom_at(p, 1))
+        o = jobj_str(o, "name_en", saft_nom_at(p, 2))
+        o = jobj_str(o, "symbol", saft_nom_at(p, 3))
+        o = jobj_str(o, "category", saft_nom_at(p, 4))
+        o = jobj_str(o, "source", saft_nom_at(p, 5))
+        return o
+    }
+    if kind == "regions" || kind == "tax_types" {
+        o = jobj_str(o, "code", saft_nom_at(p, 0))
+        o = jobj_str(o, "name", saft_nom_at(p, 1))
+        return o
+    }
+    o = jobj_str(o, "code", saft_nom_at(p, 0))
+    o = jobj_str(o, "name", saft_nom_at(p, 1))
+    o = jobj_str(o, "name_en", saft_nom_at(p, 2))
+    return o
+}
+
+fn saft_nom_kind_obj(id: str, name: str) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_str(o, "id", id)
+    o = jobj_str(o, "name", name)
+    return o
+}
+
+fn saft_nom_kinds_json() -> JObj {
+    let mut arr = jarr_new()
+    arr = jarr_obj(arr, saft_nom_kind_obj("stock_movements", "Движения запаси"))
+    arr = jarr_obj(arr, saft_nom_kind_obj("asset_movements", "Движения активи"))
+    arr = jarr_obj(arr, saft_nom_kind_obj("tax_regimes", "Данъчни режими"))
+    arr = jarr_obj(arr, saft_nom_kind_obj("payment_methods", "Начини на плащане"))
+    arr = jarr_obj(arr, saft_nom_kind_obj("invoice_types", "Видове фактури"))
+    arr = jarr_obj(arr, saft_nom_kind_obj("tax_types", "Видове данъци"))
+    arr = jarr_obj(arr, saft_nom_kind_obj("tax_codes", "Данъчни кодове"))
+    arr = jarr_obj(arr, saft_nom_kind_obj("product_types", "Видове запаси"))
+    arr = jarr_obj(arr, saft_nom_kind_obj("units", "Мерни единици"))
+    arr = jarr_obj(arr, saft_nom_kind_obj("regions", "Области"))
+    arr = jarr_obj(arr, saft_nom_kind_obj("accounts", "Сметки НАП"))
+    let mut o = jobj_new()
+    o = jobj_raw(o, "kinds", jarr_encode(arr))
+    o = jobj_i64(o, "count", 11)
+    return o
+}
+
+fn saft_nom_list_json(kind: str, search: str) -> JObj {
+    let q = saft_nom_ascii_lower(str_trim(search))
+    let rows = saft_nom_rows(kind)
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    let mut count: i64 = 0
+    let n = vec_len(rows)
+    while i < n {
+        let line = vec_get(rows, i)
+        let mut ok: i64 = 1
+        if q != "" {
+            if str_find(saft_nom_ascii_lower(line), q) < 0 {
+                ok = 0
+            }
+        }
+        if ok == 1 {
+            arr = jarr_obj(arr, saft_nom_parse(kind, line))
+            count = count + 1
+        }
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "kind", kind)
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", count)
+    return o
+}

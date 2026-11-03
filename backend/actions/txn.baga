@@ -1,0 +1,31 @@
+// actions/txn.baga — BEGIN/COMMIT/ROLLBACK около многозаявъчни записи.
+// boilaDB P4: транзакцията е per-connection; грешка → ROLLBACK на буфера.
+
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+
+fn bb_begin(db: OrmDb) -> OrmExec !IO !Net {
+    return orm_begin(db)?
+}
+
+fn bb_commit(db: OrmDb) -> OrmExec !IO !Net {
+    return orm_commit(db)?
+}
+
+fn bb_rollback(db: OrmDb) -> OrmDb !IO !Net {
+    let r = orm_rollback(db)?
+    return orm_db_exec(r)
+}
+
+fn act_err_rb(db: OrmDb, status: i64, detail: str) -> FmrOut !IO !Net {
+    return act_err(bb_rollback(db)?, status, detail)
+}
+
+fn act_422_field_rb(db: OrmDb, field: str, f: JField) -> FmrOut !IO !Net {
+    return act_422_field(bb_rollback(db)?, field, f)
+}
+
+fn act_404_rb(db: OrmDb, detail: str) -> FmrOut !IO !Net {
+    return act_404(bb_rollback(db)?, detail)
+}

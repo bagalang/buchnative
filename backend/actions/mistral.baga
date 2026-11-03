@@ -1,0 +1,275 @@
+// actions/mistral.baga — Mistral AI през ключа в companies.settings.
+// Адресът се дели към SAF-T AddressStructure. Модел: Mistral Small 4.
+// OCR на документи е в mistral_ocr.baga.
+
+import "../models/setting.baga"
+import "../models/company.baga"
+import "../models/addr_saft.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/json/json.baga"
+import "std/net/http_client.baga"
+import "std/crypto/pkey.baga"
+import "std/os/os.baga"
+import "std/str/str.baga"
+
+struct AddrParts {
+    ok: i64,
+    street_name: str,
+    building_number: str,
+    address_building: str,
+    additional_address_detail: str,
+    city: str,
+    post_code: str,
+    region: str,
+    country: str,
+    address_type: str
+}
+
+struct MistralKey {
+    db: OrmDb,
+    key: str
+}
+
+fn addr_parts_empty() -> AddrParts {
+    return AddrParts {
+        ok: 0,
+        street_name: "",
+        building_number: "",
+        address_building: "",
+        additional_address_detail: "",
+        city: "",
+        post_code: "",
+        region: "",
+        country: "",
+        address_type: ""
+    }
+}
+
+// Mistral Small 4 (mistral-small-2603). ЕС оператор, JSON схема за адрес.
+fn mistral_parse_model() -> str {
+    return "mistral-small-2603"
+}
+
+fn mistral_chat_url() -> str {
+    return "https://api.mistral.ai/v1/chat/completions"
+}
+
+// Google Trust Services WE1 — издателят на листовия сертификат на
+// api.mistral.ai (клиентът пази само листото). При ротация:
+// BUCHNATIVE_MISTRAL_ANCHOR_FILE=<pem път>.
+fn mistral_anchor_pem() -> str {
+    return "-----BEGIN CERTIFICATE-----\nMIICnzCCAiWgAwIBAgIQf/MZd5csIkp2FV0TttaF4zAKBggqhkjOPQQDAzBHMQsw\nCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEU\nMBIGA1UEAxMLR1RTIFJvb3QgUjQwHhcNMjMxMjEzMDkwMDAwWhcNMjkwMjIwMTQw\nMDAwWjA7MQswCQYDVQQGEwJVUzEeMBwGA1UEChMVR29vZ2xlIFRydXN0IFNlcnZp\nY2VzMQwwCgYDVQQDEwNXRTEwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARvzTr+\nZ1dHTCEDhUDCR127WEcPQMFcF4XGGTfn1XzthkubgdnXGhOlCgP4mMTG6J7/EFmP\nLCaY9eYmJbsPAvpWo4H+MIH7MA4GA1UdDwEB/wQEAwIBhjAdBgNVHSUEFjAUBggr\nBgEFBQcDAQYIKwYBBQUHAwIwEgYDVR0TAQH/BAgwBgEB/wIBADAdBgNVHQ4EFgQU\nkHeSNWfE/6jMqeZ72YB5e8yT+TgwHwYDVR0jBBgwFoAUgEzW63T/STaj1dj8tT7F\navCUHYwwNAYIKwYBBQUHAQEEKDAmMCQGCCsGAQUFBzAChhhodHRwOi8vaS5wa2ku\nZ29vZy9yNC5jcnQwKwYDVR0fBCQwIjAgoB6gHIYaaHR0cDovL2MucGtpLmdvb2cv\nci9yNC5jcmwwEwYDVR0gBAwwCjAIBgZngQwBAgEwCgYIKoZIzj0EAwMDaAAwZQIx\nAOcCq1HW90OVznX+0RGU1cxAQXomvtgM8zItPZCuFQ8jSBJSjz5keROv9aYsAm5V\nsQIwJonMaAFi54mrfhfoFNZEfuNMSQ6/bIBiNLiyoX46FohQvKeIoJ99cx7sUkFN\n7uJW\n-----END CERTIFICATE-----\n"
+}
+
+fn mistral_anchor_der() -> bytes !IO {
+    let f = env("BUCHNATIVE_MISTRAL_ANCHOR_FILE")?
+    if f != "" {
+        if file_readable(f)? == 1 {
+            let pem = read_file(f)?
+            return pem_der_block(pem, "CERTIFICATE")
+        }
+    }
+    return pem_der_block(mistral_anchor_pem(), "CERTIFICATE")
+}
+
+fn mistral_key_from_settings(raw: str) -> str {
+    if raw == "" {
+        return ""
+    }
+    let body = jbody_parse_str(raw)
+    if body.ok == 0 {
+        return ""
+    }
+    return str_trim(jopt_str(body.doc, body.root, "mistral_api_key", "").val)
+}
+
+fn company_mistral_key(db: OrmDb, sub: str) -> MistralKey !IO !Net {
+    let skey = concat("активна_фирма:", sub)
+    let q = setting_get_by_key(db, skey)?
+    if orm_ok_q(q) == 0 {
+        return MistralKey { db: orm_db_q(q), key: "" }
+    }
+    if orm_nrows(q) < 1 {
+        return MistralKey { db: orm_db_q(q), key: "" }
+    }
+    let val = orm_cell_by(q, 0, "value")
+    if val == "" {
+        return MistralKey { db: orm_db_q(q), key: "" }
+    }
+    let cid = parse_int(val)
+    if cid <= 0 {
+        return MistralKey { db: orm_db_q(q), key: "" }
+    }
+    let cq = company_find(orm_db_q(q), cid)?
+    if orm_ok_q(cq) == 0 || orm_nrows(cq) < 1 {
+        return MistralKey { db: orm_db_q(cq), key: "" }
+    }
+    let settings = orm_cell_by(cq, 0, "settings")
+    return MistralKey { db: orm_db_q(cq), key: mistral_key_from_settings(settings) }
+}
+
+fn json_object_slice(s: str) -> str {
+    let a = str_find(s, "{")
+    if a < 0 {
+        return ""
+    }
+    let mut b: i64 = -1
+    let mut i: i64 = 0
+    while i < len(s) {
+        if substr(s, i, i + 1) == "}" {
+            b = i
+        }
+        i = i + 1
+    }
+    if b < 0 || b <= a {
+        return ""
+    }
+    return substr(s, a, b + 1)
+}
+
+fn addr_parts_from_obj(d: JsonDoc, root: i64) -> AddrParts {
+    return AddrParts {
+        ok: 1,
+        street_name: str_trim(jopt_str(d, root, "street_name", "").val),
+        building_number: str_trim(jopt_str(d, root, "building_number", "").val),
+        address_building: str_trim(jopt_str(d, root, "address_building", "").val),
+        additional_address_detail: str_trim(jopt_str(d, root, "additional_address_detail", "").val),
+        city: str_trim(jopt_str(d, root, "city", "").val),
+        post_code: str_trim(jopt_str(d, root, "post_code", "").val),
+        region: str_trim(jopt_str(d, root, "region", "").val),
+        country: str_trim(jopt_str(d, root, "country", "").val),
+        address_type: str_trim(jopt_str(d, root, "address_type", "").val)
+    }
+}
+
+fn addr_clean(parts: AddrParts, cc: str, hint_city: str, hint_post: str) -> AddrParts {
+    let street = adr_clip(parts.street_name, 70)
+    let number = adr_clip(parts.building_number, 18)
+    let building = adr_clip(parts.address_building, 35)
+    let extra = adr_clip(parts.additional_address_detail, 70)
+    let mut city = adr_clip(parts.city, 35)
+    if city == "" {
+        city = adr_clip(hint_city, 35)
+    }
+    let mut post = adr_clip(parts.post_code, 18)
+    if post == "" {
+        post = adr_clip(hint_post, 18)
+    }
+    let country = adr_country(parts.country, cc)
+    let rn = adr_region_norm(parts.region, country)
+    let mut region = ""
+    if rn.ok == 1 {
+        region = rn.code
+    }
+    let tn = adr_type_norm(parts.address_type)
+    let mut at = ""
+    if tn.ok == 1 {
+        at = tn.code
+    }
+    if at == "" && street != "" {
+        at = "StreetAddress"
+    }
+    let mut ok: i64 = 1
+    if street == "" && city == "" && post == "" {
+        ok = 0
+    }
+    return AddrParts {
+        ok: ok,
+        street_name: street,
+        building_number: number,
+        address_building: building,
+        additional_address_detail: extra,
+        city: city,
+        post_code: post,
+        region: region,
+        country: country,
+        address_type: at
+    }
+}
+
+fn mistral_chat_content(body: str) -> str {
+    let parsed = jbody_parse_str(body)
+    if parsed.ok == 0 {
+        return ""
+    }
+    let choices = json_get(parsed.doc, parsed.root, "choices")
+    if choices < 0 || json_tag(parsed.doc, choices) != 5 || json_count(parsed.doc, choices) < 1 {
+        return ""
+    }
+    let first = json_at(parsed.doc, choices, 0)
+    if first < 0 {
+        return ""
+    }
+    let msg = json_get(parsed.doc, first, "message")
+    if msg < 0 {
+        return ""
+    }
+    return jopt_str(parsed.doc, msg, "content", "").val
+}
+
+fn mistral_parse_prompt(raw: str, cc: str, hint_city: str, hint_post: str) -> str {
+    let mut s = "Split this address into JSON for Bulgarian SAF-T AddressStructure. Return only a JSON object with keys street_name, building_number, address_building, additional_address_detail, city, post_code, region, country, address_type. street_name is the street only, max 70 characters. building_number is the house number only, max 18 (XML element Number). address_building is a building id such as blok or Building A, max 35, else empty. additional_address_detail is entrance, floor, apartment, max 70, else empty. city max 35. post_code max 18. region for Bulgaria must be exactly one code from the list below, otherwise empty. country is ISO 3166-1 alpha-2. address_type is StreetAddress, PostalAddress, BillingAddress, ShipToAddress or ShipFromAddress. Use StreetAddress for a street. Empty string if unknown. No extra text.\nRegions:\n"
+    s = concat(s, adr_region_prompt())
+    s = concat(s, "Country code: ")
+    s = concat(s, cc)
+    s = concat(s, "\nKnown city: ")
+    s = concat(s, hint_city)
+    s = concat(s, "\nKnown post code: ")
+    s = concat(s, hint_post)
+    s = concat(s, "\nAddress:\n")
+    return concat(s, raw)
+}
+
+fn mistral_parse_address_ex(api_key: str, raw: str, cc: str, hint_city: str, hint_post: str) -> AddrParts !IO !Net !Random {
+    if api_key == "" || raw == "" || raw == "---" {
+        return addr_parts_empty()
+    }
+    let mut sys = jobj_new()
+    sys = jobj_str(sys, "role", "system")
+    sys = jobj_str(sys, "content", "You extract structured address fields. Return only JSON.")
+    let mut user = jobj_new()
+    user = jobj_str(user, "role", "user")
+    user = jobj_str(user, "content", mistral_parse_prompt(raw, cc, hint_city, hint_post))
+    let mut msgs = jarr_new()
+    msgs = jarr_obj(msgs, sys)
+    msgs = jarr_obj(msgs, user)
+    let mut req = jobj_new()
+    req = jobj_str(req, "model", mistral_parse_model())
+    req = jobj_arr(req, "messages", msgs)
+    req = jobj_raw(req, "temperature", "0")
+    req = jobj_i64(req, "max_tokens", 512)
+    req = jobj_raw(req, "response_format", "{\"type\":\"json_object\"}")
+    let headers: Map<str, str> = map_new()
+    map_set(headers, "authorization", concat("Bearer ", api_key))
+    map_set(headers, "content-type", "application/json")
+    map_set(headers, "user-agent", "buchnative/0.1")
+    let anchor = mistral_anchor_der()?
+    let resp = http_request_anchor("POST", mistral_chat_url(), headers, jobj_encode(req), 30, anchor)?
+    if resp.ok == 0 || resp.status != 200 {
+        return addr_parts_empty()
+    }
+    let content = json_object_slice(mistral_chat_content(resp.body))
+    if content == "" {
+        return addr_parts_empty()
+    }
+    let parsed = jbody_parse_str(content)
+    if parsed.ok == 0 {
+        return addr_parts_empty()
+    }
+    return addr_clean(addr_parts_from_obj(parsed.doc, parsed.root), cc, hint_city, hint_post)
+}
+
+fn mistral_parse_address(api_key: str, raw: str, cc: str) -> AddrParts !IO !Net !Random {
+    return mistral_parse_address_ex(api_key, raw, cc, "", "")?
+}
+
+fn vies_parse_note(api_key: str, parts: AddrParts) -> str {
+    if api_key == "" {
+        return "Няма Mistral ключ в настройките на фирмата — адресът не е разделен."
+    }
+    if parts.ok == 1 {
+        return "Адресът е разделен за SAF-T."
+    }
+    return "VIES ок, но разделянето на адреса не успя."
+}

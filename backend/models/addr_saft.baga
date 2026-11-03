@@ -1,0 +1,160 @@
+// models/addr_saft.baga — SAF-T AddressStructure: дължини, област, тип адрес.
+// Областта за BG е само код от каталога (BG-01 … BG-28). Празен country се
+// третира като BG. Чужда държава пази свободен текст до 35 знака.
+
+import "saft_nom_docs.baga"
+import "std/str/str.baga"
+
+struct AdrCode {
+    ok: i64,
+    code: str
+}
+
+fn adr_ascii_upper(s: str) -> str {
+    let mut out = ""
+    let mut i: i64 = 0
+    while i < len(s) {
+        let c = char_at(s, i)
+        if c >= 97 && c <= 122 {
+            out = concat(out, chr(c - 32))
+        } else {
+            out = concat(out, substr(s, i, i + 1))
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn adr_clip(s: str, n: i64) -> str {
+    let t = str_trim(s)
+    if n <= 0 || t == "" {
+        return ""
+    }
+    if len(t) <= n {
+        return t
+    }
+    return substr(t, 0, n)
+}
+
+fn adr_digits(s: str) -> i64 {
+    if s == "" {
+        return 0
+    }
+    let mut i: i64 = 0
+    while i < len(s) {
+        let c = char_at(s, i)
+        if c < 48 || c > 57 {
+            return 0
+        }
+        i = i + 1
+    }
+    return 1
+}
+
+fn adr_letters2(s: str) -> i64 {
+    if len(s) != 2 {
+        return 0
+    }
+    let mut i: i64 = 0
+    while i < 2 {
+        let c = char_at(s, i)
+        if c < 65 || c > 90 {
+            return 0
+        }
+        i = i + 1
+    }
+    return 1
+}
+
+fn adr_country(raw: str, fallback: str) -> str {
+    let u = adr_ascii_upper(str_trim(raw))
+    if adr_letters2(u) == 1 {
+        return u
+    }
+    let f = adr_ascii_upper(str_trim(fallback))
+    if adr_letters2(f) == 1 {
+        return f
+    }
+    return ""
+}
+
+fn adr_region_key(raw: str) -> str {
+    let up = adr_ascii_upper(str_trim(raw))
+    if len(up) == 4 && substr(up, 0, 2) == "BG" && adr_digits(substr(up, 2, 4)) == 1 {
+        return concat("BG-", substr(up, 2, 4))
+    }
+    return up
+}
+
+fn adr_region_norm(raw: str, country: str) -> AdrCode {
+    let t = str_trim(raw)
+    if t == "" {
+        return AdrCode { ok: 1, code: "" }
+    }
+    let key = adr_region_key(t)
+    let rows = saft_region_rows()
+    let mut i: i64 = 0
+    while i < vec_len(rows) {
+        let line = vec_get(rows, i)
+        let bar = str_find(line, "|")
+        if bar > 0 {
+            let code = substr(line, 0, bar)
+            let name = substr(line, bar + 1, len(line))
+            if key == code || t == name {
+                return AdrCode { ok: 1, code: code }
+            }
+        }
+        i = i + 1
+    }
+    if substr(key, 0, 3) == "BG-" {
+        return AdrCode { ok: 0, code: "" }
+    }
+    let cc = adr_ascii_upper(str_trim(country))
+    if cc == "" || cc == "BG" {
+        return AdrCode { ok: 0, code: "" }
+    }
+    return AdrCode { ok: 1, code: adr_clip(t, 35) }
+}
+
+fn adr_region_prompt() -> str {
+    let rows = saft_region_rows()
+    let mut s = ""
+    let mut i: i64 = 0
+    while i < vec_len(rows) {
+        s = concat(s, vec_get(rows, i))
+        s = concat(s, "\n")
+        i = i + 1
+    }
+    return s
+}
+
+fn adr_type_canon(up: str) -> str {
+    if up == "STREETADDRESS" {
+        return "StreetAddress"
+    }
+    if up == "POSTALADDRESS" {
+        return "PostalAddress"
+    }
+    if up == "BILLINGADDRESS" {
+        return "BillingAddress"
+    }
+    if up == "SHIPTOADDRESS" {
+        return "ShipToAddress"
+    }
+    if up == "SHIPFROMADDRESS" {
+        return "ShipFromAddress"
+    }
+    return ""
+}
+
+fn adr_type_norm(raw: str) -> AdrCode {
+    let t = str_trim(raw)
+    if t == "" {
+        return AdrCode { ok: 1, code: "" }
+    }
+    let canon = adr_type_canon(adr_ascii_upper(t))
+    if canon == "" {
+        return AdrCode { ok: 0, code: "" }
+    }
+    return AdrCode { ok: 1, code: canon }
+}

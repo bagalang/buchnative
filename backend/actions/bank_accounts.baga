@@ -1,0 +1,287 @@
+// actions/bank_accounts.baga — банкови сметки: CRUD handlers.
+// Мултитенант: сметките се филтрират по активната фирма. ГЛ/буферна сметка
+// са сметки от сметкоплана (accounts). Салдото е десимален стринг.
+import "../models/bank_account.baga"
+import "active_company.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/json/json.baga"
+import "std/str/str.baga"
+import "bagadecimal/src/decimal.baga"
+fn act_bank_accounts_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let q = bank_account_by_company(ac.db, ac.id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    return act_ok(orm_db_q(q), bank_account_list_json(q))
+}
+fn act_bank_accounts_show(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let q = bank_account_find(db, id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "Bank account not found")
+    }
+    return act_ok(orm_db_q(q), bank_account_to_json(q, 0))
+}
+fn act_bank_accounts_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let name = jreq_str(b.doc, b.root, "name")
+    if name.ok == 0 {
+        return act_422_field(db, "name", name)
+    }
+    let iban = jreq_str(b.doc, b.root, "iban")
+    if iban.ok == 0 {
+        return act_422_field(db, "iban", iban)
+    }
+    let bic = jopt_str(b.doc, b.root, "bic", "")
+    let bank_name = jopt_str(b.doc, b.root, "bank_name", "")
+    let currency = jopt_str(b.doc, b.root, "currency", "BGN")
+    let account_number = jopt_str(b.doc, b.root, "account_number", "")
+    let balance = jopt_str(b.doc, b.root, "balance", "0")
+    // Валидация на салдото.
+    let bp = dec_parse(balance.val)
+    if bp.ok == 0 {
+        return act_err(db, 422, "невалидно начално салдо")
+    }
+    let br = dec_round_dp(bp.value, 2)
+    if br.ok == 0 {
+        return act_err(db, 422, "невалидно начално салдо")
+    }
+    let balance_norm = dec_to_string(br.value)
+    // ГЛ/буферна сметка: опционални.
+    let gl = jreq_i64(b.doc, b.root, "gl_account_id")
+    let mut gl_id: i64 = 0
+    if gl.present == 1 {
+        if gl.ok == 0 {
+            return act_422_field(db, "gl_account_id", gl)
+        }
+        gl_id = gl.num
+    }
+    let buf = jreq_i64(b.doc, b.root, "buffer_account_id")
+    let mut buf_id: i64 = 0
+    if buf.present == 1 {
+        if buf.ok == 0 {
+            return act_422_field(db, "buffer_account_id", buf)
+        }
+        buf_id = buf.num
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let ins = bank_account_create(ac.db, ac.id, iban.val, bic.val, bank_name.val, currency.val, name.val, account_number.val, gl_id, buf_id, balance_norm)?
+    if orm_ok_q(ins) == 0 || orm_nrows(ins) < 1 {
+        return act_err(orm_db_q(ins), 500, "bank account insert failed")
+    }
+    let new_id = orm_cell_by_i64(ins, 0, "id")
+    let q = bank_account_find(orm_db_q(ins), new_id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_err(orm_db_q(q), 500, "bank account missing after create")
+    }
+    return act_created(orm_db_q(q), bank_account_to_json(q, 0))
+}
+fn act_bank_accounts_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let cols = vec_new()
+    let vals = vec_new()
+    let nulls = vec_new()
+    let name = jreq_str(b.doc, b.root, "name")
+    if name.present == 1 {
+        if name.ok == 0 {
+            return act_422_field(db, "name", name)
+        }
+        vec_push(cols, "name")
+        vec_push(vals, name.val)
+        vec_push(nulls, 0)
+    }
+    let iban = jreq_str(b.doc, b.root, "iban")
+    if iban.present == 1 {
+        if iban.ok == 0 {
+            return act_422_field(db, "iban", iban)
+        }
+        vec_push(cols, "iban")
+        vec_push(vals, iban.val)
+        vec_push(nulls, 0)
+    }
+    let bic = jreq_str(b.doc, b.root, "bic")
+    if bic.present == 1 {
+        if bic.ok == 0 {
+            return act_422_field(db, "bic", bic)
+        }
+        vec_push(cols, "bic")
+        vec_push(vals, bic.val)
+        vec_push(nulls, 0)
+    }
+    let bank_name = jreq_str(b.doc, b.root, "bank_name")
+    if bank_name.present == 1 {
+        if bank_name.ok == 0 {
+            return act_422_field(db, "bank_name", bank_name)
+        }
+        vec_push(cols, "bank_name")
+        vec_push(vals, bank_name.val)
+        vec_push(nulls, 0)
+    }
+    let currency = jreq_str(b.doc, b.root, "currency")
+    if currency.present == 1 {
+        if currency.ok == 0 {
+            return act_422_field(db, "currency", currency)
+        }
+        vec_push(cols, "currency")
+        vec_push(vals, currency.val)
+        vec_push(nulls, 0)
+    }
+    let account_number = jreq_str(b.doc, b.root, "account_number")
+    if account_number.present == 1 {
+        if account_number.ok == 0 {
+            return act_422_field(db, "account_number", account_number)
+        }
+        vec_push(cols, "account_number")
+        vec_push(vals, account_number.val)
+        vec_push(nulls, 0)
+    }
+    let balance = jreq_str(b.doc, b.root, "balance")
+    if balance.present == 1 {
+        if balance.ok == 0 {
+            return act_422_field(db, "balance", balance)
+        }
+        let bp = dec_parse(balance.val)
+        if bp.ok == 0 {
+            return act_err(db, 422, "невалидно начално салдо")
+        }
+        let br = dec_round_dp(bp.value, 2)
+        if br.ok == 0 {
+            return act_err(db, 422, "невалидно начално салдо")
+        }
+        vec_push(cols, "balance")
+        vec_push(vals, dec_to_string(br.value))
+        vec_push(nulls, 0)
+    }
+    let gl = json_get(b.doc, b.root, "gl_account_id")
+    if gl >= 0 {
+        if json_tag(b.doc, gl) == 0 {
+            vec_push(cols, "gl_account_id")
+            vec_push(vals, "")
+            vec_push(nulls, 1)
+        } else {
+            let gf = jreq_i64(b.doc, b.root, "gl_account_id")
+            if gf.ok == 0 {
+                return act_422_field(db, "gl_account_id", gf)
+            }
+            vec_push(cols, "gl_account_id")
+            vec_push(vals, int_to_str(gf.num))
+            vec_push(nulls, 0)
+        }
+    }
+    let buf = json_get(b.doc, b.root, "buffer_account_id")
+    if buf >= 0 {
+        if json_tag(b.doc, buf) == 0 {
+            vec_push(cols, "buffer_account_id")
+            vec_push(vals, "")
+            vec_push(nulls, 1)
+        } else {
+            let bf = jreq_i64(b.doc, b.root, "buffer_account_id")
+            if bf.ok == 0 {
+                return act_422_field(db, "buffer_account_id", bf)
+            }
+            vec_push(cols, "buffer_account_id")
+            vec_push(vals, int_to_str(bf.num))
+            vec_push(nulls, 0)
+        }
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    if vec_len(cols) == 0 {
+        let q0 = bank_account_find(db, id)?
+        if orm_ok_q(q0) == 0 {
+            return act_err(orm_db_q(q0), 500, orm_err_q(q0))
+        }
+        if orm_nrows(q0) < 1 {
+            return act_404(orm_db_q(q0), "Bank account not found")
+        }
+        return act_ok(orm_db_q(q0), bank_account_to_json(q0, 0))
+    }
+    let upd = orm_update_by_id_full(db, bank_account_table(), id, cols, vals, nulls)?
+    if orm_ok(upd) == 0 {
+        return act_err(orm_db_exec(upd), 500, orm_err_exec(upd))
+    }
+    let q = bank_account_find(orm_db_exec(upd), id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "Bank account not found")
+    }
+    return act_ok(orm_db_q(q), bank_account_to_json(q, 0))
+}
+fn act_bank_accounts_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let del = bank_account_delete(db, id)?
+    if orm_ok(del) == 0 {
+        return act_err(orm_db_exec(del), 500, orm_err_exec(del))
+    }
+    return act_no_content(orm_db_exec(del))
+}

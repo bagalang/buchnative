@@ -1,0 +1,305 @@
+// fixed_assets_ops.baga — revalue/move/conserve/dispose/events на ДМА,
+// изнесени от fixed_assets.baga (filesize gate 600).
+
+import "../models/fixed_asset.baga"
+import "../models/account.baga"
+import "../models/journal.baga"
+import "../models/company_related.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "bagadecimal/src/decimal.baga"
+import "std/str/str.baga"
+
+fn fa_get_asset(db: OrmDb, id: i64, out: Vec<OrmQuery>) -> FmrOut !IO !Net {
+    let q = fa_find(db, id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "Asset not found")
+    }
+    vec_push(out, q)
+    return act_ok(orm_db_q(q), jobj_new())
+}
+
+// Преоценка: нова стойност; предишната отива в историята.
+fn act_fa_revalue(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let new_value = jreq_str(b.doc, b.root, "new_value")
+    if new_value.ok == 0 {
+        return act_422_field(db, "new_value", new_value)
+    }
+    let reason = jopt_str(b.doc, b.root, "reason", "")
+    let event_date = jopt_str(b.doc, b.root, "event_date", "")
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let found: Vec<OrmQuery> = vec_new()
+    let fr = fa_get_asset(db, id, found)?
+    if vec_len(found) == 0 {
+        return fr
+    }
+    let q = vec_get(found, 0)
+    let prev = orm_cell_by(q, 0, "cost")
+    let mut db2 = fr.db
+    let ev = fae_create(db2, id, "revaluation", event_date.val, new_value.val, prev, "", reason.val)?
+    if orm_ok(ev) == 0 {
+        return act_err(orm_db_exec(ev), 500, orm_err_exec(ev))
+    }
+    db2 = orm_db_exec(ev)
+    let cols = vec_new()
+    vec_push(cols, "cost")
+    let vals = vec_new()
+    vec_push(vals, new_value.val)
+    let up = orm_update_by_id(db2, fa_table(), id, cols, vals)?
+    if orm_ok(up) == 0 {
+        return act_err(orm_db_exec(up), 500, orm_err_exec(up))
+    }
+    db2 = orm_db_exec(up)
+    let fq = fa_find(db2, id)?
+    return act_ok(orm_db_q(fq), fa_to_json(fq, 0))
+}
+
+// Преместване между обекти (запис в историята).
+fn act_fa_move(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let loc = jreq_i64(b.doc, b.root, "location_id")
+    if loc.ok == 0 {
+        return act_422_field(db, "location_id", loc)
+    }
+    let reason = jopt_str(b.doc, b.root, "reason", "")
+    let event_date = jopt_str(b.doc, b.root, "event_date", "")
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let found: Vec<OrmQuery> = vec_new()
+    let fr = fa_get_asset(db, id, found)?
+    if vec_len(found) == 0 {
+        return fr
+    }
+    let mut loc_name = int_to_str(loc.num)
+    let lq = cloc_find(fr.db, loc.num)?
+    let mut db2 = orm_db_q(lq)
+    if orm_ok_q(lq) == 1 && orm_nrows(lq) > 0 {
+        loc_name = orm_cell_by(lq, 0, "name")
+        db2 = orm_db_q(lq)
+    } else {
+        db2 = fr.db
+    }
+    let ev = fae_create(db2, id, "movement", event_date.val, "", "", loc_name, reason.val)?
+    if orm_ok(ev) == 0 {
+        return act_err(orm_db_exec(ev), 500, orm_err_exec(ev))
+    }
+    db2 = orm_db_exec(ev)
+    let cols = vec_new()
+    vec_push(cols, "location_id")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(loc.num))
+    let up = orm_update_by_id(db2, fa_table(), id, cols, vals)?
+    if orm_ok(up) == 0 {
+        return act_err(orm_db_exec(up), 500, orm_err_exec(up))
+    }
+    let fq = fa_find(orm_db_exec(up), id)?
+    return act_ok(orm_db_q(fq), fa_to_json(fq, 0))
+}
+
+// Консервация (спира амортизацията).
+fn act_fa_conserve(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let reason = jopt_str(b.doc, b.root, "reason", "")
+    let event_date = jopt_str(b.doc, b.root, "event_date", "")
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let found: Vec<OrmQuery> = vec_new()
+    let fr = fa_get_asset(db, id, found)?
+    if vec_len(found) == 0 {
+        return fr
+    }
+    let mut db2 = fr.db
+    let ev = fae_create(db2, id, "conservation_start", event_date.val, "", "", "", reason.val)?
+    if orm_ok(ev) == 0 {
+        return act_err(orm_db_exec(ev), 500, orm_err_exec(ev))
+    }
+    db2 = orm_db_exec(ev)
+    let cols = vec_new()
+    vec_push(cols, "is_conserved")
+    let vals = vec_new()
+    vec_push(vals, "1")
+    let up = orm_update_by_id(db2, fa_table(), id, cols, vals)?
+    if orm_ok(up) == 0 {
+        return act_err(orm_db_exec(up), 500, orm_err_exec(up))
+    }
+    db2 = orm_db_exec(up)
+    let fq = fa_find(db2, id)?
+    return act_ok(orm_db_q(fq), fa_to_json(fq, 0))
+}
+
+// Край на консервацията (възобновява амортизацията).
+fn act_fa_end_conserve(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let event_date = jopt_str(b.doc, b.root, "event_date", "")
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let found: Vec<OrmQuery> = vec_new()
+    let fr = fa_get_asset(db, id, found)?
+    if vec_len(found) == 0 {
+        return fr
+    }
+    let mut db2 = fr.db
+    let ev = fae_create(db2, id, "conservation_end", event_date.val, "", "", "", "")?
+    if orm_ok(ev) == 0 {
+        return act_err(orm_db_exec(ev), 500, orm_err_exec(ev))
+    }
+    db2 = orm_db_exec(ev)
+    let cols = vec_new()
+    vec_push(cols, "is_conserved")
+    let vals = vec_new()
+    vec_push(vals, "0")
+    let up = orm_update_by_id(db2, fa_table(), id, cols, vals)?
+    if orm_ok(up) == 0 {
+        return act_err(orm_db_exec(up), 500, orm_err_exec(up))
+    }
+    db2 = orm_db_exec(up)
+    let fq = fa_find(db2, id)?
+    return act_ok(orm_db_q(fq), fa_to_json(fq, 0))
+}
+
+// Снемане: продажба/бракуване — статус + история.
+fn act_fa_dispose(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let disposal_type = jopt_str(b.doc, b.root, "disposal_type", "write_off")
+    let sale_amount = jopt_str(b.doc, b.root, "sale_amount", "")
+    let reason = jopt_str(b.doc, b.root, "reason", "")
+    let event_date = jopt_str(b.doc, b.root, "event_date", "")
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let found: Vec<OrmQuery> = vec_new()
+    let fr = fa_get_asset(db, id, found)?
+    if vec_len(found) == 0 {
+        return fr
+    }
+    let mut db2 = fr.db
+    let ev = fae_create(db2, id, "disposal", event_date.val, sale_amount.val, "", "", reason.val)?
+    if orm_ok(ev) == 0 {
+        return act_err(orm_db_exec(ev), 500, orm_err_exec(ev))
+    }
+    db2 = orm_db_exec(ev)
+    let cols = vec_new()
+    vec_push(cols, "status")
+    let vals = vec_new()
+    if disposal_type.val == "sale" {
+        vec_push(vals, "sold")
+    } else {
+        vec_push(vals, "disposed")
+    }
+    let up = orm_update_by_id(db2, fa_table(), id, cols, vals)?
+    if orm_ok(up) == 0 {
+        return act_err(orm_db_exec(up), 500, orm_err_exec(up))
+    }
+    db2 = orm_db_exec(up)
+    let fq = fa_find(db2, id)?
+    return act_ok(orm_db_q(fq), fa_to_json(fq, 0))
+}
+
+// История на актива.
+fn act_fa_events(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let q = fae_by_asset(db, id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let mut o = jobj_new()
+    o = jobj_arr(o, "items", fae_list_json(q))
+    return act_ok(orm_db_q(q), o)
+}

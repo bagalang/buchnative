@@ -1,0 +1,227 @@
+// models/fs_formula.baga — парсер на формули за финансови отчети.
+// Токени: +304Д -241К +601ОД +702ОК +101НК +304Д/401К +@bal.b.ii.t
+// Вътрешен запис: +|304|D   -|241|C   +|601|TD   +|304|CORR|401   +|@|code
+
+import "fmrbaga/jsonx.baga"
+import "std/str/str.baga"
+
+struct FsParse {
+    ok: i64
+    err: str
+    tokens: Vec<str>
+}
+
+fn fs_parse_ok(tokens: Vec<str>) -> FsParse {
+    return FsParse { ok: 1, err: "", tokens: tokens }
+}
+
+fn fs_parse_err(err: str) -> FsParse {
+    return FsParse { ok: 0, err: err, tokens: vec_new() }
+}
+
+fn fs_is_digit_b(c: i64) -> i64 {
+    if c >= 48 && c <= 57 {
+        return 1
+    }
+    return 0
+}
+
+fn fs_skip_sp(s: str, i: i64) -> i64 {
+    let mut p = i
+    while p < len(s) {
+        let c = char_at(s, p)
+        if c == 32 || c == 9 {
+            p = p + 1
+        } else {
+            return p
+        }
+    }
+    return p
+}
+
+fn fs_starts_at(s: str, i: i64, needle: str) -> i64 {
+    let n = len(needle)
+    if i + n > len(s) {
+        return 0
+    }
+    if substr(s, i, i + n) == needle {
+        return 1
+    }
+    return 0
+}
+
+fn fs_read_acc(s: str, i: i64) -> str {
+    let mut p = i
+    let n = len(s)
+    while p < n {
+        let c = char_at(s, p)
+        if fs_is_digit_b(c) == 1 || c == 42 {
+            p = p + 1
+        } else {
+            return substr(s, i, p)
+        }
+    }
+    return substr(s, i, p)
+}
+
+fn fs_read_code(s: str, i: i64) -> str {
+    let mut p = i
+    let n = len(s)
+    while p < n {
+        let c = char_at(s, p)
+        if c == 43 || c == 45 || c == 32 || c == 9 {
+            return substr(s, i, p)
+        }
+        p = p + 1
+    }
+    return substr(s, i, p)
+}
+
+fn fs_read_kind(s: str, i: i64) -> str {
+    if fs_starts_at(s, i, "ОД") == 1 {
+        return "TD"
+    }
+    if fs_starts_at(s, i, "ОК") == 1 {
+        return "TC"
+    }
+    if fs_starts_at(s, i, "НД") == 1 {
+        return "OD"
+    }
+    if fs_starts_at(s, i, "НК") == 1 {
+        return "OC"
+    }
+    if fs_starts_at(s, i, "Д") == 1 {
+        return "D"
+    }
+    if fs_starts_at(s, i, "К") == 1 {
+        return "C"
+    }
+    return ""
+}
+
+fn fs_kind_len(k: str) -> i64 {
+    if k == "TD" || k == "TC" || k == "OD" || k == "OC" {
+        return 4
+    }
+    if k == "D" || k == "C" {
+        return 2
+    }
+    return 0
+}
+
+fn fs_formula_parse(raw: str) -> FsParse {
+    let s = str_trim(raw)
+    if s == "" {
+        return fs_parse_ok(vec_new())
+    }
+    let tokens = vec_new()
+    let mut i: i64 = 0
+    let n = len(s)
+    let mut first: i64 = 1
+    while i < n {
+        i = fs_skip_sp(s, i)
+        if i >= n {
+            return fs_parse_ok(tokens)
+        }
+        let mut sign = "+"
+        let c = char_at(s, i)
+        if c == 43 {
+            sign = "+"
+            i = i + 1
+            first = 0
+        } else {
+            if c == 45 {
+                sign = "-"
+                i = i + 1
+                first = 0
+            } else {
+                if first == 0 {
+                    return fs_parse_err("очакван знак + или −")
+                }
+                first = 0
+            }
+        }
+        i = fs_skip_sp(s, i)
+        if i >= n {
+            return fs_parse_err("формулата свършва след знака")
+        }
+        if char_at(s, i) == 64 {
+            i = i + 1
+            let code = fs_read_code(s, i)
+            if code == "" {
+                return fs_parse_err("липсва код след @")
+            }
+            i = i + len(code)
+            vec_push(tokens, concat(concat(sign, "|@|"), code))
+        } else {
+            let acc = fs_read_acc(s, i)
+            if acc == "" {
+                return fs_parse_err("липсва сметка")
+            }
+            i = i + len(acc)
+            let k = fs_read_kind(s, i)
+            if k == "" {
+                return fs_parse_err(concat("липсва Д/К/ОД/ОК/НД/НК след ", acc))
+            }
+            i = i + fs_kind_len(k)
+            i = fs_skip_sp(s, i)
+            if i < n && char_at(s, i) == 47 {
+                i = i + 1
+                i = fs_skip_sp(s, i)
+                let acc2 = fs_read_acc(s, i)
+                if acc2 == "" {
+                    return fs_parse_err("липсва кредитна сметка след /")
+                }
+                i = i + len(acc2)
+                let k2 = fs_read_kind(s, i)
+                if k2 == "" {
+                    return fs_parse_err("липсва Д или К след втората сметка")
+                }
+                i = i + fs_kind_len(k2)
+                vec_push(tokens, concat(concat(concat(concat(sign, "|"), acc), "|CORR|"), acc2))
+            } else {
+                vec_push(tokens, concat(concat(concat(concat(sign, "|"), acc), "|"), k))
+            }
+        }
+    }
+    return fs_parse_ok(tokens)
+}
+
+fn fs_formula_ok(raw: str) -> str {
+    let p = fs_formula_parse(raw)
+    if p.ok == 0 {
+        return p.err
+    }
+    return ""
+}
+
+fn fs_tok_sign(tok: str) -> str {
+    if len(tok) > 0 {
+        return substr(tok, 0, 1)
+    }
+    return "+"
+}
+
+fn fs_tok_parts(tok: str) -> Vec<str> {
+    return str_split(tok, "|")
+}
+
+fn fs_acc_match(account: str, pattern: str) -> i64 {
+    if pattern == "" {
+        return 0
+    }
+    if str_ends_with(pattern, "*") {
+        let prefix = substr(pattern, 0, len(pattern) - 1)
+        if str_starts_with(account, prefix) {
+            return 1
+        }
+        return 0
+    }
+    if account == pattern {
+        return 1
+    }
+    if str_starts_with(account, pattern) {
+        return 1
+    }
+    return 0
+}

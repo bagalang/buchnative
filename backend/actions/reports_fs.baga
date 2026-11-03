@@ -1,0 +1,394 @@
+// actions/reports_fs.baga — попълване на бланки по формули (салда, обороти, кореспонденции).
+
+import "../models/fs_nom.baga"
+import "../models/fs_formula.baga"
+import "reports_util.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+fn fs_kind_to_rpt(kind: str) -> str {
+    if kind == "balance_sheet" {
+        return "balance"
+    }
+    if kind == "income_statement" {
+        return "pl"
+    }
+    if kind == "cash_flow" {
+        return "cashflow"
+    }
+    if kind == "equity" {
+        return "equity"
+    }
+    return ""
+}
+
+fn rpt_fs_header() -> str {
+    let mut r = "<tr>"
+    r = concat(r, rpt_cell("th", "Статия"))
+    r = concat(r, rpt_cell("th", "Текуща"))
+    r = concat(r, rpt_cell("th", "Предходна"))
+    r = concat(r, "</tr>")
+    return r
+}
+
+fn rpt_fs_row(name: str, a: str, b: str) -> str {
+    let mut r = "<tr>"
+    r = concat(r, rpt_cell("td", name))
+    r = concat(r, rpt_cell("td", rpt_bg_num(a)))
+    r = concat(r, rpt_cell("td", rpt_bg_num(b)))
+    r = concat(r, "</tr>")
+    return r
+}
+
+fn rpt_fs_build(kind: str, aq: OrmQuery, obq: OrmQuery, jq: OrmQuery, lq: OrmQuery, fmap: Map<str, str>, from: str, to: str, firm: str) -> RptBuilt {
+    let st = fs_kind_to_rpt(kind)
+    let year = substr(from, 0, 4)
+    let fiscal = concat(year, "-01-01")
+    let mut nums: Map<str, str> = map_new()
+    let mut ai: i64 = 0
+    while ai < orm_nrows(aq) {
+        map_set(nums, int_to_str(orm_cell_by_i64(aq, ai, "id")), orm_cell_by(aq, ai, "number"))
+        ai = ai + 1
+    }
+    let mut dates: Map<str, str> = map_new()
+    let mut ei: i64 = 0
+    while ei < orm_nrows(jq) {
+        map_set(dates, int_to_str(orm_cell_by_i64(jq, ei, "id")), rpt_day(orm_cell_by(jq, ei, "entry_date")))
+        ei = ei + 1
+    }
+    let mut od: Map<str, str> = map_new()
+    let mut oc: Map<str, str> = map_new()
+    let mut td: Map<str, str> = map_new()
+    let mut tc: Map<str, str> = map_new()
+    let mut oi: i64 = 0
+    while oi < orm_nrows(obq) {
+        let aid = int_to_str(orm_cell_by_i64(obq, oi, "account_id"))
+        od = rpt_add(od, aid, orm_cell_by(obq, oi, "debit"))
+        oc = rpt_add(oc, aid, orm_cell_by(obq, oi, "credit"))
+        oi = oi + 1
+    }
+    let mut lj: i64 = 0
+    while lj < orm_nrows(lq) {
+        let eid = int_to_str(orm_cell_by_i64(lq, lj, "entry_id"))
+        let mut day = ""
+        if map_has(dates, eid) == 1 {
+            day = map_get(dates, eid)
+        }
+        let laid = int_to_str(orm_cell_by_i64(lq, lj, "account_id"))
+        let amt = orm_cell_by(lq, lj, "amount")
+        let dir = orm_cell_by(lq, lj, "direction")
+        if from != fiscal {
+            if rpt_in_range(day, fiscal, from, 1) == 1 {
+                if dir == "debit" {
+                    od = rpt_add(od, laid, amt)
+                }
+                if dir == "credit" {
+                    oc = rpt_add(oc, laid, amt)
+                }
+            }
+        }
+        if rpt_in_range(day, from, to, 0) == 1 {
+            if dir == "debit" {
+                td = rpt_add(td, laid, amt)
+            }
+            if dir == "credit" {
+                tc = rpt_add(tc, laid, amt)
+            }
+        }
+        lj = lj + 1
+    }
+    let mut odn: Map<str, str> = map_new()
+    let mut ocn: Map<str, str> = map_new()
+    let mut tdn: Map<str, str> = map_new()
+    let mut tcn: Map<str, str> = map_new()
+    ai = 0
+    while ai < orm_nrows(aq) {
+        let aid = int_to_str(orm_cell_by_i64(aq, ai, "id"))
+        let num = orm_cell_by(aq, ai, "number")
+        if map_has(od, aid) == 1 {
+            map_set(odn, num, map_get(od, aid))
+        }
+        if map_has(oc, aid) == 1 {
+            map_set(ocn, num, map_get(oc, aid))
+        }
+        if map_has(td, aid) == 1 {
+            map_set(tdn, num, map_get(td, aid))
+        }
+        if map_has(tc, aid) == 1 {
+            map_set(tcn, num, map_get(tc, aid))
+        }
+        ai = ai + 1
+    }
+    let pairs: Vec<str> = vec_new()
+    let mut e: i64 = 0
+    while e < orm_nrows(jq) {
+        let eid = int_to_str(orm_cell_by_i64(jq, e, "id"))
+        let day = rpt_day(orm_cell_by(jq, e, "entry_date"))
+        if rpt_in_range(day, from, to, 0) == 0 {
+            e = e + 1
+            continue
+        }
+        let dacc: Vec<str> = vec_new()
+        let drem: Vec<str> = vec_new()
+        let cacc: Vec<str> = vec_new()
+        let crem: Vec<str> = vec_new()
+        let mut li: i64 = 0
+        while li < orm_nrows(lq) {
+            if int_to_str(orm_cell_by_i64(lq, li, "entry_id")) == eid {
+                let aid = int_to_str(orm_cell_by_i64(lq, li, "account_id"))
+                let mut an = ""
+                if map_has(nums, aid) == 1 {
+                    an = map_get(nums, aid)
+                }
+                let amt = orm_cell_by(lq, li, "amount")
+                if orm_cell_by(lq, li, "direction") == "debit" {
+                    vec_push(dacc, an)
+                    vec_push(drem, amt)
+                }
+                if orm_cell_by(lq, li, "direction") == "credit" {
+                    vec_push(cacc, an)
+                    vec_push(crem, amt)
+                }
+            }
+            li = li + 1
+        }
+        let mut di: i64 = 0
+        let mut ci: i64 = 0
+        while di < vec_len(dacc) && ci < vec_len(cacc) {
+            let da = vec_get(drem, di)
+            let ca = vec_get(crem, ci)
+            if rpt_zero(da) == 1 {
+                di = di + 1
+                continue
+            }
+            if rpt_zero(ca) == 1 {
+                ci = ci + 1
+                continue
+            }
+            let pair = rpt_min(da, ca)
+            vec_push(pairs, concat(concat(concat(concat(vec_get(dacc, di), "|"), vec_get(cacc, ci)), "|"), pair))
+            vec_set(drem, di, rpt_sub(da, pair))
+            vec_set(crem, ci, rpt_sub(ca, pair))
+        }
+        e = e + 1
+    }
+    let cat = fs_nom_rows(st)
+    let mut done: Map<str, str> = map_new()
+    let mut val: Map<str, str> = map_new()
+    let mut guard: i64 = 0
+    let ncat = vec_len(cat)
+    while guard < ncat + 4 {
+        let mut progress: i64 = 0
+        let mut i: i64 = 0
+        while i < ncat {
+            let p = str_split(vec_get(cat, i), "|")
+            let code = fs_nom_at(p, 0)
+            if map_has(done, code) == 1 {
+                i = i + 1
+                continue
+            }
+            let kindl = fs_nom_at(p, 2)
+            let parent = fs_nom_at(p, 1)
+            let mut formula = ""
+            if map_has(fmap, code) == 1 {
+                formula = map_get(fmap, code)
+            }
+            if formula == "" {
+                if kindl == "header" {
+                    map_set(val, code, "0")
+                    map_set(done, code, "1")
+                    progress = 1
+                } else {
+                    if kindl == "total" {
+                        let mut ready: i64 = 1
+                        let mut s = "0"
+                        let mut j: i64 = 0
+                        while j < ncat {
+                            let q = str_split(vec_get(cat, j), "|")
+                            let c2 = fs_nom_at(q, 0)
+                            let p2 = fs_nom_at(q, 1)
+                            let k2 = fs_nom_at(q, 2)
+                            if p2 == parent && c2 != code {
+                                if k2 == "line" || k2 == "total" {
+                                    if map_has(done, c2) == 0 {
+                                        ready = 0
+                                    } else {
+                                        s = rpt_sum(s, map_get(val, c2))
+                                    }
+                                }
+                            }
+                            j = j + 1
+                        }
+                        if ready == 1 {
+                            map_set(val, code, s)
+                            map_set(done, code, "1")
+                            progress = 1
+                        }
+                    } else {
+                        map_set(val, code, "0")
+                        map_set(done, code, "1")
+                        progress = 1
+                    }
+                }
+            } else {
+                let pr = fs_formula_parse(formula)
+                if pr.ok == 0 {
+                    map_set(val, code, "0")
+                    map_set(done, code, "1")
+                    progress = 1
+                } else {
+                    let mut ready: i64 = 1
+                    let mut t: i64 = 0
+                    while t < vec_len(pr.tokens) {
+                        let parts = str_split(vec_get(pr.tokens, t), "|")
+                        if vec_len(parts) >= 3 {
+                            if vec_get(parts, 1) == "@" {
+                                let refc = vec_get(parts, 2)
+                                if map_has(done, refc) == 0 {
+                                    ready = 0
+                                }
+                            }
+                        }
+                        t = t + 1
+                    }
+                    if ready == 1 {
+                        let mut acc = "0"
+                        t = 0
+                        while t < vec_len(pr.tokens) {
+                            let tok = vec_get(pr.tokens, t)
+                            let parts = str_split(tok, "|")
+                            let sign = vec_get(parts, 0)
+                            let mut piece = "0"
+                            if vec_len(parts) >= 3 {
+                                if vec_get(parts, 1) == "@" {
+                                    if map_has(val, vec_get(parts, 2)) == 1 {
+                                        piece = map_get(val, vec_get(parts, 2))
+                                    }
+                                } else {
+                                    if vec_len(parts) >= 4 && vec_get(parts, 2) == "CORR" {
+                                        let a1 = vec_get(parts, 1)
+                                        let a2 = vec_get(parts, 3)
+                                        let mut pi: i64 = 0
+                                        while pi < vec_len(pairs) {
+                                            let pp = str_split(vec_get(pairs, pi), "|")
+                                            if vec_len(pp) >= 3 {
+                                                if fs_acc_match(vec_get(pp, 0), a1) == 1 {
+                                                    if fs_acc_match(vec_get(pp, 1), a2) == 1 {
+                                                        piece = rpt_sum(piece, vec_get(pp, 2))
+                                                    }
+                                                }
+                                            }
+                                            pi = pi + 1
+                                        }
+                                    } else {
+                                        let pat = vec_get(parts, 1)
+                                        let which = vec_get(parts, 2)
+                                        let mut aj: i64 = 0
+                                        while aj < orm_nrows(aq) {
+                                            let num = orm_cell_by(aq, aj, "number")
+                                            if fs_acc_match(num, pat) == 1 {
+                                                let mut v = "0"
+                                                if which == "D" {
+                                                    if map_has(odn, num) == 1 {
+                                                        v = rpt_sum(v, map_get(odn, num))
+                                                    }
+                                                    if map_has(tdn, num) == 1 {
+                                                        v = rpt_sum(v, map_get(tdn, num))
+                                                    }
+                                                }
+                                                if which == "C" {
+                                                    if map_has(ocn, num) == 1 {
+                                                        v = rpt_sum(v, map_get(ocn, num))
+                                                    }
+                                                    if map_has(tcn, num) == 1 {
+                                                        v = rpt_sum(v, map_get(tcn, num))
+                                                    }
+                                                }
+                                                if which == "TD" {
+                                                    if map_has(tdn, num) == 1 {
+                                                        v = map_get(tdn, num)
+                                                    }
+                                                }
+                                                if which == "TC" {
+                                                    if map_has(tcn, num) == 1 {
+                                                        v = map_get(tcn, num)
+                                                    }
+                                                }
+                                                if which == "OD" {
+                                                    if map_has(odn, num) == 1 {
+                                                        v = map_get(odn, num)
+                                                    }
+                                                }
+                                                if which == "OC" {
+                                                    if map_has(ocn, num) == 1 {
+                                                        v = map_get(ocn, num)
+                                                    }
+                                                }
+                                                piece = rpt_sum(piece, v)
+                                            }
+                                            aj = aj + 1
+                                        }
+                                    }
+                                }
+                            }
+                            if sign == "-" {
+                                acc = rpt_sub(acc, piece)
+                            } else {
+                                acc = rpt_sum(acc, piece)
+                            }
+                            t = t + 1
+                        }
+                        map_set(val, code, acc)
+                        map_set(done, code, "1")
+                        progress = 1
+                    }
+                }
+            }
+            i = i + 1
+        }
+        if progress == 0 {
+            guard = ncat + 4
+        }
+        guard = guard + 1
+    }
+    let title = rpt_title(kind)
+    let mut html = rpt_html_open(title, rpt_period(from, to), firm)
+    html = concat(html, rpt_fs_header())
+    let mut rows = jarr_new()
+    let mut i: i64 = 0
+    while i < ncat {
+        let p = str_split(vec_get(cat, i), "|")
+        let code = fs_nom_at(p, 0)
+        let name = fs_nom_at(p, 4)
+        let kindl = fs_nom_at(p, 2)
+        let mut amt = "0"
+        if map_has(val, code) == 1 {
+            amt = map_get(val, code)
+        }
+        let mut o = jobj_new()
+        o = jobj_str(o, "code", code)
+        o = jobj_str(o, "parent", fs_nom_at(p, 1))
+        o = jobj_str(o, "kind", kindl)
+        o = jobj_str(o, "side", fs_nom_at(p, 3))
+        o = jobj_str(o, "name", name)
+        o = jobj_str(o, "current", amt)
+        o = jobj_str(o, "prior", "0")
+        rows = jarr_obj(rows, o)
+        if kindl != "header" {
+            html = concat(html, rpt_fs_row(name, amt, "0"))
+        } else {
+            html = concat(html, rpt_fs_row(name, " ", " "))
+        }
+        i = i + 1
+    }
+    html = rpt_html_close(html)
+    let mut body = jobj_new()
+    body = jobj_str(body, "kind", kind)
+    body = jobj_str(body, "statement", st)
+    body = jobj_str(body, "from", from)
+    body = jobj_str(body, "to", to)
+    body = jobj_str(body, "title", title)
+    body = jobj_arr(body, "rows", rows)
+    return RptBuilt { body: body, html: html, title: title, slug: rpt_slug(kind) }
+}

@@ -1,0 +1,92 @@
+// models/saft_nom_movements.baga — SAF-T BG: движения на запаси и активи.
+// Кодове от Structure_Definition_V_1.0.1 (НАП). Описанието не влиза в XML.
+
+// Движения на материални запаси (MovementType / StockMovementType).
+// Ред: code|name_bg|name_en
+
+fn saft_stock_movement_push(rows: Vec<str>, line: str) -> Vec<str> {
+    vec_push(rows, line)
+    return rows
+}
+
+fn saft_stock_movement_rows() -> Vec<str> {
+    let mut r = vec_new()
+    r = saft_stock_movement_push(r, "10|Покупка|Purchase")
+    r = saft_stock_movement_push(r, "20|Материални запаси от производство /продукция/|Inventory from production")
+    r = saft_stock_movement_push(r, "30|Продажба|Sale")
+    r = saft_stock_movement_push(r, "40|Връщане на продадени продукти|Return of sold products")
+    r = saft_stock_movement_push(r, "50|Връщане на закупени продукти|Return of purchased products")
+    r = saft_stock_movement_push(r, "60|Получени отстъпки в натура|Discounts received in kind")
+    r = saft_stock_movement_push(r, "65|Предоставени отстъпки в натура|Discounts granted in kind")
+    r = saft_stock_movement_push(r, "70|Материални запаси за производство|Inventory issued to production")
+    r = saft_stock_movement_push(r, "80|Вътрешен трансфер|Internal transfer")
+    r = saft_stock_movement_push(r, "90|Последващи разходи, капитализирани в стойността на стоките|Subsequent costs capitalized in goods")
+    r = saft_stock_movement_push(r, "100|Положителна ценова разлика|Positive price difference")
+    r = saft_stock_movement_push(r, "101|Отрицателна ценова разлика|Negative price difference")
+    r = saft_stock_movement_push(r, "110|Положителна корекция от инвентаризацията|Positive inventory adjustment")
+    r = saft_stock_movement_push(r, "120|Отрицателна корекция от инвентаризацията|Negative inventory adjustment")
+    r = saft_stock_movement_push(r, "130|Увеличение от преоценка на материалните запаси|Increase from inventory revaluation")
+    r = saft_stock_movement_push(r, "140|Намаление от преоценка на материалните запаси|Decrease from inventory revaluation")
+    r = saft_stock_movement_push(r, "150|Безвъзмездно предоставени материални запаси|Inventories granted free of charge")
+    r = saft_stock_movement_push(r, "160|Брак на материални запаси|Write-off of inventories")
+    r = saft_stock_movement_push(r, "170|Материални запаси с изтекъл срок на годност|Expired inventories")
+    r = saft_stock_movement_push(r, "180|Други движения на материални запаси|Other inventory movements")
+    return r
+}
+
+// Движения на активи (AssetTransactionType).
+// Ред: code|name_bg|name_en
+
+fn saft_asset_movement_push(rows: Vec<str>, line: str) -> Vec<str> {
+    vec_push(rows, line)
+    return rows
+}
+
+fn saft_asset_movement_rows() -> Vec<str> {
+    let mut r = vec_new()
+    r = saft_asset_movement_push(r, "10|Придобиване|Acquisition")
+    r = saft_asset_movement_push(r, "20|Продажба|Sale")
+    r = saft_asset_movement_push(r, "30|Амортизация|Depreciation")
+    r = saft_asset_movement_push(r, "40|Вътрешен трансфер|Internal transfer")
+    r = saft_asset_movement_push(r, "50|Брак|Write-off")
+    r = saft_asset_movement_push(r, "60|Преоценка (отрицателна)|Revaluation (negative)")
+    r = saft_asset_movement_push(r, "70|Преоценка (положителна)|Revaluation (positive)")
+    r = saft_asset_movement_push(r, "80|Излишък (при инвентаризация)|Surplus (stocktake)")
+    r = saft_asset_movement_push(r, "90|Липса (при инвентаризация)|Shortage (stocktake)")
+    r = saft_asset_movement_push(r, "100|Обезценка|Impairment")
+    r = saft_asset_movement_push(r, "110|Сторно на обезценка|Reversal of impairment")
+    r = saft_asset_movement_push(r, "120|Безвъзмездно предоставени активи|Assets granted free of charge")
+    r = saft_asset_movement_push(r, "130|Други транзакции|Other transactions")
+    return r
+}
+
+// Парични движения (каса/банка) за мапинг на кореспонденции.
+// Не са отделна номенклатура на НАП — кодовете са вътрешни към PaymentMethod.
+
+fn saft_cash_movement_push(rows: Vec<str>, line: str) -> Vec<str> {
+    vec_push(rows, line)
+    return rows
+}
+
+fn saft_cash_movement_rows() -> Vec<str> {
+    let mut r = vec_new()
+    r = saft_cash_movement_push(r, "10|Плащане в брой - приход|Cash receipt")
+    r = saft_cash_movement_push(r, "11|Плащане в брой - разход|Cash payment")
+    r = saft_cash_movement_push(r, "20|Плащане с чек - приход|Check receipt")
+    r = saft_cash_movement_push(r, "21|Плащане с чек - разход|Check payment")
+    r = saft_cash_movement_push(r, "42|Банков превод - приход|Bank transfer receipt")
+    r = saft_cash_movement_push(r, "43|Банков превод - разход|Bank transfer payment")
+    r = saft_cash_movement_push(r, "48|Плащане с карта - приход|Card payment receipt")
+    r = saft_cash_movement_push(r, "49|Плащане с карта - разход|Card payment")
+    r = saft_cash_movement_push(r, "68|Онлайн плащане - приход|Online payment receipt")
+    r = saft_cash_movement_push(r, "69|Онлайн плащане - разход|Online payment")
+    r = saft_cash_movement_push(r, "80|Вътрешен трансфер|Internal transfer")
+    r = saft_cash_movement_push(r, "90|Валутна разлика - положителна|FX gain")
+    r = saft_cash_movement_push(r, "91|Валутна разлика - отрицателна|FX loss")
+    r = saft_cash_movement_push(r, "97|Прихващане|Offset")
+    r = saft_cash_movement_push(r, "98|Бартер|Barter")
+    r = saft_cash_movement_push(r, "99|Подотчетни лица|Accountable persons")
+    r = saft_cash_movement_push(r, "100|Други парични движения|Other cash movements")
+    return r
+}
+

@@ -1,0 +1,115 @@
+// models/unit.baga — каталог мерни единици (UBL/PEPPOL Rec 20 + SAF-T Rec 21).
+// Няма таблица: кодовете са стандартни. Артикулът пази code (C62, H87, KGM, …).
+
+import "unit_catalog.baga"
+import "fmrbaga/jsonx.baga"
+import "std/str/str.baga"
+
+fn unit_ascii_lower(s: str) -> str {
+    let mut out = ""
+    let mut i: i64 = 0
+    while i < len(s) {
+        let c = char_at(s, i)
+        if c >= 65 && c <= 90 {
+            out = concat(out, chr(c + 32))
+        } else {
+            out = concat(out, substr(s, i, i + 1))
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn unit_parse_line(line: str) -> JObj {
+    let p = str_split(line, "|")
+    let mut o = jobj_new()
+    let n = vec_len(p)
+    let mut code = ""
+    let mut name = ""
+    let mut name_en = ""
+    let mut symbol = ""
+    let mut category = ""
+    let mut source = ""
+    if n > 0 { code = vec_get(p, 0) }
+    if n > 1 { name = vec_get(p, 1) }
+    if n > 2 { name_en = vec_get(p, 2) }
+    if n > 3 { symbol = vec_get(p, 3) }
+    if n > 4 { category = vec_get(p, 4) }
+    if n > 5 { source = vec_get(p, 5) }
+    o = jobj_str(o, "code", code)
+    o = jobj_str(o, "name", name)
+    o = jobj_str(o, "name_en", name_en)
+    o = jobj_str(o, "symbol", symbol)
+    o = jobj_str(o, "category", category)
+    o = jobj_str(o, "source", source)
+    return o
+}
+
+fn unit_line_matches(line: str, q: str) -> i64 {
+    if q == "" {
+        return 1
+    }
+    let hay = unit_ascii_lower(line)
+    if str_find(hay, q) >= 0 {
+        return 1
+    }
+    return 0
+}
+
+fn unit_list_json(search: str) -> JObj {
+    let q = unit_ascii_lower(str_trim(search))
+    let rows = unit_catalog_rows()
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    let mut count: i64 = 0
+    let n = vec_len(rows)
+    while i < n {
+        let line = vec_get(rows, i)
+        if unit_line_matches(line, q) == 1 {
+            arr = jarr_obj(arr, unit_parse_line(line))
+            count = count + 1
+        }
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", count)
+    return o
+}
+
+fn unit_known(code: str) -> i64 {
+    if code == "" {
+        return 0
+    }
+    let rows = unit_catalog_rows()
+    let prefix = concat(code, "|")
+    let mut i: i64 = 0
+    while i < vec_len(rows) {
+        if str_starts_with(vec_get(rows, i), prefix) {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+fn unit_symbol(code: str) -> str {
+    if code == "" {
+        return ""
+    }
+    let rows = unit_catalog_rows()
+    let prefix = concat(code, "|")
+    let mut i: i64 = 0
+    while i < vec_len(rows) {
+        let line = vec_get(rows, i)
+        if str_starts_with(line, prefix) {
+            let p = str_split(line, "|")
+            if vec_len(p) > 3 {
+                return vec_get(p, 3)
+            }
+            return code
+        }
+        i = i + 1
+    }
+    return code
+}

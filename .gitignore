@@ -1,9 +1,30 @@
-.sandak/
-target/
-sandak.lock
-*.o
+# reference accounting program — local only, NEVER commit
+secret/
+
+# secrets / env
 .env
 **/.env
-# данните на rocksbaga, които създава scripts/up.sh
-db/
-.up.pids
+.env.local
+.env.*.local
+**/password.txt
+
+# rust
+target/
+
+# node / nextjs
+node_modules/
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+
+# python
+.venv/
+__pycache__/
+*.pyc
+
+# logs / misc
+*.log
+.DS_Store
+.dev.pids

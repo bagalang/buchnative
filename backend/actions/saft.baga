@@ -1,0 +1,309 @@
+// actions/saft.baga — SAF-T BG експорт (XML) по BG_SAFT_Schema V1.0.1.
+// Секции: Header, MasterFiles<режим>, GeneralLedgerEntries, SourceDocuments<режим>.
+// Режими: monthly/ondemand/annual. Сумите са десимални (bagadecimal) като стрингове.
+
+import "../models/company.baga"
+import "../models/addr_saft.baga"
+import "../models/product.baga"
+import "saft_gl.baga"
+import "saft_month.baga"
+import "saft_src.baga"
+import "saft_mode.baga"
+import "active_company.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "ormbaga/orm.baga"
+import "httpdbaga/http.baga"
+import "xmlbaga/xml.baga"
+import "std/str/str.baga"
+
+fn sf_open(name: str) -> str {
+    return xml_open(name, xml_attrs_new())
+}
+
+fn sf_text(name: str, text: str) -> str {
+    return xml_elem(name, xml_attrs_new(), text)
+}
+
+fn sf_empty(name: str) -> str {
+    return xml_open_empty(name, xml_attrs_new())
+}
+
+// Сума-елемент: <nsSAFT:X><Amount/><CurrencyCode/><CurrencyAmount/></nsSAFT:X>
+fn sf_opt(name: str, text: str) -> str {
+    if text == "" {
+        return ""
+    }
+    return sf_text(name, text)
+}
+
+fn sf_company_address(street: str, number: str, extra: str, building: str, city: str, post: str, region: str, country: str, atype: str) -> str {
+    let cc = adr_country(country, "BG")
+    let rn = adr_region_norm(region, cc)
+    let mut region_out = ""
+    if rn.ok == 1 {
+        region_out = rn.code
+    }
+    let tn = adr_type_norm(atype)
+    let mut type_out = ""
+    if tn.ok == 1 {
+        type_out = tn.code
+    }
+    let mut out = ""
+    out = concat(out, sf_open("nsSAFT:Address"))
+    out = concat(out, sf_opt("nsSAFT:StreetName", adr_clip(street, 70)))
+    out = concat(out, sf_opt("nsSAFT:Number", adr_clip(number, 18)))
+    out = concat(out, sf_opt("nsSAFT:AdditionalAddressDetail", adr_clip(extra, 70)))
+    out = concat(out, sf_opt("nsSAFT:Building", adr_clip(building, 35)))
+    out = concat(out, sf_text("nsSAFT:City", adr_clip(city, 35)))
+    out = concat(out, sf_opt("nsSAFT:PostalCode", adr_clip(post, 18)))
+    out = concat(out, sf_opt("nsSAFT:Region", region_out))
+    out = concat(out, sf_text("nsSAFT:Country", cc))
+    out = concat(out, sf_opt("nsSAFT:AddressType", type_out))
+    out = concat(out, xml_close("nsSAFT:Address"))
+    return out
+}
+
+fn sf_or(value: str, fallback: str) -> str {
+    if value == "" {
+        return fallback
+    }
+    return value
+}
+
+fn sf_amount(name: str, amount: str, currency: str) -> str {
+    let mut out = ""
+    out = concat(out, sf_open(name))
+    out = concat(out, sf_text("nsSAFT:Amount", amount))
+    out = concat(out, sf_text("nsSAFT:CurrencyCode", currency))
+    out = concat(out, sf_text("nsSAFT:CurrencyAmount", amount))
+    out = concat(out, xml_close(name))
+    return out
+}
+
+fn act_saft_export(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let period = fmr_query(ctx, "period")
+    if period == "" {
+        return act_err(db, 400, "period е задължителен (YYYY-MM-01)")
+    }
+    let mode_q = fmr_query(ctx, "mode")
+    let mut mode = "monthly"
+    if mode_q == "annual" || mode_q == "ondemand" {
+        mode = mode_q
+    }
+    let mut sfx = "Monthly"
+    if mode == "annual" {
+        sfx = "Annual"
+    }
+    if mode == "ondemand" {
+        sfx = "OnDemand"
+    }
+    let year = parse_int(substr(period, 0, 4))
+    let month = parse_int(substr(period, 5, 7))
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма активна фирма за експорт")
+    }
+    let cq = company_find(ac.db, ac.id)?
+    if orm_ok_q(cq) == 0 {
+        return act_err(orm_db_q(cq), 500, orm_err_q(cq))
+    }
+    if orm_nrows(cq) < 1 {
+        return act_err(orm_db_q(cq), 422, "няма фирма за експорт")
+    }
+    let company_name = orm_cell_by(cq, 0, "name")
+    let company_eik = orm_cell_by(cq, 0, "eik")
+    let company_vat = orm_cell_by(cq, 0, "vat_number")
+    let company_city = orm_cell_by(cq, 0, "city")
+    let company_post = orm_cell_by(cq, 0, "post_code")
+    let company_country = orm_cell_by(cq, 0, "country")
+    let company_street = orm_cell_by(cq, 0, "street_name")
+    let company_number = orm_cell_by(cq, 0, "building_number")
+    let company_building = orm_cell_by(cq, 0, "address_building")
+    let company_extra = orm_cell_by(cq, 0, "additional_address_detail")
+    let company_atype = orm_cell_by(cq, 0, "address_type")
+    let company_region = orm_cell_by(cq, 0, "region")
+    let currency = orm_cell_by(cq, 0, "currency")
+    let mut db2 = orm_db_q(cq)
+    let mut cur = "BGN"
+    if currency != "" {
+        cur = currency
+    }
+
+    let mut out = ""
+    out = concat(out, xml_decl())
+    let root_attrs = xml_attrs_new()
+    map_set(root_attrs, "xmlns:nsSAFT", "mf:nra:dgti:dxxxx:declaration:v1")
+    out = concat(out, xml_open("nsSAFT:AuditFile", root_attrs))
+
+    // ---- Header ----
+    out = concat(out, sf_open("nsSAFT:Header"))
+    out = concat(out, sf_text("nsSAFT:AuditFileVersion", "007"))
+    out = concat(out, sf_text("nsSAFT:AuditFileCountry", "BG"))
+    out = concat(out, sf_text("nsSAFT:AuditFileDateCreated", period))
+    out = concat(out, sf_text("nsSAFT:SoftwareCompanyName", sf_or(orm_cell_by(cq, 0, "software_company_name"), "buchnative")))
+    out = concat(out, sf_text("nsSAFT:SoftwareID", sf_or(orm_cell_by(cq, 0, "software_id"), "BUCHNATIVE")))
+    out = concat(out, sf_text("nsSAFT:SoftwareVersion", sf_or(orm_cell_by(cq, 0, "software_version"), "1.0")))
+    out = concat(out, sf_open("nsSAFT:Company"))
+    out = concat(out, sf_text("nsSAFT:RegistrationNumber", company_eik))
+    out = concat(out, sf_text("nsSAFT:Name", company_name))
+    out = concat(out, sf_company_address(company_street, company_number, company_extra, company_building, company_city, company_post, company_region, company_country, company_atype))
+    out = concat(out, sf_open("nsSAFT:TaxRegistration"))
+    out = concat(out, sf_text("nsSAFT:TaxRegistrationNumber", company_eik))
+    out = concat(out, sf_text("nsSAFT:TaxType", "100010"))
+    out = concat(out, sf_text("nsSAFT:TaxNumber", company_vat))
+    out = concat(out, xml_close("nsSAFT:TaxRegistration"))
+    out = concat(out, xml_close("nsSAFT:Company"))
+    out = concat(out, sf_text("nsSAFT:DefaultCurrencyCode", cur))
+    out = concat(out, sf_open("nsSAFT:SelectionCriteria"))
+    out = concat(out, sf_text("nsSAFT:TaxReportingJurisdiction", "NRA"))
+    let mut pstart = month
+    let mut pend = month
+    if mode == "annual" {
+        pstart = 1
+        pend = 12
+    }
+    out = concat(out, sf_text("nsSAFT:PeriodStart", int_to_str(pstart)))
+    out = concat(out, sf_text("nsSAFT:PeriodStartYear", int_to_str(year)))
+    out = concat(out, sf_text("nsSAFT:PeriodEnd", int_to_str(pend)))
+    out = concat(out, sf_text("nsSAFT:PeriodEndYear", int_to_str(year)))
+    out = concat(out, sf_text("nsSAFT:DocumentType", "F"))
+    out = concat(out, xml_close("nsSAFT:SelectionCriteria"))
+    out = concat(out, sf_text("nsSAFT:TaxAccountingBasis", "A"))
+    out = concat(out, sf_text("nsSAFT:TaxEntity", "Company"))
+    out = concat(out, xml_close("nsSAFT:Header"))
+
+    if mode == "annual" {
+        let body = sft_annual(db2, year)?
+        if body.ok == 0 {
+            return act_err(body.db, 500, body.err)
+        }
+        out = concat(out, body.xml)
+        out = concat(out, xml_close("nsSAFT:AuditFile"))
+        let mut resp = http_response(200, out)
+        resp = http_set_header(resp, "Content-Type", "application/xml; charset=utf-8")
+        return fmr_out(resp, body.db)
+    }
+    if mode == "ondemand" {
+        let body = sft_ondemand(db2, ac.id, company_eik)?
+        if body.ok == 0 {
+            return act_err(body.db, 500, body.err)
+        }
+        out = concat(out, body.xml)
+        out = concat(out, xml_close("nsSAFT:AuditFile"))
+        let mut resp = http_response(200, out)
+        resp = http_set_header(resp, "Content-Type", "application/xml; charset=utf-8")
+        return fmr_out(resp, body.db)
+    }
+
+    // ---- MasterFiles месечен ----
+    out = concat(out, sf_open(concat("nsSAFT:MasterFiles", sfx)))
+    let mut fys = orm_cell_by_i64(cq, 0, "fiscal_year_start_month")
+    let gl = sft_gl_accounts(db2, ac.id, year, month, fys)?
+    if gl.ok == 0 {
+        return act_err(gl.db, 500, gl.err)
+    }
+    db2 = gl.db
+    out = concat(out, gl.xml)
+    let parties = sft_parties(db2, ac.id, year, month, fys)?
+    if parties.ok == 0 {
+        return act_err(parties.db, 500, parties.err)
+    }
+    db2 = parties.db
+    out = concat(out, parties.xml)
+    let mut i: i64 = 0
+    if mode == "monthly" {
+        out = concat(out, sft_tax_table())
+    }
+    // Продукти
+    let pq = product_all(db2)?
+    if orm_ok_q(pq) == 0 {
+        return act_err(orm_db_q(pq), 500, orm_err_q(pq))
+    }
+    db2 = orm_db_q(pq)
+    let uoms: Vec<str> = vec_new()
+    i = 0
+    while i < orm_nrows(pq) {
+        let mut u = orm_cell_by(pq, i, "unit")
+        if u == "" {
+            u = "C62"
+        }
+        let mut found: i64 = 0
+        let mut j: i64 = 0
+        while j < vec_len(uoms) {
+            if vec_get(uoms, j) == u {
+                found = 1
+            }
+            j = j + 1
+        }
+        if found == 0 {
+            vec_push(uoms, u)
+        }
+        i = i + 1
+    }
+    out = concat(out, sf_open("nsSAFT:UOMTable"))
+    i = 0
+    while i < vec_len(uoms) {
+        out = concat(out, sf_open("nsSAFT:UOMTableEntry"))
+        out = concat(out, sf_text("nsSAFT:UnitOfMeasure", vec_get(uoms, i)))
+        out = concat(out, xml_close("nsSAFT:UOMTableEntry"))
+        i = i + 1
+    }
+    out = concat(out, xml_close("nsSAFT:UOMTable"))
+    out = concat(out, sf_open("nsSAFT:Products"))
+    i = 0
+    while i < orm_nrows(pq) {
+        let mut u = orm_cell_by(pq, i, "unit")
+        if u == "" {
+            u = "C62"
+        }
+        out = concat(out, sf_open("nsSAFT:Product"))
+        out = concat(out, sf_text("nsSAFT:ProductCode", orm_cell_by(pq, i, "code")))
+        out = concat(out, sf_text("nsSAFT:ProductDescription", orm_cell_by(pq, i, "name")))
+        out = concat(out, sf_text("nsSAFT:UnitOfMeasure", u))
+        out = concat(out, xml_close("nsSAFT:Product"))
+        i = i + 1
+    }
+    out = concat(out, xml_close("nsSAFT:Products"))
+    out = concat(out, xml_close(concat("nsSAFT:MasterFiles", sfx)))
+
+    let ge = sft_gl_entries(db2, ac.id, year, month, cur, gl.codes)?
+    if ge.ok == 0 {
+        return act_err(ge.db, 500, ge.err)
+    }
+    db2 = ge.db
+    out = concat(out, ge.xml)
+
+    let inv = sft_invoices(db2, ac.id, year, month, cur)?
+    if inv.ok == 0 {
+        return act_err(inv.db, 500, inv.err)
+    }
+    db2 = inv.db
+    out = concat(out, sf_open(concat("nsSAFT:SourceDocuments", sfx)))
+    out = concat(out, inv.sales)
+    if mode == "monthly" {
+        let pay = sft_payments(db2, ac.id, period, cur)?
+        if pay.ok == 0 {
+            return act_err(pay.db, 500, pay.err)
+        }
+        db2 = pay.db
+        out = concat(out, pay.xml)
+    }
+    out = concat(out, inv.purchases)
+    out = concat(out, xml_close(concat("nsSAFT:SourceDocuments", sfx)))
+
+    out = concat(out, xml_close("nsSAFT:AuditFile"))
+
+    // Отговор: XML като текст
+    let mut resp = http_response(200, out)
+    resp = http_set_header(resp, "Content-Type", "application/xml; charset=utf-8")
+    return fmr_out(resp, db2)
+}

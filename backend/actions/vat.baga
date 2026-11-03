@@ -1,0 +1,247 @@
+// actions/vat.baga — ДДС дневници и ППДДС за НАП.
+// Източник: journal_entries (постнати фактури + ръчни записи с ДДС_тип).
+// Ставките идват от редовете на фактурата; иначе 20% / без ДДС.
+// Файлове: DEKLAR.TXT, POKUPKI.TXT, PRODAGBI.TXT (cp-1251) и ZIP.
+
+import "../models/journal.baga"
+import "../models/company.baga"
+import "vat_fmt.baga"
+import "acl.baga"
+import "vat_line.baga"
+import "vat_files.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "bagadecimal/src/decimal.baga"
+import "chronobaga/src/chrono.baga"
+import "httpdbaga/http.baga"
+import "std/str/str.baga"
+
+struct VatPack {
+    ok: i64
+    err: str
+    db: OrmDb
+    period: str
+    period_fin: str
+    company_name: str
+    company_vat: str
+    submitter: str
+    branch: str
+    purchases: JArr
+    sales: JArr
+    cells: VatCells
+    pok: bytes
+    pro: bytes
+    dek: bytes
+}
+
+fn vat_pack_err(db: OrmDb, err: str) -> VatPack {
+    return VatPack {
+        ok: 0, err: err, db: db, period: "", period_fin: "",
+        company_name: "", company_vat: "", submitter: "", branch: "",
+        purchases: jarr_new(), sales: jarr_new(), cells: vat_cells_empty(),
+        pok: bytes_new(0), pro: bytes_new(0), dek: bytes_new(0)
+    }
+}
+
+fn vat_file_resp(db: OrmDb, data: bytes, mime: str, filename: str) -> FmrOut {
+    let mut r = http_response_bytes(200, data)
+    r = http_set_header(r, "Content-Type", mime)
+    r = http_set_header(r, "Content-Disposition", concat(concat("attachment; filename=\"", filename), "\""))
+    return fmr_out(r, db)
+}
+
+fn vat_period_ok(raw: str) -> str {
+    let per = dt_period_parse(raw)
+    if per.ok == 0 {
+        return ""
+    }
+    return dt_period_to_iso(per.value)
+}
+
+fn vat_company_submitter(cq: OrmQuery) -> str {
+    let an = orm_cell_by(cq, 0, "accountant_name")
+    let ae = orm_cell_by(cq, 0, "accountant_egn")
+    if str_trim(an) != "" || str_trim(ae) != "" {
+        return vat_submitter(ae, an)
+    }
+    let xn = orm_cell_by(cq, 0, "authorized_person_name")
+    let xe = orm_cell_by(cq, 0, "authorized_person_egn")
+    if str_trim(xn) != "" || str_trim(xe) != "" {
+        return vat_submitter(xe, xn)
+    }
+    return vat_submitter(orm_cell_by(cq, 0, "manager_egn"), orm_cell_by(cq, 0, "manager_name"))
+}
+
+fn vat_base_from_total(total: str, vat: str) -> Decimal {
+    return vat_dsub(vat_parse_amt(total), vat_parse_amt(vat))
+}
+
+fn vat_collect(db: OrmDb, period: str) -> VatPack !IO !Net {
+    let cq = company_all(db)?
+    if orm_ok_q(cq) == 0 {
+        return vat_pack_err(orm_db_q(cq), orm_err_q(cq))
+    }
+    if orm_nrows(cq) < 1 {
+        return vat_pack_err(orm_db_q(cq), "няма фирма за ДДС")
+    }
+    let company_name = orm_cell_by(cq, 0, "name")
+    let company_vat = orm_cell_by(cq, 0, "vat_number")
+    let submitter = vat_company_submitter(cq)
+    let branch = orm_cell_by(cq, 0, "vat_branch_number")
+    let per = dt_period_parse(period)
+    let period_fin = dt_period_to_financial(per.value)
+    let q = journal_by_period(orm_db_q(cq), period)?
+    if orm_ok_q(q) == 0 {
+        return vat_pack_err(orm_db_q(q), orm_err_q(q))
+    }
+    let mut db2 = orm_db_q(q)
+    let mut purchases = jarr_new()
+    let mut sales = jarr_new()
+    let mut cells = vat_cells_empty()
+    let mut pok = bytes_new(0)
+    let mut pro = bytes_new(0)
+    let mut i: i64 = 0
+    let n = orm_nrows(q)
+    while i < n {
+        let vt = orm_cell_by(q, i, "vat_type")
+        if vt == "purchase" || vt == "sales" {
+            let mut dd = orm_cell_by(q, i, "document_date")
+            if dd == "" {
+                dd = orm_cell_by(q, i, "entry_date")
+            }
+            let base = vat_base_from_total(orm_cell_by(q, i, "total_amount"), orm_cell_by(q, i, "total_vat_amount"))
+            let vat = vat_parse_amt(orm_cell_by(q, i, "total_vat_amount"))
+            let mut ln = vat_from_totals(vt, base, vat, "")
+            ln.doc_type = vat_doc_type(orm_cell_by(q, i, "document_type"))
+            ln.doc_no = orm_cell_by(q, i, "document_number")
+            ln.doc_date = dd
+            ln.cp_vat = vat_with_bg(orm_cell_by(q, i, "counterpart_vat_number"))
+            ln.cp_name = orm_cell_by(q, i, "counterpart_name")
+            ln.goods = orm_cell_by(q, i, "description")
+            let doc_id = orm_cell_by_i64(q, i, "document_id")
+            if doc_id > 0 {
+                let f = vat_from_invoice(db2, ln, doc_id)?
+                if f.ok == 0 {
+                    return vat_pack_err(f.db, f.err)
+                }
+                db2 = f.db
+                ln = f.line
+            }
+            ln = vat_apply_credit(ln)
+            let id = orm_cell_by_i64(q, i, "id")
+            if vt == "purchase" {
+                let row = cells.purch_n + 1
+                cells = vat_cells_add(cells, ln)
+                purchases = jarr_obj(purchases, vat_line_json(ln, id, row))
+                pok = nap_cat(pok, vat_pok_line(company_vat, period_fin, branch, row, ln))
+            } else {
+                let row = cells.sales_n + 1
+                cells = vat_cells_add(cells, ln)
+                sales = jarr_obj(sales, vat_line_json(ln, id, row))
+                pro = nap_cat(pro, vat_pro_line(company_vat, period_fin, branch, row, ln))
+            }
+        }
+        i = i + 1
+    }
+    cells = vat_cells_finish(cells)
+    let dek = vat_deklar(company_vat, company_name, period_fin, submitter, cells)
+    return VatPack {
+        ok: 1, err: "", db: db2, period: period, period_fin: period_fin,
+        company_name: company_name, company_vat: vat_with_bg(company_vat),
+        submitter: submitter, branch: branch,
+        purchases: purchases, sales: sales, cells: cells,
+        pok: pok, pro: pro, dek: dek
+    }
+}
+
+fn vat_pack_json(p: VatPack) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_str(o, "period", p.period)
+    o = jobj_str(o, "period_nap", p.period_fin)
+    o = jobj_str(o, "company_name", p.company_name)
+    o = jobj_str(o, "company_vat", p.company_vat)
+    o = jobj_str(o, "submitter", p.submitter)
+    o = jobj_i64(o, "sales_count", p.cells.sales_n)
+    o = jobj_i64(o, "purchase_count", p.cells.purch_n)
+    o = jobj_arr(o, "purchases", p.purchases)
+    o = jobj_arr(o, "sales", p.sales)
+    o = jobj_obj(o, "cells", vat_cells_json(p.cells))
+    o = jobj_str(o, "due", vat_money(p.cells.r50))
+    o = jobj_str(o, "refund", vat_money(p.cells.r60))
+    o = jobj_str(o, "cell_01", vat_money(p.cells.s01))
+    o = jobj_str(o, "cell_11", vat_money(p.cells.s11))
+    o = jobj_str(o, "cell_31", vat_money(p.cells.s21))
+    o = jobj_str(o, "cell_41", vat_money(p.cells.p31))
+    o = jobj_str(o, "cell_71", vat_money(p.cells.p41))
+    o = jobj_str(o, "cell_81", vat_money(p.cells.r50))
+    o = jobj_str(o, "cell_82", vat_money(p.cells.r60))
+    return o
+}
+
+fn vat_need_period(ctx: FmrCtx, db: OrmDb) -> FmrOut {
+    return act_err(db, 400, "period е задължителен (YYYY-MM)")
+}
+
+fn act_vat_registers(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "vat:read")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let raw = fmr_query(ctx, "period")
+    let period = vat_period_ok(raw)
+    if period == "" {
+        if raw == "" {
+            return vat_need_period(ctx, db)
+        }
+        return act_err(db, 400, "period трябва да е YYYY-MM или YYYYMM")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let p = vat_collect(db, period)?
+    if p.ok == 0 {
+        return act_err(p.db, 500, p.err)
+    }
+    return act_ok(p.db, vat_pack_json(p))
+}
+
+fn act_vat_return(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    return act_vat_registers(ctx, db)?
+}
+
+fn act_vat_export(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "vat:read")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let raw = fmr_query(ctx, "period")
+    let period = vat_period_ok(raw)
+    if period == "" {
+        if raw == "" {
+            return vat_need_period(ctx, db)
+        }
+        return act_err(db, 400, "period трябва да е YYYY-MM или YYYYMM")
+    }
+    let kind = fmr_query(ctx, "type")
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let p = vat_collect(db, period)?
+    if p.ok == 0 {
+        return act_err(p.db, 500, p.err)
+    }
+    if kind == "pokupki" {
+        return vat_file_resp(p.db, p.pok, "text/plain; charset=windows-1251", "POKUPKI.TXT")
+    }
+    if kind == "prodagbi" || kind == "prodajbi" {
+        return vat_file_resp(p.db, p.pro, "text/plain; charset=windows-1251", "PRODAGBI.TXT")
+    }
+    if kind == "zip" {
+        let z = vat_zip3(p.dek, p.pok, p.pro)
+        return vat_file_resp(p.db, z, "application/zip", concat(concat("PPDDS_", p.period_fin), ".zip"))
+    }
+    return vat_file_resp(p.db, p.dek, "text/plain; charset=windows-1251", "DEKLAR.TXT")
+}

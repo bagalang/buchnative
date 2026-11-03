@@ -1,0 +1,444 @@
+// actions/invoices_bulk.baga — групови действия върху фактури (селекция).
+// Осчетоводи / Върни към чернова / Изтрий по списък от id-та.
+//
+// Реалност (затова няма заключване): документите идват със закъснение,
+// въвеждат се на ръка, без баркод и без ежедневна каса — грешките са големи.
+// Затова триенето и редакцията са СВОБОДНИ: няма проверка за затворен период
+// и няма забрана по статус. Корекциите не са сторно — махаме записа в
+// дневника изцяло и връщаме стоката, за да останат оборотите по 702/602
+// чисти (виж conventions.md).
+
+import "../models/invoice.baga"
+import "../models/journal.baga"
+import "../models/inventory.baga"
+import "../models/product.baga"
+import "../models/account.baga"
+import "../models/doc_type.baga"
+import "invoices_post.baga"
+import "inventory.baga"
+import "txn.baga"
+import "acl.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/json/json.baga"
+import "std/str/str.baga"
+
+// JSON tag-ове (std/json): 0=null 1=false 2=true 3=number 4=string 5=array 6=object.
+fn bulk_tag_number() -> i64 { return 3 }
+fn bulk_tag_array() -> i64 { return 5 }
+
+// Чете "ids": [1,2,3] от тялото.
+struct BulkIds {
+    ok: i64,
+    err: str,
+    ids: Vec<i64>
+}
+
+fn bulk_ids_read(ctx: FmrCtx) -> BulkIds {
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return BulkIds { ok: 0, err: body.err, ids: vec_new() }
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return BulkIds { ok: 0, err: b.err, ids: vec_new() }
+    }
+    let node = json_get(b.doc, b.root, "ids")
+    if node < 0 {
+        return BulkIds { ok: 0, err: "липсва ids", ids: vec_new() }
+    }
+    if json_tag(b.doc, node) != bulk_tag_array() {
+        return BulkIds { ok: 0, err: "ids трябва да е масив", ids: vec_new() }
+    }
+    let n = json_count(b.doc, node)
+    if n < 1 {
+        return BulkIds { ok: 0, err: "ids е празен", ids: vec_new() }
+    }
+    if n > 500 {
+        return BulkIds { ok: 0, err: "ids е твърде дълъг (макс 500)", ids: vec_new() }
+    }
+    let ids = vec_new()
+    let mut i: i64 = 0
+    while i < n {
+        let el = json_at(b.doc, node, i)
+        if json_tag(b.doc, el) != bulk_tag_number() {
+            return BulkIds { ok: 0, err: concat("ids[", concat(int_to_str(i), "] не е число")), ids: vec_new() }
+        }
+        vec_push(ids, parse_int(json_serialize(b.doc, el)))
+        i = i + 1
+    }
+    return BulkIds { ok: 1, err: "", ids: ids }
+}
+
+fn bulk_result(id: i64, ok: i64, err: str) -> JObj {
+    let mut it = jobj_new()
+    it = jobj_i64(it, "id", id)
+    it = jobj_i64(it, "ok", ok)
+    if err != "" {
+        it = jobj_str(it, "error", err)
+    }
+    return it
+}
+
+// ---------- склад ----------
+
+// Връща стока за един ред на входяща фактура: маха ТОЧНАТА партида, ако е
+// непокътната (още не е изписвана). Иначе отказва — частично изписана партида
+// не се възстановява автоматично, за да не се измисли наличност.
+fn bulk_restore_in_lot(db: OrmDb, line_id: i64, product_id: i64) -> InvResult !IO !Net {
+    let lq = lot_by_invoice_line(db, line_id)?
+    if orm_ok_q(lq) == 0 {
+        return inv_err(orm_db_q(lq), orm_err_q(lq))
+    }
+    let mut db2 = orm_db_q(lq)
+    if orm_nrows(lq) < 1 {
+        return inv_ok(db2, "")
+    }
+    let quantity = inv_dec_or_zero(orm_cell_by(lq, 0, "quantity"))
+    let remaining = inv_dec_or_zero(orm_cell_by(lq, 0, "quantity_remaining"))
+    if dec_cmp(quantity, remaining) != 0 {
+        let msg = concat("партида за ред ", concat(int_to_str(line_id), " вече е изписана — наличността не се връща автоматично"))
+        return inv_err(db2, msg)
+    }
+    let pq = product_find(db2, product_id)?
+    if orm_ok_q(pq) == 0 {
+        return inv_err(orm_db_q(pq), orm_err_q(pq))
+    }
+    db2 = orm_db_q(pq)
+    if orm_nrows(pq) < 1 {
+        return inv_err(db2, "артикулът не е намерен")
+    }
+    let old_qty = inv_dec_or_zero(orm_cell_by(pq, 0, "stock_quantity"))
+    let old_val = inv_dec_or_zero(orm_cell_by(pq, 0, "stock_value"))
+    let lot_val = inv_mul(quantity, inv_dec_or_zero(orm_cell_by(lq, 0, "unit_cost")))
+    if lot_val.ok == 0 {
+        return inv_err(db2, lot_val.err)
+    }
+    let nq = dec_sub(old_qty, quantity)
+    if nq.ok == 0 {
+        return inv_err(db2, nq.err)
+    }
+    let nv = dec_sub(old_val, lot_val.value)
+    if nv.ok == 0 {
+        return inv_err(db2, nv.err)
+    }
+    let mut avg = inv_dec_or_zero(orm_cell_by(pq, 0, "cost_price"))
+    if dec_cmp(nq.value, dec_zero()) > 0 {
+        let d = dec_div(nv.value, nq.value)
+        if d.ok == 1 {
+            avg = d.value
+        }
+    } else {
+        avg = dec_zero()
+    }
+    let dl = lot_delete(db2, orm_cell_by_i64(lq, 0, "id"))?
+    if orm_ok(dl) == 0 {
+        return inv_err(orm_db_exec(dl), orm_err_exec(dl))
+    }
+    db2 = orm_db_exec(dl)
+    let su = product_set_stock(db2, product_id, inv_qty(nq.value), inv_money(nv.value), dec_to_string(avg))?
+    if orm_ok(su) == 0 {
+        return inv_err(orm_db_exec(su), orm_err_exec(su))
+    }
+    return inv_ok(orm_db_exec(su), "")
+}
+
+// Връща стока за един ред на изходяща фактура. Изписването при пост ползва
+// WAC/FIFO/LIFO и не пази кои партиди са пипнати, затова връщаме количеството
+// като нова партида по текущата средна себестойност. Количеството е точно;
+// оценката е приблизителна — при нужда се коригира от екрана за артикули.
+fn bulk_restore_out_line(db: OrmDb, product_id: i64, qty: str) -> InvResult !IO !Net {
+    let pq = product_find(db, product_id)?
+    if orm_ok_q(pq) == 0 {
+        return inv_err(orm_db_q(pq), orm_err_q(pq))
+    }
+    let mut db2 = orm_db_q(pq)
+    if orm_nrows(pq) < 1 {
+        return inv_err(db2, "артикулът не е намерен")
+    }
+    let q = inv_dec_or_zero(qty)
+    if dec_cmp(q, dec_zero()) <= 0 {
+        return inv_ok(db2, "")
+    }
+    let uc = inv_dec_or_zero(orm_cell_by(pq, 0, "cost_price"))
+    let add = inv_mul(q, uc)
+    if add.ok == 0 {
+        return inv_err(db2, add.err)
+    }
+    let old_qty = inv_dec_or_zero(orm_cell_by(pq, 0, "stock_quantity"))
+    let old_val = inv_dec_or_zero(orm_cell_by(pq, 0, "stock_value"))
+    let nq = dec_add(old_qty, q)
+    if nq.ok == 0 {
+        return inv_err(db2, nq.err)
+    }
+    let nv = dec_add(old_val, add.value)
+    if nv.ok == 0 {
+        return inv_err(db2, nv.err)
+    }
+    let mut avg = uc
+    if dec_cmp(nq.value, dec_zero()) > 0 {
+        let d = dec_div(nv.value, nq.value)
+        if d.ok == 1 {
+            avg = d.value
+        }
+    }
+    let su = product_set_stock(db2, product_id, inv_qty(nq.value), inv_money(nv.value), dec_to_string(avg))?
+    if orm_ok(su) == 0 {
+        return inv_err(orm_db_exec(su), orm_err_exec(su))
+    }
+    return inv_ok(orm_db_exec(su), "")
+}
+
+// Връща склада за фактурата (само ако е данъчен документ за стока 01/11).
+fn bulk_restore_stock(db: OrmDb, invoice_id: i64, document_type: str, direction: str) -> InvResult !IO !Net {
+    if document_type != "01" && document_type != "11" {
+        return inv_ok(db, "")
+    }
+    let lq = invoice_lines_by_invoice(db, invoice_id)?
+    if orm_ok_q(lq) == 0 {
+        return inv_err(orm_db_q(lq), orm_err_q(lq))
+    }
+    let mut db2 = orm_db_q(lq)
+    let mut i: i64 = 0
+    while i < orm_nrows(lq) {
+        let pid = orm_cell_by_i64(lq, i, "product_id")
+        if pid > 0 {
+            let pq = product_find(db2, pid)?
+            if orm_ok_q(pq) == 0 {
+                return inv_err(orm_db_q(pq), orm_err_q(pq))
+            }
+            db2 = orm_db_q(pq)
+            if orm_nrows(pq) > 0 && orm_cell_by_i64(pq, 0, "is_inventory") == 1 {
+                let mut r = inv_ok(db2, "")
+                if direction == "in" {
+                    r = bulk_restore_in_lot(db2, orm_cell_by_i64(lq, i, "id"), pid)?
+                } else {
+                    r = bulk_restore_out_line(db2, pid, orm_cell_by(lq, i, "quantity"))?
+                }
+                if r.ok == 0 {
+                    return r
+                }
+                db2 = r.db
+            }
+        }
+        i = i + 1
+    }
+    return inv_ok(db2, "")
+}
+
+// ---------- едно-документни операции ----------
+
+struct OpOne {
+    ok: i64,
+    err: str,
+    db: OrmDb
+}
+
+// Връща осчетоводена фактура към чернова: маха записа в дневника (редове +
+// заглавен ред) и връща стоката. Без проверка за период/статус — свободно.
+fn bulk_unpost_one(db: OrmDb, id: i64) -> OpOne !IO !Net {
+    let iq = invoice_find(db, id)?
+    if orm_ok_q(iq) == 0 {
+        return OpOne { ok: 0, err: orm_err_q(iq), db: orm_db_q(iq) }
+    }
+    if orm_nrows(iq) < 1 {
+        return OpOne { ok: 0, err: "фактурата не е намерена", db: orm_db_q(iq) }
+    }
+    let mut db2 = orm_db_q(iq)
+    if orm_cell_by(iq, 0, "status") != "posted" {
+        return OpOne { ok: 0, err: "не е осчетоводена", db: db2 }
+    }
+    let st = bulk_restore_stock(db2, id, orm_cell_by(iq, 0, "document_type"), orm_cell_by(iq, 0, "direction"))?
+    if st.ok == 0 {
+        return OpOne { ok: 0, err: st.err, db: st.db }
+    }
+    db2 = st.db
+    let entry_id = orm_cell_by_i64(iq, 0, "journal_entry_id")
+    if entry_id > 0 {
+        let jd = journal_delete_entry(db2, entry_id)?
+        if orm_ok(jd) == 0 {
+            return OpOne { ok: 0, err: orm_err_exec(jd), db: orm_db_exec(jd) }
+        }
+        db2 = orm_db_exec(jd)
+    }
+    let cols = vec_new()
+    vec_push(cols, "status")
+    vec_push(cols, "journal_entry_id")
+    let vals = vec_new()
+    vec_push(vals, "draft")
+    vec_push(vals, "0")
+    let su = orm_update_by_id(db2, invoice_table(), id, cols, vals)?
+    if orm_ok(su) == 0 {
+        return OpOne { ok: 0, err: orm_err_exec(su), db: orm_db_exec(su) }
+    }
+    return OpOne { ok: 1, err: "", db: orm_db_exec(su) }
+}
+
+// Изтрива фактура изцяло: стоката, записа в дневника (ако е осчетоводена),
+// редовете и самата фактура. Свободно — без проверка за период.
+fn bulk_delete_one(db: OrmDb, id: i64) -> OpOne !IO !Net {
+    let iq = invoice_find(db, id)?
+    if orm_ok_q(iq) == 0 {
+        return OpOne { ok: 0, err: orm_err_q(iq), db: orm_db_q(iq) }
+    }
+    if orm_nrows(iq) < 1 {
+        return OpOne { ok: 0, err: "фактурата не е намерена", db: orm_db_q(iq) }
+    }
+    let mut db2 = orm_db_q(iq)
+    if orm_cell_by(iq, 0, "status") == "posted" {
+        let st = bulk_restore_stock(db2, id, orm_cell_by(iq, 0, "document_type"), orm_cell_by(iq, 0, "direction"))?
+        if st.ok == 0 {
+            return OpOne { ok: 0, err: st.err, db: st.db }
+        }
+        db2 = st.db
+        let entry_id = orm_cell_by_i64(iq, 0, "journal_entry_id")
+        if entry_id > 0 {
+            let jd = journal_delete_entry(db2, entry_id)?
+            if orm_ok(jd) == 0 {
+                return OpOne { ok: 0, err: orm_err_exec(jd), db: orm_db_exec(jd) }
+            }
+            db2 = orm_db_exec(jd)
+        }
+    }
+    let dl = invoice_delete_lines(db2, id)?
+    if orm_ok(dl) == 0 {
+        return OpOne { ok: 0, err: orm_err_exec(dl), db: orm_db_exec(dl) }
+    }
+    let de = invoice_delete(orm_db_exec(dl), id)?
+    if orm_ok(de) == 0 {
+        return OpOne { ok: 0, err: orm_err_exec(de), db: orm_db_exec(de) }
+    }
+    return OpOne { ok: 1, err: "", db: orm_db_exec(de) }
+}
+
+// ---------- handlers ----------
+
+fn act_invoices_bulk_post(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:post")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let b = bulk_ids_read(ctx)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let mut results = jarr_new()
+    let mut done: i64 = 0
+    let mut failed: i64 = 0
+    let mut i: i64 = 0
+    while i < vec_len(b.ids) {
+        let id = vec_get(b.ids, i)
+        let out = invoice_post_one(db, id, auth.ctx.user_sub)?
+        if out.resp.status == 201 {
+            results = jarr_obj(results, bulk_result(id, 1, ""))
+            done = done + 1
+        } else {
+            results = jarr_obj(results, bulk_result(id, 0, out.resp.body))
+            failed = failed + 1
+        }
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_i64(o, "posted", done)
+    o = jobj_i64(o, "failed", failed)
+    o = jobj_arr(o, "results", results)
+    return act_ok(db, o)
+}
+
+fn act_invoices_bulk_unpost(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:post")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let b = bulk_ids_read(ctx)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let mut results = jarr_new()
+    let mut done: i64 = 0
+    let mut failed: i64 = 0
+    let mut cur = db
+    let mut i: i64 = 0
+    while i < vec_len(b.ids) {
+        let id = vec_get(b.ids, i)
+        let bgn = bb_begin(cur)?
+        if orm_ok(bgn) == 0 {
+            return act_err(orm_db_exec(bgn), 500, orm_err_exec(bgn))
+        }
+        let r = bulk_unpost_one(orm_db_exec(bgn), id)?
+        if r.ok == 1 {
+            let cmt = bb_commit(r.db)?
+            if orm_ok(cmt) == 0 {
+                return act_err(orm_db_exec(cmt), 500, orm_err_exec(cmt))
+            }
+            cur = orm_db_exec(cmt)
+            results = jarr_obj(results, bulk_result(id, 1, ""))
+            done = done + 1
+        } else {
+            cur = bb_rollback(r.db)?
+            results = jarr_obj(results, bulk_result(id, 0, r.err))
+            failed = failed + 1
+        }
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_i64(o, "unposted", done)
+    o = jobj_i64(o, "failed", failed)
+    o = jobj_arr(o, "results", results)
+    return act_ok(cur, o)
+}
+
+fn act_invoices_bulk_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "invoice:delete")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let b = bulk_ids_read(ctx)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let mut results = jarr_new()
+    let mut done: i64 = 0
+    let mut failed: i64 = 0
+    let mut cur = db
+    let mut i: i64 = 0
+    while i < vec_len(b.ids) {
+        let id = vec_get(b.ids, i)
+        let bgn = bb_begin(cur)?
+        if orm_ok(bgn) == 0 {
+            return act_err(orm_db_exec(bgn), 500, orm_err_exec(bgn))
+        }
+        let r = bulk_delete_one(orm_db_exec(bgn), id)?
+        if r.ok == 1 {
+            let cmt = bb_commit(r.db)?
+            if orm_ok(cmt) == 0 {
+                return act_err(orm_db_exec(cmt), 500, orm_err_exec(cmt))
+            }
+            cur = orm_db_exec(cmt)
+            results = jarr_obj(results, bulk_result(id, 1, ""))
+            done = done + 1
+        } else {
+            cur = bb_rollback(r.db)?
+            results = jarr_obj(results, bulk_result(id, 0, r.err))
+            failed = failed + 1
+        }
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_i64(o, "deleted", done)
+    o = jobj_i64(o, "failed", failed)
+    o = jobj_arr(o, "results", results)
+    return act_ok(cur, o)
+}

@@ -1,0 +1,137 @@
+// models/product_name_mapping.baga — име от сканиран документ → наш артикул.
+// UNIQUE (counterpart_id, scanned_name). Две '=' в WHERE не се ползват:
+// търсене по counterpart_id, съвпадението на името е в приложението.
+
+import "ormbaga/orm.baga"
+import "ormbaga/sql.baga"
+import "fmrbaga/jsonx.baga"
+import "pgbaga/pg.baga"
+import "std/str/str.baga"
+import "std/os/os.baga"
+
+fn pnmap_table() -> str {
+    return "product_name_mappings"
+}
+
+fn pnmap_backend_boila() -> i64 !IO {
+    let be = env("ORM_BACKEND")?
+    if be == "boila" || be == "boiladb" || be == "boilaDB" {
+        return 1
+    }
+    return 0
+}
+
+fn pnmap_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return orm_count_sql(db, "SELECT MAX(id) AS count FROM product_name_mappings")?
+}
+
+fn scan_norm_name(s: str) -> str {
+    let t = str_trim(s)
+    let mut out = ""
+    let mut sp: i64 = 0
+    let mut i: i64 = 0
+    while i < len(t) {
+        let c = char_at(t, i)
+        if c == 32 || c == 9 || c == 10 || c == 13 {
+            if sp == 0 {
+                out = concat(out, " ")
+                sp = 1
+            }
+        } else {
+            sp = 0
+            if c >= 65 && c <= 90 {
+                out = concat(out, chr(c + 32))
+            } else {
+                out = concat(out, substr(t, i, i + 1))
+            }
+        }
+        i = i + 1
+    }
+    return str_trim(out)
+}
+
+fn pnmap_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_i64(o, "counterpart_id", orm_cell_by_i64(q, row, "counterpart_id"))
+    o = jobj_str(o, "scanned_name", orm_cell_by(q, row, "scanned_name"))
+    o = jobj_i64(o, "product_id", orm_cell_by_i64(q, row, "product_id"))
+    return o
+}
+
+fn pnmap_select_sql() -> str {
+    return "SELECT id, counterpart_id, scanned_name, product_id, created_at FROM product_name_mappings"
+}
+
+fn pnmap_by_counterpart(db: OrmDb, counterpart_id: i64) -> OrmQuery !IO !Net {
+    let sql = concat(pnmap_select_sql(), " WHERE counterpart_id = $1")
+    let vals = vec_new()
+    let nulls = vec_new()
+    pg_param_i64(vals, nulls, counterpart_id)
+    return orm_query_params(db, sql, vals, nulls)?
+}
+
+fn pnmap_find_name(q: OrmQuery, scanned_name: str) -> i64 {
+    let want = scan_norm_name(scanned_name)
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        if orm_cell_by(q, i, "scanned_name") == want {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+fn pnmap_insert(db: OrmDb, counterpart_id: i64, scanned_name: str, product_id: i64) -> OrmExec !IO !Net {
+    let name = scan_norm_name(scanned_name)
+    if pnmap_backend_boila()? == 1 {
+        let c = pnmap_next_id(db)?
+        if orm_ok_c(c) == 0 {
+            return OrmEErr(OrmExecFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
+        }
+        let nid = orm_count_n(c) + 1
+        let mut d = orm_db_c(c)
+        let cols = vec_new()
+        vec_push(cols, "id")
+        vec_push(cols, "counterpart_id")
+        vec_push(cols, "scanned_name")
+        vec_push(cols, "product_id")
+        let vals = vec_new()
+        vec_push(vals, int_to_str(nid))
+        vec_push(vals, int_to_str(counterpart_id))
+        vec_push(vals, name)
+        vec_push(vals, int_to_str(product_id))
+        return orm_insert_strs(d, pnmap_table(), cols, vals)?
+    }
+    let cols = vec_new()
+    vec_push(cols, "counterpart_id")
+    vec_push(cols, "scanned_name")
+    vec_push(cols, "product_id")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(counterpart_id))
+    vec_push(vals, name)
+    vec_push(vals, int_to_str(product_id))
+    return orm_insert_strs(db, pnmap_table(), cols, vals)?
+}
+
+fn pnmap_set_product(db: OrmDb, id: i64, product_id: i64) -> OrmExec !IO !Net {
+    let cols = vec_new()
+    vec_push(cols, "product_id")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(product_id))
+    return orm_update_by_id(db, pnmap_table(), id, cols, vals)?
+}
+
+fn pnmap_list_json(q: OrmQuery) -> JObj {
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        arr = jarr_obj(arr, pnmap_to_json(q, i))
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", orm_nrows(q))
+    return o
+}

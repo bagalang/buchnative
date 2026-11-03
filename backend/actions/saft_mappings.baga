@@ -1,0 +1,311 @@
+// actions/saft_mappings.baga — CRUD за SAF-T кореспонденции на сметки.
+// GET/POST /v1/saft/movement-mappings; defaults е преди {id}.
+
+import "../models/saft_mapping.baga"
+import "../models/saft_mapping_defaults.baga"
+import "acl.baga"
+import "active_company.baga"
+import "txn.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+fn smap_need_company(ctx: FmrCtx, db: OrmDb) -> ActiveCompany !IO !Net {
+    return active_company_id(db, ctx.user_sub)?
+}
+
+fn smap_pack_list(q: OrmQuery, kind: str) -> JObj {
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    let mut n: i64 = 0
+    while i < orm_nrows(q) {
+        if orm_cell_by(q, i, "kind") == kind {
+            arr = jarr_obj(arr, smap_to_json(q, i))
+            n = n + 1
+        }
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "kind", kind)
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", n)
+    o = jobj_raw(o, "types", jarr_encode(smap_types_json(kind)))
+    return o
+}
+
+fn smap_count_kind(q: OrmQuery, kind: str) -> i64 {
+    let mut n: i64 = 0
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        if orm_cell_by(q, i, "kind") == kind {
+            n = n + 1
+        }
+        i = i + 1
+    }
+    return n
+}
+
+fn act_smap_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:read")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let kind = str_trim(fmr_query(ctx, "kind"))
+    if smap_kind_ok(kind) == 0 {
+        return act_err(db, 400, "непознат вид кореспонденция (kind=stock|asset|cash)")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let ac = smap_need_company(auth.ctx, db)?
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let q = smap_by_company(ac.db, ac.id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    return act_ok(orm_db_q(q), smap_pack_list(q, kind))
+}
+
+fn act_smap_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:write")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let kind_f = jreq_str(b.doc, b.root, "kind")
+    if kind_f.ok == 0 {
+        return act_422_field(db, "kind", kind_f)
+    }
+    let kind = str_trim(kind_f.val)
+    if smap_kind_ok(kind) == 0 {
+        return act_err(db, 422, "непознат вид кореспонденция (kind=stock|asset|cash)")
+    }
+    let code_f = jreq_str(b.doc, b.root, "type_code")
+    if code_f.ok == 0 {
+        return act_422_field(db, "type_code", code_f)
+    }
+    let code = str_trim(code_f.val)
+    if smap_type_known(kind, code) == 0 {
+        return act_err(db, 422, "непознат тип движение за този вид")
+    }
+    let dt_f = jreq_str(b.doc, b.root, "debit_account")
+    if dt_f.ok == 0 {
+        return act_422_field(db, "debit_account", dt_f)
+    }
+    let kt_f = jreq_str(b.doc, b.root, "credit_account")
+    if kt_f.ok == 0 {
+        return act_422_field(db, "credit_account", kt_f)
+    }
+    let dt = str_trim(dt_f.val)
+    let kt = str_trim(kt_f.val)
+    if dt == "" || kt == "" {
+        return act_err(db, 422, "дебит и кредит сметките са задължителни")
+    }
+    let dan = jopt_str(b.doc, b.root, "debit_analytical", "")
+    let kan = jopt_str(b.doc, b.root, "credit_analytical", "")
+    let desc = jopt_str(b.doc, b.root, "description", "")
+    let ac = smap_need_company(auth.ctx, db)?
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let ins = smap_create(ac.db, ac.id, kind, code, dt, kt, str_trim(dan.val), str_trim(kan.val), str_trim(desc.val))?
+    if orm_ok_q(ins) == 0 || orm_nrows(ins) < 1 {
+        return act_err(orm_db_q(ins), 500, orm_err_q(ins))
+    }
+    return act_created(orm_db_q(ins), smap_to_json(ins, 0))
+}
+
+fn act_smap_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:write")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let ac = smap_need_company(auth.ctx, db)?
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let q = smap_find(ac.db, id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 || orm_cell_by_i64(q, 0, "company_id") != ac.id {
+        return act_404(orm_db_q(q), "кореспонденцията не е намерена")
+    }
+    let kind = orm_cell_by(q, 0, "kind")
+    let cols = vec_new()
+    let vals = vec_new()
+    let code_f = jreq_str(b.doc, b.root, "type_code")
+    if code_f.present == 1 {
+        if code_f.ok == 0 {
+            return act_422_field(orm_db_q(q), "type_code", code_f)
+        }
+        let code = str_trim(code_f.val)
+        if smap_type_known(kind, code) == 0 {
+            return act_err(orm_db_q(q), 422, "непознат тип движение за този вид")
+        }
+        vec_push(cols, "type_code")
+        vec_push(vals, code)
+    }
+    let dt_f = jreq_str(b.doc, b.root, "debit_account")
+    if dt_f.present == 1 {
+        if dt_f.ok == 0 || str_trim(dt_f.val) == "" {
+            return act_err(orm_db_q(q), 422, "дебит сметката е задължителна")
+        }
+        vec_push(cols, "debit_account")
+        vec_push(vals, str_trim(dt_f.val))
+    }
+    let kt_f = jreq_str(b.doc, b.root, "credit_account")
+    if kt_f.present == 1 {
+        if kt_f.ok == 0 || str_trim(kt_f.val) == "" {
+            return act_err(orm_db_q(q), 422, "кредит сметката е задължителна")
+        }
+        vec_push(cols, "credit_account")
+        vec_push(vals, str_trim(kt_f.val))
+    }
+    let dan = jreq_str(b.doc, b.root, "debit_analytical")
+    if dan.present == 1 && dan.ok == 1 {
+        vec_push(cols, "debit_analytical")
+        vec_push(vals, str_trim(dan.val))
+    }
+    let kan = jreq_str(b.doc, b.root, "credit_analytical")
+    if kan.present == 1 && kan.ok == 1 {
+        vec_push(cols, "credit_analytical")
+        vec_push(vals, str_trim(kan.val))
+    }
+    let desc = jreq_str(b.doc, b.root, "description")
+    if desc.present == 1 && desc.ok == 1 {
+        vec_push(cols, "description")
+        vec_push(vals, str_trim(desc.val))
+    }
+    let actf = jreq_i64(b.doc, b.root, "is_active")
+    if actf.present == 1 && actf.ok == 1 {
+        vec_push(cols, "is_active")
+        vec_push(vals, int_to_str(actf.num))
+    }
+    let mut d = orm_db_q(q)
+    if vec_len(cols) > 0 {
+        let up = smap_update(d, id, cols, vals)?
+        if orm_ok(up) == 0 {
+            return act_err(orm_db_exec(up), 500, orm_err_exec(up))
+        }
+        d = orm_db_exec(up)
+    }
+    let nq = smap_find(d, id)?
+    if orm_ok_q(nq) == 0 || orm_nrows(nq) < 1 {
+        return act_err(orm_db_q(nq), 500, orm_err_q(nq))
+    }
+    return act_ok(orm_db_q(nq), smap_to_json(nq, 0))
+}
+
+fn act_smap_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:write")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    let ac = smap_need_company(auth.ctx, db)?
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let q = smap_find(ac.db, id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 || orm_cell_by_i64(q, 0, "company_id") != ac.id {
+        return act_404(orm_db_q(q), "кореспонденцията не е намерена")
+    }
+    let del = smap_delete(orm_db_q(q), id)?
+    if orm_ok(del) == 0 {
+        return act_err(orm_db_exec(del), 500, orm_err_exec(del))
+    }
+    return act_no_content(orm_db_exec(del))
+}
+
+fn act_smap_defaults(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:write")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let kind_f = jreq_str(b.doc, b.root, "kind")
+    if kind_f.ok == 0 {
+        return act_422_field(db, "kind", kind_f)
+    }
+    let kind = str_trim(kind_f.val)
+    if smap_kind_ok(kind) == 0 {
+        return act_err(db, 422, "непознат вид кореспонденция (kind=stock|asset|cash)")
+    }
+    let ac = smap_need_company(auth.ctx, db)?
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let q = smap_by_company(ac.db, ac.id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    if smap_count_kind(q, kind) > 0 {
+        return act_err(orm_db_q(q), 422, "вече има кореспонденции за този вид. Изтрийте ги първо.")
+    }
+    let rows = smap_default_rows(kind)
+    let bgn = bb_begin(orm_db_q(q))?
+    if orm_ok(bgn) == 0 {
+        return act_err(orm_db_exec(bgn), 500, orm_err_exec(bgn))
+    }
+    let mut db2 = orm_db_exec(bgn)
+    let mut i: i64 = 0
+    let mut n: i64 = 0
+    while i < vec_len(rows) {
+        let p = str_split(vec_get(rows, i), "|")
+        if vec_len(p) >= 4 {
+            let ins = smap_create(db2, ac.id, kind, vec_get(p, 0), vec_get(p, 1), vec_get(p, 2), "", "", vec_get(p, 3))?
+            if orm_ok_q(ins) == 0 {
+                return act_err_rb(orm_db_q(ins), 500, orm_err_q(ins))
+            }
+            db2 = orm_db_q(ins)
+            n = n + 1
+        }
+        i = i + 1
+    }
+    let cmt = bb_commit(db2)?
+    if orm_ok(cmt) == 0 {
+        return act_err(orm_db_exec(cmt), 500, orm_err_exec(cmt))
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "kind", kind)
+    o = jobj_i64(o, "count", n)
+    return act_ok(orm_db_exec(cmt), o)
+}

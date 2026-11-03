@@ -1,0 +1,18 @@
+[package]
+name = "buchnative-backend"
+version = "0.8.9"
+entry = "start.baga"
+kind = "bin"
+
+[dependencies]
+fmrbaga = { path = "../../../app-product/fmrbaga" }
+jwtbaga = { path = "../../../app-product/jwtbaga" }
+otpbaga = { path = "../../../app-product/otpbaga" }
+ormbaga = { path = "../../../app-product/ormbaga" }
+drockb = { path = "../../../app-product/drockb" }
+bagadecimal = { path = "../../../app-product/bagadecimal" }
+chronobaga = { path = "../../../app-product/chronobaga" }
+xmlbaga = { path = "../../../app-product/xmlbaga" }
+reportbaga = { path = "../../../app-product/reportbaga" }
+zipbaga = { path = "../../../app-product/zipbaga" }
+std = { path = "../../../std" }

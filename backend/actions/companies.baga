@@ -1,0 +1,486 @@
+// actions/companies.baga — фирми: CRUD handlers.
+
+import "../models/company.baga"
+import "../models/addr_saft.baga"
+import "acl.baga"
+import "accounts_seed.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+
+fn act_companies_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "company:read")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let page = act_page(ctx, 50, 200)
+    let q = company_all(db)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let mut o = company_list_json(q)
+    o = jobj_i64(o, "limit", page.limit)
+    o = jobj_i64(o, "offset", page.offset)
+    return act_ok(orm_db_q(q), o)
+}
+
+fn act_companies_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    let auth = act_require_perm(ctx, db, "company:create")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let name = jreq_str(b.doc, b.root, "name")
+    if name.ok == 0 {
+        return act_422_field(db, "name", name)
+    }
+    let eik = jreq_str(b.doc, b.root, "eik")
+    if eik.ok == 0 {
+        return act_422_field(db, "eik", eik)
+    }
+    let vat_number = jopt_str(b.doc, b.root, "vat_number", "")
+    let ivr = jreq_bool(b.doc, b.root, "is_vat_registered")
+    let mut is_vat_registered: i64 = 0
+    if ivr.present == 1 {
+        if ivr.ok == 0 {
+            return act_422_field(db, "is_vat_registered", ivr)
+        }
+        is_vat_registered = ivr.num
+    }
+    let vat_period = jopt_str(b.doc, b.root, "vat_period", "monthly")
+    let currency = jopt_str(b.doc, b.root, "currency", "EUR")
+    let address = jopt_str(b.doc, b.root, "address", "")
+    let city = jopt_str(b.doc, b.root, "city", "")
+    let post_code = jopt_str(b.doc, b.root, "post_code", "")
+    let phone = jopt_str(b.doc, b.root, "phone", "")
+    let email = jopt_str(b.doc, b.root, "email", "")
+    let website = jopt_str(b.doc, b.root, "website", "")
+    let mol = jopt_str(b.doc, b.root, "mol", "")
+    let manager_eik = jopt_str(b.doc, b.root, "manager_eik", "")
+    let accountant_name = jopt_str(b.doc, b.root, "accountant_name", "")
+    let accountant_egn = jopt_str(b.doc, b.root, "accountant_egn", "")
+    let tax_authority = jopt_str(b.doc, b.root, "tax_authority", "")
+    let nap_office = jopt_str(b.doc, b.root, "nap_office", "")
+    let iban = jopt_str(b.doc, b.root, "iban", "")
+    let bic = jopt_str(b.doc, b.root, "bic", "")
+    let inventory_valuation_method = jopt_str(b.doc, b.root, "inventory_valuation_method", "WAC")
+    let fysm = jreq_i64(b.doc, b.root, "fiscal_year_start_month")
+    let mut fiscal_year_start_month: i64 = 1
+    if fysm.present == 1 {
+        if fysm.ok == 0 {
+            return act_422_field(db, "fiscal_year_start_month", fysm)
+        }
+        fiscal_year_start_month = fysm.num
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let ins = company_create(db, name.val, eik.val, vat_number.val, is_vat_registered, vat_period.val, currency.val, address.val, city.val, post_code.val, phone.val, email.val, website.val, mol.val, manager_eik.val, accountant_name.val, accountant_egn.val, tax_authority.val, nap_office.val, iban.val, bic.val, inventory_valuation_method.val, fiscal_year_start_month)?
+    if orm_ok(ins) == 0 {
+        return act_err(orm_db_exec(ins), 409, orm_err_exec(ins))
+    }
+    let q = company_all(orm_db_exec(ins))?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_err(orm_db_q(q), 500, "insert ok but row missing")
+    }
+    let mut o = company_to_json(q, orm_nrows(q) - 1)
+    let s = account_seed_from_saft(orm_db_q(q))?
+    o = jobj_i64(o, "saft_accounts_seeded", s.created)
+    return act_created(s.db, o)
+}
+
+fn act_companies_show(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "company:read")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let q = company_find(db, id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "Company not found")
+    }
+    return act_ok(orm_db_q(q), company_to_json(q, 0))
+}
+
+fn act_companies_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "company:update")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    // Частичен PATCH: само присъстващите полета влизат в SET.
+    let cols = vec_new()
+    let vals = vec_new()
+    let name = jreq_str(b.doc, b.root, "name")
+    if name.present == 1 {
+        if name.ok == 0 {
+            return act_422_field(db, "name", name)
+        }
+        vec_push(cols, "name")
+        vec_push(vals, name.val)
+    }
+    let eik = jreq_str(b.doc, b.root, "eik")
+    if eik.present == 1 {
+        if eik.ok == 0 {
+            return act_422_field(db, "eik", eik)
+        }
+        vec_push(cols, "eik")
+        vec_push(vals, eik.val)
+    }
+    let vat_number = jreq_str(b.doc, b.root, "vat_number")
+    if vat_number.present == 1 {
+        if vat_number.ok == 0 {
+            return act_422_field(db, "vat_number", vat_number)
+        }
+        vec_push(cols, "vat_number")
+        vec_push(vals, vat_number.val)
+    }
+    let ivr = jreq_bool(b.doc, b.root, "is_vat_registered")
+    if ivr.present == 1 {
+        if ivr.ok == 0 {
+            return act_422_field(db, "is_vat_registered", ivr)
+        }
+        vec_push(cols, "is_vat_registered")
+        vec_push(vals, int_to_str(ivr.num))
+    }
+    let vat_period = jreq_str(b.doc, b.root, "vat_period")
+    if vat_period.present == 1 {
+        if vat_period.ok == 0 {
+            return act_422_field(db, "vat_period", vat_period)
+        }
+        vec_push(cols, "vat_period")
+        vec_push(vals, vat_period.val)
+    }
+    let currency = jreq_str(b.doc, b.root, "currency")
+    if currency.present == 1 {
+        if currency.ok == 0 {
+            return act_422_field(db, "currency", currency)
+        }
+        vec_push(cols, "currency")
+        vec_push(vals, currency.val)
+    }
+    let address = jreq_str(b.doc, b.root, "address")
+    if address.present == 1 {
+        if address.ok == 0 {
+            return act_422_field(db, "address", address)
+        }
+        vec_push(cols, "address")
+        vec_push(vals, address.val)
+    }
+    let city = jreq_str(b.doc, b.root, "city")
+    if city.present == 1 {
+        if city.ok == 0 {
+            return act_422_field(db, "city", city)
+        }
+        vec_push(cols, "city")
+        vec_push(vals, city.val)
+    }
+    let post_code = jreq_str(b.doc, b.root, "post_code")
+    if post_code.present == 1 {
+        if post_code.ok == 0 {
+            return act_422_field(db, "post_code", post_code)
+        }
+        vec_push(cols, "post_code")
+        vec_push(vals, post_code.val)
+    }
+    let phone = jreq_str(b.doc, b.root, "phone")
+    if phone.present == 1 {
+        if phone.ok == 0 {
+            return act_422_field(db, "phone", phone)
+        }
+        vec_push(cols, "phone")
+        vec_push(vals, phone.val)
+    }
+    let email = jreq_str(b.doc, b.root, "email")
+    if email.present == 1 {
+        if email.ok == 0 {
+            return act_422_field(db, "email", email)
+        }
+        vec_push(cols, "email")
+        vec_push(vals, email.val)
+    }
+    let website = jreq_str(b.doc, b.root, "website")
+    if website.present == 1 {
+        if website.ok == 0 {
+            return act_422_field(db, "website", website)
+        }
+        vec_push(cols, "website")
+        vec_push(vals, website.val)
+    }
+    let mol = jreq_str(b.doc, b.root, "mol")
+    if mol.present == 1 {
+        if mol.ok == 0 {
+            return act_422_field(db, "mol", mol)
+        }
+        vec_push(cols, "mol")
+        vec_push(vals, mol.val)
+    }
+    let manager_eik = jreq_str(b.doc, b.root, "manager_eik")
+    if manager_eik.present == 1 {
+        if manager_eik.ok == 0 {
+            return act_422_field(db, "manager_eik", manager_eik)
+        }
+        vec_push(cols, "manager_eik")
+        vec_push(vals, manager_eik.val)
+    }
+    let accountant_name = jreq_str(b.doc, b.root, "accountant_name")
+    if accountant_name.present == 1 {
+        if accountant_name.ok == 0 {
+            return act_422_field(db, "accountant_name", accountant_name)
+        }
+        vec_push(cols, "accountant_name")
+        vec_push(vals, accountant_name.val)
+    }
+    let accountant_egn = jreq_str(b.doc, b.root, "accountant_egn")
+    if accountant_egn.present == 1 {
+        if accountant_egn.ok == 0 {
+            return act_422_field(db, "accountant_egn", accountant_egn)
+        }
+        vec_push(cols, "accountant_egn")
+        vec_push(vals, accountant_egn.val)
+    }
+    let tax_authority = jreq_str(b.doc, b.root, "tax_authority")
+    if tax_authority.present == 1 {
+        if tax_authority.ok == 0 {
+            return act_422_field(db, "tax_authority", tax_authority)
+        }
+        vec_push(cols, "tax_authority")
+        vec_push(vals, tax_authority.val)
+    }
+    let nap_office = jreq_str(b.doc, b.root, "nap_office")
+    if nap_office.present == 1 {
+        if nap_office.ok == 0 {
+            return act_422_field(db, "nap_office", nap_office)
+        }
+        vec_push(cols, "nap_office")
+        vec_push(vals, nap_office.val)
+    }
+    let iban = jreq_str(b.doc, b.root, "iban")
+    if iban.present == 1 {
+        if iban.ok == 0 {
+            return act_422_field(db, "iban", iban)
+        }
+        vec_push(cols, "iban")
+        vec_push(vals, iban.val)
+    }
+    let bic = jreq_str(b.doc, b.root, "bic")
+    if bic.present == 1 {
+        if bic.ok == 0 {
+            return act_422_field(db, "bic", bic)
+        }
+        vec_push(cols, "bic")
+        vec_push(vals, bic.val)
+    }
+    let inventory_valuation_method = jreq_str(b.doc, b.root, "inventory_valuation_method")
+    if inventory_valuation_method.present == 1 {
+        if inventory_valuation_method.ok == 0 {
+            return act_422_field(db, "inventory_valuation_method", inventory_valuation_method)
+        }
+        vec_push(cols, "inventory_valuation_method")
+        vec_push(vals, inventory_valuation_method.val)
+    }
+    let fysm = jreq_i64(b.doc, b.root, "fiscal_year_start_month")
+    if fysm.present == 1 {
+        if fysm.ok == 0 {
+            return act_422_field(db, "fiscal_year_start_month", fysm)
+        }
+        vec_push(cols, "fiscal_year_start_month")
+        vec_push(vals, int_to_str(fysm.num))
+    }
+    let country = jreq_str(b.doc, b.root, "country")
+    if country.present == 1 {
+        if country.ok == 0 { return act_422_field(db, "country", country) }
+        vec_push(cols, "country")
+        vec_push(vals, country.val)
+    }
+    let manager_name = jreq_str(b.doc, b.root, "manager_name")
+    if manager_name.present == 1 {
+        if manager_name.ok == 0 { return act_422_field(db, "manager_name", manager_name) }
+        vec_push(cols, "manager_name")
+        vec_push(vals, manager_name.val)
+    }
+    let manager_egn = jreq_str(b.doc, b.root, "manager_egn")
+    if manager_egn.present == 1 {
+        if manager_egn.ok == 0 { return act_422_field(db, "manager_egn", manager_egn) }
+        vec_push(cols, "manager_egn")
+        vec_push(vals, manager_egn.val)
+    }
+    let authorized_person_name = jreq_str(b.doc, b.root, "authorized_person_name")
+    if authorized_person_name.present == 1 {
+        if authorized_person_name.ok == 0 { return act_422_field(db, "authorized_person_name", authorized_person_name) }
+        vec_push(cols, "authorized_person_name")
+        vec_push(vals, authorized_person_name.val)
+    }
+    let authorized_person_egn = jreq_str(b.doc, b.root, "authorized_person_egn")
+    if authorized_person_egn.present == 1 {
+        if authorized_person_egn.ok == 0 { return act_422_field(db, "authorized_person_egn", authorized_person_egn) }
+        vec_push(cols, "authorized_person_egn")
+        vec_push(vals, authorized_person_egn.val)
+    }
+    let vat_branch_number = jreq_str(b.doc, b.root, "vat_branch_number")
+    if vat_branch_number.present == 1 {
+        if vat_branch_number.ok == 0 { return act_422_field(db, "vat_branch_number", vat_branch_number) }
+        vec_push(cols, "vat_branch_number")
+        vec_push(vals, vat_branch_number.val)
+    }
+    let tax_accounting_basis = jreq_str(b.doc, b.root, "tax_accounting_basis")
+    if tax_accounting_basis.present == 1 {
+        if tax_accounting_basis.ok == 0 { return act_422_field(db, "tax_accounting_basis", tax_accounting_basis) }
+        vec_push(cols, "tax_accounting_basis")
+        vec_push(vals, tax_accounting_basis.val)
+    }
+    let tax_entity = jreq_str(b.doc, b.root, "tax_entity")
+    if tax_entity.present == 1 {
+        if tax_entity.ok == 0 { return act_422_field(db, "tax_entity", tax_entity) }
+        vec_push(cols, "tax_entity")
+        vec_push(vals, tax_entity.val)
+    }
+    let software_company_name = jreq_str(b.doc, b.root, "software_company_name")
+    if software_company_name.present == 1 {
+        if software_company_name.ok == 0 { return act_422_field(db, "software_company_name", software_company_name) }
+        vec_push(cols, "software_company_name")
+        vec_push(vals, software_company_name.val)
+    }
+    let software_id = jreq_str(b.doc, b.root, "software_id")
+    if software_id.present == 1 {
+        if software_id.ok == 0 { return act_422_field(db, "software_id", software_id) }
+        vec_push(cols, "software_id")
+        vec_push(vals, software_id.val)
+    }
+    let software_version = jreq_str(b.doc, b.root, "software_version")
+    if software_version.present == 1 {
+        if software_version.ok == 0 { return act_422_field(db, "software_version", software_version) }
+        vec_push(cols, "software_version")
+        vec_push(vals, software_version.val)
+    }
+    let is_part_of_group = jreq_str(b.doc, b.root, "is_part_of_group")
+    if is_part_of_group.present == 1 {
+        if is_part_of_group.ok == 0 { return act_422_field(db, "is_part_of_group", is_part_of_group) }
+        vec_push(cols, "is_part_of_group")
+        vec_push(vals, is_part_of_group.val)
+    }
+    let street_name = jreq_str(b.doc, b.root, "street_name")
+    if street_name.present == 1 {
+        if street_name.ok == 0 { return act_422_field(db, "street_name", street_name) }
+        vec_push(cols, "street_name")
+        vec_push(vals, street_name.val)
+    }
+    let building_number = jreq_str(b.doc, b.root, "building_number")
+    if building_number.present == 1 {
+        if building_number.ok == 0 { return act_422_field(db, "building_number", building_number) }
+        vec_push(cols, "building_number")
+        vec_push(vals, building_number.val)
+    }
+    let region = jreq_str(b.doc, b.root, "region")
+    if region.present == 1 {
+        if region.ok == 0 { return act_422_field(db, "region", region) }
+        let hinted = jopt_str(b.doc, b.root, "country", "")
+        let rn = adr_region_norm(region.val, hinted.val)
+        if rn.ok == 0 {
+            return act_err(db, 422, "region трябва да е код BG-01 … BG-28")
+        }
+        vec_push(cols, "region")
+        vec_push(vals, rn.code)
+    }
+    let address_building = jreq_str(b.doc, b.root, "address_building")
+    if address_building.present == 1 {
+        if address_building.ok == 0 { return act_422_field(db, "address_building", address_building) }
+        vec_push(cols, "address_building")
+        vec_push(vals, address_building.val)
+    }
+    let additional_address_detail = jreq_str(b.doc, b.root, "additional_address_detail")
+    if additional_address_detail.present == 1 {
+        if additional_address_detail.ok == 0 { return act_422_field(db, "additional_address_detail", additional_address_detail) }
+        vec_push(cols, "additional_address_detail")
+        vec_push(vals, additional_address_detail.val)
+    }
+    let address_type = jreq_str(b.doc, b.root, "address_type")
+    if address_type.present == 1 {
+        if address_type.ok == 0 { return act_422_field(db, "address_type", address_type) }
+        let tn = adr_type_norm(address_type.val)
+        if tn.ok == 0 {
+            return act_err(db, 422, "address_type е StreetAddress, PostalAddress, BillingAddress, ShipToAddress или ShipFromAddress")
+        }
+        vec_push(cols, "address_type")
+        vec_push(vals, tn.code)
+    }
+    let settings = jreq_str(b.doc, b.root, "settings")
+    if settings.present == 1 {
+        if settings.ok == 0 { return act_422_field(db, "settings", settings) }
+        vec_push(cols, "settings")
+        vec_push(vals, settings.val)
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    if vec_len(cols) == 0 {
+        let q0 = company_find(db, id)?
+        if orm_ok_q(q0) == 0 {
+            return act_err(orm_db_q(q0), 500, orm_err_q(q0))
+        }
+        if orm_nrows(q0) < 1 {
+            return act_404(orm_db_q(q0), "Company not found")
+        }
+        return act_ok(orm_db_q(q0), company_to_json(q0, 0))
+    }
+    let upd = orm_update_by_id(db, company_table(), id, cols, vals)?
+    if orm_ok(upd) == 0 {
+        return act_err(orm_db_exec(upd), 500, orm_err_exec(upd))
+    }
+    let q = company_find(orm_db_exec(upd), id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "Company not found")
+    }
+    return act_ok(orm_db_q(q), company_to_json(q, 0))
+}
+
+fn act_companies_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "company:delete")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let del = company_delete(db, id)?
+    if orm_ok(del) == 0 {
+        return act_err(orm_db_exec(del), 500, orm_err_exec(del))
+    }
+    return act_no_content(orm_db_exec(del))
+}

@@ -1,0 +1,428 @@
+// actions/ubl_parse.baga — UBL 2.1 / Peppol BIS Billing 3.0 → чернова фактура.
+// Фактура (380) и кредитно известие (381 / CreditNote). VATEX → каталога.
+// Сумите остават низове. Без база и без Mistral.
+
+import "ubl_fmt.baga"
+import "fmrbaga/jsonx.baga"
+import "xmlbaga/xml.baga"
+import "std/str/str.baga"
+
+struct UblLine {
+    qty: str,
+    unit: str,
+    net: str,
+    name: str,
+    seller: str,
+    price: str,
+    pct: str,
+    cat: str
+}
+
+struct UblDoc {
+    ok: i64,
+    err: str,
+    root: str,
+    doc_id: str,
+    issue_date: str,
+    due_date: str,
+    tax_point: str,
+    type_code: str,
+    document_type: str,
+    currency: str,
+    currency_rate: str,
+    pay_code: str,
+    payment_method: str,
+    note: str,
+    iban: str,
+    net: str,
+    vat: str,
+    total: str,
+    tax_cat: str,
+    tax_pct: str,
+    ex_raw: str,
+    exemption: str,
+    orig: str,
+    sup_name: str,
+    sup_eik: str,
+    sup_vat: str,
+    sup_cc: str,
+    cus_name: str,
+    cus_eik: str,
+    cus_vat: str,
+    cus_cc: str,
+    id_scheme: str,
+    line_qty: str,
+    line_unit: str,
+    line_net: str,
+    line_name: str,
+    line_seller: str,
+    line_price: str,
+    line_pct: str,
+    line_cat: str,
+    acc: Vec<UblLine>,
+    lines: JArr
+}
+
+fn ubl_doc_new() -> UblDoc {
+    return UblDoc {
+        ok: 1,
+        err: "",
+        root: "",
+        doc_id: "",
+        issue_date: "",
+        due_date: "",
+        tax_point: "",
+        type_code: "",
+        document_type: "01",
+        currency: "",
+        currency_rate: "",
+        pay_code: "",
+        payment_method: "",
+        note: "",
+        iban: "",
+        net: "",
+        vat: "",
+        total: "",
+        tax_cat: "",
+        tax_pct: "",
+        ex_raw: "",
+        exemption: "",
+        orig: "",
+        sup_name: "",
+        sup_eik: "",
+        sup_vat: "",
+        sup_cc: "",
+        cus_name: "",
+        cus_eik: "",
+        cus_vat: "",
+        cus_cc: "",
+        id_scheme: "",
+        line_qty: "",
+        line_unit: "",
+        line_net: "",
+        line_name: "",
+        line_seller: "",
+        line_price: "",
+        line_pct: "",
+        line_cat: "",
+        acc: vec_new(),
+        lines: jarr_new()
+    }
+}
+
+fn ubl_fail(msg: str) -> UblDoc {
+    let mut s = ubl_doc_new()
+    s.ok = 0
+    s.err = msg
+    return s
+}
+
+
+fn ubl_cur(stack: Vec<str>, depth: i64) -> str {
+    if depth <= 0 {
+        return ""
+    }
+    return vec_get(stack, depth - 1)
+}
+
+fn ubl_par(stack: Vec<str>, depth: i64) -> str {
+    if depth <= 1 {
+        return ""
+    }
+    return vec_get(stack, depth - 2)
+}
+
+fn ubl_has(stack: Vec<str>, depth: i64, name: str) -> i64 {
+    let mut i: i64 = 0
+    while i < depth {
+        if vec_get(stack, i) == name {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+fn ubl_in_line(stack: Vec<str>, depth: i64) -> i64 {
+    if ubl_has(stack, depth, "InvoiceLine") == 1 || ubl_has(stack, depth, "CreditNoteLine") == 1 {
+        return 1
+    }
+    return 0
+}
+
+fn ublx_party(s: UblDoc, sup: i64, field: i64, val: str) -> UblDoc {
+    let mut o = s
+    if sup == 1 {
+        if field == 1 && o.sup_name == "" { o.sup_name = val }
+        if field == 2 { o.sup_eik = val }
+        if field == 3 { o.sup_vat = val }
+        if field == 4 { o.sup_cc = val }
+    } else {
+        if field == 1 && o.cus_name == "" { o.cus_name = val }
+        if field == 2 { o.cus_eik = val }
+        if field == 3 { o.cus_vat = val }
+        if field == 4 { o.cus_cc = val }
+    }
+    return o
+}
+
+fn ubl_text_header(s: UblDoc, tag: str, par: str, text: str) -> UblDoc {
+    let mut o = s
+    if tag == "ID" && ubl_is_root(par) == 1 { o.doc_id = text }
+    if tag == "IssueDate" && ubl_is_root(par) == 1 { o.issue_date = ubl_date(text) }
+    if tag == "DueDate" && ubl_is_root(par) == 1 { o.due_date = ubl_date(text) }
+    if tag == "TaxPointDate" && ubl_is_root(par) == 1 { o.tax_point = ubl_date(text) }
+    if tag == "InvoiceTypeCode" || tag == "CreditNoteTypeCode" { o.type_code = text }
+    if tag == "DocumentCurrencyCode" { o.currency = text }
+    if tag == "PaymentMeansCode" { o.pay_code = text }
+    if tag == "Note" && par == "PaymentTerms" { o.note = text }
+    if tag == "ID" && par == "InvoiceDocumentReference" { o.orig = text }
+    if tag == "ID" && par == "PayeeFinancialAccount" { o.iban = ubl_compact(text) }
+    if tag == "TaxAmount" && par == "TaxTotal" && o.vat == "" { o.vat = text }
+    if tag == "LineExtensionAmount" && par == "LegalMonetaryTotal" { o.net = text }
+    if tag == "TaxExclusiveAmount" && o.net == "" { o.net = text }
+    if tag == "PayableAmount" { o.total = text }
+    if tag == "TaxInclusiveAmount" && o.total == "" { o.total = text }
+    if tag == "CalculationRate" && o.currency_rate == "" { o.currency_rate = ubl_dot(text) }
+    if tag == "ID" && par == "TaxCategory" {
+        if o.tax_cat == "" || text != "S" { o.tax_cat = text }
+    }
+    if tag == "Percent" && par == "TaxCategory" {
+        if o.tax_cat != "S" || o.tax_pct == "" { o.tax_pct = text }
+    }
+    if tag == "TaxExemptionReasonCode" { o.ex_raw = text }
+    return o
+}
+
+fn ubl_text_party(s: UblDoc, stack: Vec<str>, depth: i64, tag: str, par: str, text: str) -> UblDoc {
+    let mut sup: i64 = 0
+    if ubl_has(stack, depth, "AccountingSupplierParty") == 1 { sup = 1 }
+    if ubl_has(stack, depth, "AccountingCustomerParty") == 1 { sup = 2 }
+    if sup == 0 {
+        return s
+    }
+    let mut o = s
+    if tag == "Name" && par == "PartyName" { o = ublx_party(o, sup, 1, text) }
+    if tag == "RegistrationName" { o = ublx_party(o, sup, 1, text) }
+    if tag == "EndpointID" && o.sup_vat == "" && sup == 1 { o = ublx_party(o, sup, 3, text) }
+    if tag == "EndpointID" && o.cus_vat == "" && sup == 2 { o = ublx_party(o, sup, 3, text) }
+    if tag == "CompanyID" && par == "PartyTaxScheme" { o = ublx_party(o, sup, 3, text) }
+    if tag == "ID" && par == "PartyIdentification" { o = ublx_party(o, sup, 2, text) }
+    if tag == "CompanyID" && par == "PartyLegalEntity" { o = ublx_party(o, sup, 2, text) }
+    if tag == "IdentificationCode" && par == "Country" { o = ublx_party(o, sup, 4, text) }
+    return o
+}
+
+fn ubl_text_line(s: UblDoc, tag: str, par: str, text: str) -> UblDoc {
+    let mut o = s
+    if tag == "InvoicedQuantity" || tag == "CreditedQuantity" { o.line_qty = text }
+    if tag == "LineExtensionAmount" { o.line_net = text }
+    if tag == "Name" && par == "Item" { o.line_name = text }
+    if tag == "Description" && par == "Item" && o.line_name == "" { o.line_name = text }
+    if tag == "ID" && par == "SellersItemIdentification" { o.line_seller = text }
+    if tag == "ID" && par == "BuyersItemIdentification" && o.line_seller == "" { o.line_seller = text }
+    if tag == "PriceAmount" { o.line_price = text }
+    if tag == "Percent" && par == "ClassifiedTaxCategory" { o.line_pct = text }
+    if tag == "ID" && par == "ClassifiedTaxCategory" { o.line_cat = text }
+    return o
+}
+
+fn ubl_clear_line(s: UblDoc) -> UblDoc {
+    let mut o = s
+    o.line_qty = ""
+    o.line_unit = ""
+    o.line_net = ""
+    o.line_name = ""
+    o.line_seller = ""
+    o.line_price = ""
+    o.line_pct = ""
+    o.line_cat = ""
+    return o
+}
+
+fn ubl_push_line(s: UblDoc) -> UblDoc {
+    let mut o = s
+    let line = UblLine {
+        qty: o.line_qty,
+        unit: o.line_unit,
+        net: o.line_net,
+        name: o.line_name,
+        seller: o.line_seller,
+        price: o.line_price,
+        pct: o.line_pct,
+        cat: o.line_cat
+    }
+    vec_push(o.acc, line)
+    return ubl_clear_line(o)
+}
+
+fn ubl_on_open(s: UblDoc, name: str, attrs: Map<str, str>) -> UblDoc {
+    let mut o = s
+    o.id_scheme = ""
+    if name == "InvoiceLine" || name == "CreditNoteLine" {
+        o = ubl_clear_line(o)
+    }
+    if name == "ID" || name == "CompanyID" || name == "EndpointID" {
+        if map_has(attrs, "schemeID") == 1 {
+            o.id_scheme = map_get(attrs, "schemeID")
+        }
+    }
+    if name == "InvoicedQuantity" || name == "CreditedQuantity" {
+        if map_has(attrs, "unitCode") == 1 {
+            o.line_unit = map_get(attrs, "unitCode")
+        }
+    }
+    return o
+}
+
+fn ubl_line_rate(line: UblLine, header_cat: str, header_pct: str) -> str {
+    if line.pct != "" {
+        return ubl_pct(line.pct)
+    }
+    let mut cat = line.cat
+    let mut pct = ""
+    if cat == "" {
+        cat = header_cat
+        pct = header_pct
+    }
+    if pct == "" {
+        pct = header_pct
+    }
+    let rate = ubl_pct(pct)
+    if rate != "" {
+        return rate
+    }
+    if cat == "S" || cat == "" {
+        return "20"
+    }
+    return "0"
+}
+
+fn ubl_line_json(line: UblLine, header_cat: str, header_pct: str) -> JObj {
+    let rate = ubl_line_rate(line, header_cat, header_pct)
+    let net = ubl_money(line.net)
+    let vat = ubl_mul_pct(net, rate)
+    let tot = ubl_add(net, vat)
+    let mut qty = ubl_trim_qty(line.qty)
+    if qty == "" { qty = "1" }
+    let mut price = "0.00"
+    if line.price != "" { price = ubl_money(line.price) }
+    let mut name = str_trim(line.name)
+    if name == "" { name = str_trim(line.seller) }
+    if name == "" { name = "Ред" }
+    let mut o = jobj_new()
+    o = jobj_str(o, "description", name)
+    o = jobj_str(o, "seller_code", str_trim(line.seller))
+    o = jobj_str(o, "quantity", qty)
+    o = jobj_str(o, "unit", ublx_unit(line.unit))
+    o = jobj_str(o, "unit_price", price)
+    o = jobj_str(o, "vat_rate", rate)
+    o = jobj_str(o, "net_amount", net)
+    o = jobj_str(o, "vat_amount", vat)
+    o = jobj_str(o, "total_amount", tot)
+    return o
+}
+
+fn ubl_finish(s: UblDoc) -> UblDoc {
+    if s.ok == 0 {
+        return s
+    }
+    if s.root == "" {
+        return ubl_fail("Файлът не е UBL фактура или кредитно известие (Peppol BIS).")
+    }
+    if str_trim(s.doc_id) == "" {
+        return ubl_fail("UBL документът няма номер.")
+    }
+    if vec_len(s.acc) < 1 {
+        return ubl_fail("UBL документът няма редове.")
+    }
+    let mut o = s
+    o.document_type = ubl_doc_type(o.root, str_trim(o.type_code))
+    o.currency = ubl_upper(str_trim(o.currency))
+    if o.currency == "" { o.currency = "EUR" }
+    if o.currency == "EUR" || o.currency_rate == "" { o.currency_rate = "1" }
+    o.payment_method = ubl_pay(str_trim(o.pay_code))
+    o.exemption = ubl_vatex_code(o.ex_raw, o.tax_cat)
+    o.sup_vat = ubl_norm_vat(o.sup_vat, o.sup_cc)
+    o.cus_vat = ubl_norm_vat(o.cus_vat, o.cus_cc)
+    o.sup_eik = ubl_compact(o.sup_eik)
+    o.cus_eik = ubl_compact(o.cus_eik)
+    o.net = ubl_money(o.net)
+    o.vat = ubl_money(o.vat)
+    o.total = ubl_money(o.total)
+    if o.note != "" && o.iban != "" {
+        o.note = concat(concat(o.note, " · "), o.iban)
+    } else {
+        if o.note == "" { o.note = o.iban }
+    }
+    let mut arr = jarr_new()
+    let n = vec_len(o.acc)
+    let mut i: i64 = 0
+    while i < n {
+        arr = jarr_obj(arr, ubl_line_json(vec_get(o.acc, i), o.tax_cat, o.tax_pct))
+        i = i + 1
+    }
+    o.lines = arr
+    o.ok = 1
+    return o
+}
+
+fn ubl_parse_xml(src: str) -> UblDoc {
+    let mut s = ubl_doc_new()
+    let p = xml_parser(src)
+    let stack: Vec<str> = vec_new()
+    let mut depth: i64 = 0
+    let mut running: i64 = 1
+    while running == 1 {
+        let ev = xml_next(p)
+        if ev.kind < 0 {
+            s.ok = 0
+            s.err = ev.err
+            return s
+        }
+        if ev.kind == 0 {
+            running = 0
+        } else {
+            if ev.kind == 1 {
+                let name = xml_local_name(ev.name)
+                if depth == vec_len(stack) {
+                    vec_push(stack, name)
+                } else {
+                    vec_set(stack, depth, name)
+                }
+                depth = depth + 1
+                if depth == 1 {
+                    if name != "Invoice" && name != "CreditNote" && name != "DebitNote" {
+                        return ubl_fail("Файлът не е UBL фактура или кредитно известие (Peppol BIS).")
+                    }
+                    s.root = name
+                }
+                s = ubl_on_open(s, name, ev.attrs)
+            } else {
+                if ev.kind == 3 {
+                    let text = str_trim(ev.text)
+                    if text != "" {
+                        let tag = ubl_cur(stack, depth)
+                        let par = ubl_par(stack, depth)
+                        if ubl_in_line(stack, depth) == 1 {
+                            s = ubl_text_line(s, tag, par, text)
+                        } else {
+                            s = ubl_text_header(s, tag, par, text)
+                            s = ubl_text_party(s, stack, depth, tag, par, text)
+                        }
+                    }
+                } else {
+                    if ev.kind == 2 {
+                        let name = xml_local_name(ev.name)
+                        if name == "InvoiceLine" || name == "CreditNoteLine" {
+                            s = ubl_push_line(s)
+                        }
+                        depth = depth - 1
+                        if depth < 0 { depth = 0 }
+                    }
+                }
+            }
+        }
+    }
+    return ubl_finish(s)
+}

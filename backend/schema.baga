@@ -1,0 +1,55 @@
+// schema.baga — миграции на buchnative (принадлежат на приложението, не на framework-а).
+// Два набора заради историята: Postgres DDL-ът ползва SERIAL/FK/NOT NULL/DEFAULT
+// още от фаза 1. Boila наборът е създаден преди P20–P21 (тогава BoilaSQL нямаше
+// SERIAL/DEFAULT/NOT NULL/REFERENCES) — качените CREATE/ALTER не се пипат.
+// Днес BoilaSQL има SERIAL, NOT NULL, DEFAULT, REFERENCES, UNIQUE INDEX, N JOIN,
+// EXISTS; ALTER ADD COLUMN остава само nullable (затова dual set-ът стои).
+// Нови таблици в boila набора: пълният BoilaSQL. start.baga избира чрез
+// buchnative_migrations_auto() + ORM_BACKEND.
+// Списъците са в schema_pg_a/b/c + schema_boila_a/b/c (filesize gate 600).
+
+import "ormbaga/migrate.baga"
+import "std/os/os.baga"
+import "schema_pg_a.baga"
+import "schema_pg_b.baga"
+import "schema_pg_c.baga"
+import "schema_boila_a.baga"
+import "schema_boila_b.baga"
+import "schema_boila_c.baga"
+
+fn mig_append(dst: MigrationSet, src: MigrationSet) -> MigrationSet {
+    let mut out = dst
+    let mut i: i64 = 0
+    while i < migrate_len(src) {
+        let m = migrate_at(src, i)
+        out = migrate_add(out, m.version, m.name, m.up, m.down)
+        i = i + 1
+    }
+    return out
+}
+
+fn buchnative_migrations() -> MigrationSet {
+    return mig_append(mig_append(buchnative_migrations_a(), buchnative_migrations_b()), buchnative_migrations_c())
+}
+
+fn buchnative_boila_migrations() -> MigrationSet {
+    return mig_append(mig_append(buchnative_boila_migrations_a(), buchnative_boila_migrations_b()), buchnative_boila_migrations_c())
+}
+
+fn buchnative_backend_is_boila() -> i64 !IO {
+    let be = env("ORM_BACKEND")?
+    if be == "boila" || be == "boiladb" || be == "boilaDB" {
+        return 1
+    }
+    return 0
+}
+
+// Избира набор миграции според конфигурирания backend.
+// Boila вече приема SERIAL/FK при CREATE TABLE; dual set-ът остава заради
+// вече приложените миграции и ALTER ADD COLUMN (nullable-only).
+fn buchnative_migrations_auto() -> MigrationSet !IO {
+    if buchnative_backend_is_boila()? == 1 {
+        return buchnative_boila_migrations()
+    }
+    return buchnative_migrations()
+}

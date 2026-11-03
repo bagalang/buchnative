@@ -1,0 +1,393 @@
+// actions/dividends_ops.baga — редакция, изтриване, одобрение и плащане.
+
+import "../models/dividend.baga"
+import "../models/company_related.baga"
+import "dividends.baga"
+import "active_company.baga"
+import "txn.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+fn ddist_load_owned(db: OrmDb, company_id: i64, id: i64) -> OrmQuery !IO !Net {
+    let q = ddist_find(db, id)?
+    return q
+}
+
+fn act_ddist_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let q = ddist_load_owned(ac.db, ac.id, id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "Разпределението не е намерено")
+    }
+    if orm_cell_by_i64(q, 0, "company_id") != ac.id {
+        return act_404(orm_db_q(q), "Разпределението не е намерено")
+    }
+    let cur_status = orm_cell_by(q, 0, "status")
+    let lq = div_by_distribution(orm_db_q(q), id)?
+    if orm_ok_q(lq) == 0 {
+        return act_err(orm_db_q(lq), 500, orm_err_q(lq))
+    }
+    let mut any_paid: i64 = 0
+    let mut i: i64 = 0
+    while i < orm_nrows(lq) {
+        if orm_cell_by_i64(lq, i, "is_paid") != 0 {
+            any_paid = 1
+        }
+        i = i + 1
+    }
+    let st = jreq_str(b.doc, b.root, "status")
+    let mut new_status = cur_status
+    if st.present == 1 {
+        if st.ok == 0 {
+            return act_422_field(orm_db_q(lq), "status", st)
+        }
+        if div_status_ok(st.val) == 0 {
+            return act_err(orm_db_q(lq), 422, "невалиден статус")
+        }
+        new_status = st.val
+    }
+    let tot = jreq_str(b.doc, b.root, "total_amount")
+    let yr = jreq_i64(b.doc, b.root, "year")
+    let dt = jreq_str(b.doc, b.root, "decision_date")
+    let tax = jreq_str(b.doc, b.root, "tax_rate")
+    let mut recalc: i64 = 0
+    if tot.present == 1 || yr.present == 1 || dt.present == 1 || tax.present == 1 {
+        recalc = 1
+    }
+    if recalc == 1 && any_paid == 1 {
+        return act_err(orm_db_q(lq), 422, "Не може да се променя сумата или данъкът при изплатени дивиденти. Първо отменете плащанията.")
+    }
+    let mut year = orm_cell_by_i64(q, 0, "year")
+    let mut total_s = orm_cell_by(q, 0, "total_amount")
+    let mut date_s = orm_cell_by(q, 0, "decision_date")
+    let mut number = orm_cell_by(q, 0, "decision_number")
+    let mut notes = orm_cell_by(q, 0, "notes")
+    let mut tax_s = "5"
+    if orm_nrows(lq) > 0 {
+        tax_s = orm_cell_by(lq, 0, "tax_rate")
+    }
+    if yr.present == 1 {
+        if yr.ok == 0 {
+            return act_422_field(orm_db_q(lq), "year", yr)
+        }
+        year = yr.num
+    }
+    if tot.present == 1 {
+        if tot.ok == 0 {
+            return act_422_field(orm_db_q(lq), "total_amount", tot)
+        }
+        if div_gt0(div_amt(tot.val)) == 0 {
+            return act_err(orm_db_q(lq), 422, "сумата за разпределяне трябва да е по-голяма от 0")
+        }
+        total_s = tot.val
+    }
+    if dt.present == 1 {
+        if dt.ok == 0 {
+            return act_422_field(orm_db_q(lq), "decision_date", dt)
+        }
+        date_s = dt.val
+    }
+    if tax.present == 1 {
+        if tax.ok == 0 {
+            return act_422_field(orm_db_q(lq), "tax_rate", tax)
+        }
+        tax_s = tax.val
+    }
+    let num = jreq_str(b.doc, b.root, "decision_number")
+    if num.present == 1 {
+        if num.ok == 0 {
+            return act_422_field(orm_db_q(lq), "decision_number", num)
+        }
+        number = num.val
+    }
+    let nt = jreq_str(b.doc, b.root, "notes")
+    if nt.present == 1 {
+        if nt.ok == 0 {
+            return act_422_field(orm_db_q(lq), "notes", nt)
+        }
+        notes = nt.val
+    }
+    let mut revert: i64 = 0
+    if new_status == "draft" && cur_status != "draft" {
+        revert = 1
+        recalc = 0
+    }
+    let bgn = bb_begin(orm_db_q(lq))?
+    if orm_ok(bgn) == 0 {
+        return act_err(orm_db_exec(bgn), 500, orm_err_exec(bgn))
+    }
+    let mut db2 = orm_db_exec(bgn)
+    if revert == 1 {
+        i = 0
+        while i < orm_nrows(lq) {
+            let did = orm_cell_by_i64(lq, i, "id")
+            let cols = vec_new()
+            vec_push(cols, "is_paid")
+            vec_push(cols, "payment_date")
+            let vals = vec_new()
+            vec_push(vals, "0")
+            vec_push(vals, "")
+            let up = orm_update_by_id(db2, div_table(), did, cols, vals)?
+            if orm_ok(up) == 0 {
+                return act_err_rb(orm_db_exec(up), 500, orm_err_exec(up))
+            }
+            db2 = orm_db_exec(up)
+            i = i + 1
+        }
+        any_paid = 0
+        new_status = "draft"
+    }
+    let cols = vec_new()
+    vec_push(cols, "year")
+    vec_push(cols, "total_amount")
+    vec_push(cols, "decision_date")
+    vec_push(cols, "decision_number")
+    vec_push(cols, "status")
+    vec_push(cols, "notes")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(year))
+    vec_push(vals, div_money(div_amt(total_s)))
+    vec_push(vals, date_s)
+    vec_push(vals, number)
+    vec_push(vals, new_status)
+    vec_push(vals, notes)
+    let up = orm_update_by_id(db2, ddist_table(), id, cols, vals)?
+    if orm_ok(up) == 0 {
+        return act_err_rb(orm_db_exec(up), 500, orm_err_exec(up))
+    }
+    db2 = orm_db_exec(up)
+    if recalc == 1 {
+        let del = div_delete_by_distribution(db2, id)?
+        if orm_ok(del) == 0 {
+            return act_err_rb(orm_db_exec(del), 500, orm_err_exec(del))
+        }
+        db2 = orm_db_exec(del)
+        let oq = bown_by_company(db2, ac.id)?
+        if orm_ok_q(oq) == 0 {
+            return act_err_rb(orm_db_q(oq), 500, orm_err_q(oq))
+        }
+        let fill = div_insert_shares(orm_db_q(oq), ac.id, id, oq, div_amt(total_s), div_amt(tax_s), date_s, tax_s)?
+        if fill.ok == 0 {
+            return act_err_rb(fill.db, 422, fill.err)
+        }
+        db2 = fill.db
+    }
+    let cmt = bb_commit(db2)?
+    if orm_ok(cmt) == 0 {
+        return act_err(orm_db_exec(cmt), 500, orm_err_exec(cmt))
+    }
+    let sq = ddist_find(orm_db_exec(cmt), id)?
+    if orm_ok_q(sq) == 0 || orm_nrows(sq) < 1 {
+        return act_err(orm_db_q(sq), 500, "missing after update")
+    }
+    let nq = div_by_distribution(orm_db_q(sq), id)?
+    if orm_ok_q(nq) == 0 {
+        return act_err(orm_db_q(nq), 500, orm_err_q(nq))
+    }
+    let mut lines = jarr_new()
+    i = 0
+    while i < orm_nrows(nq) {
+        lines = jarr_obj(lines, div_to_json(nq, i))
+        i = i + 1
+    }
+    let mut o = ddist_pack_item(nq, id, ddist_to_json(sq, 0))
+    o = jobj_arr(o, "dividends", lines)
+    return act_ok(orm_db_q(nq), o)
+}
+
+fn act_ddist_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let q = ddist_find(ac.db, id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "Разпределението не е намерено")
+    }
+    if orm_cell_by_i64(q, 0, "company_id") != ac.id {
+        return act_404(orm_db_q(q), "Разпределението не е намерено")
+    }
+    if orm_cell_by(q, 0, "status") != "draft" {
+        return act_err(orm_db_q(q), 422, "Може да се изтрие само чернова. Първо върнете разпределението в чернова.")
+    }
+    let lq = div_by_distribution(orm_db_q(q), id)?
+    if orm_ok_q(lq) == 0 {
+        return act_err(orm_db_q(lq), 500, orm_err_q(lq))
+    }
+    let mut i: i64 = 0
+    while i < orm_nrows(lq) {
+        if orm_cell_by_i64(lq, i, "is_paid") != 0 {
+            return act_err(orm_db_q(lq), 422, "Не може да се изтрие разпределение с изплатени дивиденти.")
+        }
+        i = i + 1
+    }
+    let bgn = bb_begin(orm_db_q(lq))?
+    if orm_ok(bgn) == 0 {
+        return act_err(orm_db_exec(bgn), 500, orm_err_exec(bgn))
+    }
+    let del = div_delete_by_distribution(orm_db_exec(bgn), id)?
+    if orm_ok(del) == 0 {
+        return act_err_rb(orm_db_exec(del), 500, orm_err_exec(del))
+    }
+    let del2 = ddist_delete(orm_db_exec(del), id)?
+    if orm_ok(del2) == 0 {
+        return act_err_rb(orm_db_exec(del2), 500, orm_err_exec(del2))
+    }
+    let cmt = bb_commit(orm_db_exec(del2))?
+    if orm_ok(cmt) == 0 {
+        return act_err(orm_db_exec(cmt), 500, orm_err_exec(cmt))
+    }
+    return act_no_content(orm_db_exec(cmt))
+}
+
+fn act_div_pay(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let paid = jreq_bool(b.doc, b.root, "is_paid")
+    if paid.ok == 0 {
+        return act_422_field(db, "is_paid", paid)
+    }
+    let pdate = jopt_str(b.doc, b.root, "payment_date", "")
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let q = div_find(ac.db, id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "Дивидентът не е намерен")
+    }
+    if orm_cell_by_i64(q, 0, "company_id") != ac.id {
+        return act_404(orm_db_q(q), "Дивидентът не е намерен")
+    }
+    let dist_id = orm_cell_by_i64(q, 0, "distribution_id")
+    let dq = ddist_find(orm_db_q(q), dist_id)?
+    if orm_ok_q(dq) == 0 || orm_nrows(dq) < 1 {
+        return act_err(orm_db_q(dq), 500, "липсва разпределение")
+    }
+    if orm_cell_by(dq, 0, "status") == "draft" {
+        return act_err(orm_db_q(dq), 422, "Одобрете разпределението преди изплащане")
+    }
+    let mut pay_date = pdate.val
+    if paid.num == 1 && pay_date == "" {
+        pay_date = orm_cell_by(q, 0, "decision_date")
+    }
+    if paid.num == 0 {
+        pay_date = ""
+    }
+    let cols = vec_new()
+    vec_push(cols, "is_paid")
+    vec_push(cols, "payment_date")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(paid.num))
+    vec_push(vals, pay_date)
+    let up = orm_update_by_id(orm_db_q(dq), div_table(), id, cols, vals)?
+    if orm_ok(up) == 0 {
+        return act_err(orm_db_exec(up), 500, orm_err_exec(up))
+    }
+    let lq = div_by_distribution(orm_db_exec(up), dist_id)?
+    if orm_ok_q(lq) == 0 {
+        return act_err(orm_db_q(lq), 500, orm_err_q(lq))
+    }
+    let mut all_paid: i64 = 1
+    let mut any_paid: i64 = 0
+    let mut i: i64 = 0
+    if orm_nrows(lq) < 1 {
+        all_paid = 0
+    }
+    while i < orm_nrows(lq) {
+        if orm_cell_by_i64(lq, i, "is_paid") != 0 {
+            any_paid = 1
+        } else {
+            all_paid = 0
+        }
+        i = i + 1
+    }
+    let mut st = orm_cell_by(dq, 0, "status")
+    if all_paid == 1 {
+        st = "paid"
+    } else {
+        if any_paid == 1 {
+            st = "partially_paid"
+        } else {
+            if st == "paid" || st == "partially_paid" {
+                st = "approved"
+            }
+        }
+    }
+    let dcols = vec_new()
+    vec_push(dcols, "status")
+    let dvals = vec_new()
+    vec_push(dvals, st)
+    let dup = orm_update_by_id(orm_db_q(lq), ddist_table(), dist_id, dcols, dvals)?
+    if orm_ok(dup) == 0 {
+        return act_err(orm_db_exec(dup), 500, orm_err_exec(dup))
+    }
+    let nq = div_find(orm_db_exec(dup), id)?
+    if orm_ok_q(nq) == 0 || orm_nrows(nq) < 1 {
+        return act_err(orm_db_q(nq), 500, "missing after pay")
+    }
+    return act_ok(orm_db_q(nq), div_to_json(nq, 0))
+}

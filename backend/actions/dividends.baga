@@ -1,0 +1,375 @@
+// actions/dividends.baga — списък/детайл/създаване на разпределение.
+// Дяловете идват от действителните собственици на активната фирма
+// (Настройки → SAF-T). Данъкът по подразбиране е 5% (ЗДДФЛ).
+
+import "../models/dividend.baga"
+import "../models/company.baga"
+import "../models/company_related.baga"
+import "active_company.baga"
+import "txn.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "bagadecimal/src/decimal.baga"
+import "std/str/str.baga"
+
+fn div_money(d: Decimal) -> str {
+    let r = dec_round_dp(d, 2)
+    let mut v = d
+    if r.ok == 1 {
+        v = r.value
+    }
+    let s = dec_to_string(v)
+    let dot = str_find(s, ".")
+    if dot < 0 {
+        return concat(s, ".00")
+    }
+    let frac = len(s) - dot - 1
+    if frac == 1 {
+        return concat(s, "0")
+    }
+    return s
+}
+
+fn div_amt(s: str) -> Decimal {
+    let p = dec_parse(s)
+    if p.ok == 1 {
+        return p.value
+    }
+    return dec_zero()
+}
+
+fn div_gt0(d: Decimal) -> i64 {
+    if dec_is_zero(d) == 1 {
+        return 0
+    }
+    if dec_is_negative(d) == 1 {
+        return 0
+    }
+    return 1
+}
+
+fn div_status_ok(s: str) -> i64 {
+    if s == "draft" || s == "approved" || s == "partially_paid" || s == "paid" {
+        return 1
+    }
+    return 0
+}
+
+fn div_require_company(ctx: FmrCtx, db: OrmDb) -> ActiveCompany !IO !Net {
+    let ac = active_company_id(db, ctx.user_sub)?
+    return ac
+}
+
+struct DivFill {
+    ok: i64
+    err: str
+    db: OrmDb
+}
+
+fn div_fill_ok(db: OrmDb) -> DivFill {
+    return DivFill { ok: 1, err: "", db: db }
+}
+
+fn div_fill_err(db: OrmDb, err: str) -> DivFill {
+    return DivFill { ok: 0, err: err, db: db }
+}
+
+fn div_insert_shares(db: OrmDb, company_id: i64, dist_id: i64, oq: OrmQuery, total: Decimal, rate: Decimal, decision_date: str, tax_s: str) -> DivFill !IO !Net {
+    let n = orm_nrows(oq)
+    let ids = vec_new()
+    let names = vec_new()
+    let egns = vec_new()
+    let pcts = vec_new()
+    let mut total_pct = dec_zero()
+    let mut i: i64 = 0
+    while i < n {
+        if orm_cell_by_i64(oq, i, "is_active") != 0 {
+            let p = div_amt(orm_cell_by(oq, i, "ownership_percentage"))
+            if div_gt0(p) == 1 {
+                vec_push(ids, int_to_str(orm_cell_by_i64(oq, i, "id")))
+                vec_push(names, concat(concat(orm_cell_by(oq, i, "first_name_bg"), " "), orm_cell_by(oq, i, "last_name_bg")))
+                vec_push(egns, orm_cell_by(oq, i, "egn"))
+                vec_push(pcts, div_money(p))
+                total_pct = vat_like_add(total_pct, p)
+            }
+        }
+        i = i + 1
+    }
+    let m = vec_len(ids)
+    if m < 1 {
+        return div_fill_err(db, "Няма действителни собственици с процент. Добавете ги в Настройки → SAF-T.")
+    }
+    if div_gt0(total_pct) == 0 {
+        return div_fill_err(db, "Общият процент на собственост е 0")
+    }
+    let hundred = div_amt("100")
+    let mut assigned = dec_zero()
+    let mut db2 = db
+    i = 0
+    while i < m {
+        let pct = div_amt(vec_get(pcts, i))
+        let mut gross = dec_zero()
+        if i == m - 1 {
+            gross = vat_like_sub(total, assigned)
+        } else {
+            let mul = dec_mul(total, pct)
+            if mul.ok == 0 {
+                return div_fill_err(db2, mul.err)
+            }
+            let dv = dec_div(mul.value, total_pct)
+            if dv.ok == 0 {
+                return div_fill_err(db2, dv.err)
+            }
+            let rg = dec_round_dp(dv.value, 2)
+            if rg.ok == 1 {
+                gross = rg.value
+            } else {
+                gross = dv.value
+            }
+            assigned = vat_like_add(assigned, gross)
+        }
+        let tmul = dec_mul(gross, rate)
+        let mut tax = dec_zero()
+        if tmul.ok == 1 {
+            let td = dec_div(tmul.value, hundred)
+            if td.ok == 1 {
+                let tr = dec_round_dp(td.value, 2)
+                if tr.ok == 1 {
+                    tax = tr.value
+                } else {
+                    tax = td.value
+                }
+            }
+        }
+        let net = vat_like_sub(gross, tax)
+        let ins = div_create(db2, company_id, dist_id, parse_int(vec_get(ids, i)), vec_get(names, i), vec_get(egns, i), vec_get(pcts, i), div_money(gross), tax_s, div_money(tax), div_money(net), decision_date)?
+        if orm_ok_q(ins) == 0 {
+            return div_fill_err(orm_db_q(ins), orm_err_q(ins))
+        }
+        db2 = orm_db_q(ins)
+        i = i + 1
+    }
+    return div_fill_ok(db2)
+}
+
+fn vat_like_add(a: Decimal, b: Decimal) -> Decimal {
+    let r = dec_add(a, b)
+    if r.ok == 1 {
+        return r.value
+    }
+    return a
+}
+
+fn vat_like_sub(a: Decimal, b: Decimal) -> Decimal {
+    let r = dec_sub(a, b)
+    if r.ok == 1 {
+        return r.value
+    }
+    return a
+}
+
+fn ddist_pack_item(dq: OrmQuery, dist_id: i64, base: JObj) -> JObj {
+    let mut count: i64 = 0
+    let mut net = dec_zero()
+    let mut paid = dec_zero()
+    let mut tax = dec_zero()
+    let mut i: i64 = 0
+    while i < orm_nrows(dq) {
+        if orm_cell_by_i64(dq, i, "distribution_id") == dist_id {
+            count = count + 1
+            net = vat_like_add(net, div_amt(orm_cell_by(dq, i, "net_amount")))
+            tax = vat_like_add(tax, div_amt(orm_cell_by(dq, i, "tax_amount")))
+            if orm_cell_by_i64(dq, i, "is_paid") != 0 {
+                paid = vat_like_add(paid, div_amt(orm_cell_by(dq, i, "net_amount")))
+            }
+        }
+        i = i + 1
+    }
+    let mut o = base
+    o = jobj_i64(o, "dividends_count", count)
+    o = jobj_str(o, "total_net", div_money(net))
+    o = jobj_str(o, "total_paid", div_money(paid))
+    o = jobj_str(o, "total_tax", div_money(tax))
+    return o
+}
+
+fn act_ddist_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let ac = div_require_company(auth.ctx, db)?
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let cq = company_find(ac.db, ac.id)?
+    if orm_ok_q(cq) == 0 {
+        return act_err(orm_db_q(cq), 500, orm_err_q(cq))
+    }
+    let mut currency = "BGN"
+    if orm_nrows(cq) > 0 {
+        let cur = orm_cell_by(cq, 0, "currency")
+        if cur != "" {
+            currency = cur
+        }
+    }
+    let oq = bown_by_company(orm_db_q(cq), ac.id)?
+    if orm_ok_q(oq) == 0 {
+        return act_err(orm_db_q(oq), 500, orm_err_q(oq))
+    }
+    let owners = rel_filter_active(oq, "bown")
+    let sq = ddist_by_company(orm_db_q(oq), ac.id)?
+    if orm_ok_q(sq) == 0 {
+        return act_err(orm_db_q(sq), 500, orm_err_q(sq))
+    }
+    let dq = div_by_company(orm_db_q(sq), ac.id)?
+    if orm_ok_q(dq) == 0 {
+        return act_err(orm_db_q(dq), 500, orm_err_q(dq))
+    }
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(sq) {
+        let id = orm_cell_by_i64(sq, i, "id")
+        arr = jarr_obj(arr, ddist_pack_item(dq, id, ddist_to_json(sq, i)))
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", orm_nrows(sq))
+    o = jobj_arr(o, "owners", owners)
+    o = jobj_str(o, "currency", currency)
+    return act_ok(orm_db_q(dq), o)
+}
+
+fn act_ddist_show(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let ac = div_require_company(auth.ctx, db)?
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let q = ddist_find(ac.db, id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "Разпределението не е намерено")
+    }
+    if orm_cell_by_i64(q, 0, "company_id") != ac.id {
+        return act_404(orm_db_q(q), "Разпределението не е намерено")
+    }
+    let lq = div_by_distribution(orm_db_q(q), id)?
+    if orm_ok_q(lq) == 0 {
+        return act_err(orm_db_q(lq), 500, orm_err_q(lq))
+    }
+    let mut lines = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(lq) {
+        lines = jarr_obj(lines, div_to_json(lq, i))
+        i = i + 1
+    }
+    let mut o = ddist_pack_item(lq, id, ddist_to_json(q, 0))
+    o = jobj_arr(o, "dividends", lines)
+    return act_ok(orm_db_q(lq), o)
+}
+
+fn act_ddist_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let year = jreq_i64(b.doc, b.root, "year")
+    if year.ok == 0 {
+        return act_422_field(db, "year", year)
+    }
+    if year.num < 1990 || year.num > 2100 {
+        return act_err(db, 422, "невалидна финансова година")
+    }
+    let total_s = jreq_str(b.doc, b.root, "total_amount")
+    if total_s.ok == 0 {
+        return act_422_field(db, "total_amount", total_s)
+    }
+    let total = div_amt(total_s.val)
+    if div_gt0(total) == 0 {
+        return act_err(db, 422, "сумата за разпределяне трябва да е по-голяма от 0")
+    }
+    let date = jreq_str(b.doc, b.root, "decision_date")
+    if date.ok == 0 {
+        return act_422_field(db, "decision_date", date)
+    }
+    let tax_f = jopt_str(b.doc, b.root, "tax_rate", "5")
+    let tax_d = div_amt(tax_f.val)
+    if dec_is_negative(tax_d) == 1 {
+        return act_err(db, 422, "данъчната ставка не може да е отрицателна")
+    }
+    let number = jopt_str(b.doc, b.root, "decision_number", "")
+    let notes = jopt_str(b.doc, b.root, "notes", "")
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let ac = div_require_company(auth.ctx, db)?
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let oq = bown_by_company(ac.db, ac.id)?
+    if orm_ok_q(oq) == 0 {
+        return act_err(orm_db_q(oq), 500, orm_err_q(oq))
+    }
+    let bgn = bb_begin(orm_db_q(oq))?
+    if orm_ok(bgn) == 0 {
+        return act_err(orm_db_exec(bgn), 500, orm_err_exec(bgn))
+    }
+    let ins = ddist_create(orm_db_exec(bgn), ac.id, year.num, div_money(total), date.val, number.val, notes.val)?
+    if orm_ok_q(ins) == 0 || orm_nrows(ins) < 1 {
+        return act_err_rb(orm_db_q(ins), 500, "insert distribution failed")
+    }
+    let dist_id = orm_cell_by_i64(ins, 0, "id")
+    let fill = div_insert_shares(orm_db_q(ins), ac.id, dist_id, oq, total, tax_d, date.val, tax_f.val)?
+    if fill.ok == 0 {
+        return act_err_rb(fill.db, 422, fill.err)
+    }
+    let cmt = bb_commit(fill.db)?
+    if orm_ok(cmt) == 0 {
+        return act_err(orm_db_exec(cmt), 500, orm_err_exec(cmt))
+    }
+    let q = ddist_find(orm_db_exec(cmt), dist_id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_err(orm_db_q(q), 500, "missing after create")
+    }
+    let lq = div_by_distribution(orm_db_q(q), dist_id)?
+    if orm_ok_q(lq) == 0 {
+        return act_err(orm_db_q(lq), 500, orm_err_q(lq))
+    }
+    let mut lines = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(lq) {
+        lines = jarr_obj(lines, div_to_json(lq, i))
+        i = i + 1
+    }
+    let mut o = ddist_pack_item(lq, dist_id, ddist_to_json(q, 0))
+    o = jobj_arr(o, "dividends", lines)
+    return act_created(orm_db_q(lq), o)
+}

@@ -1,0 +1,470 @@
+// actions/ubl_import.baga — UBL XML (Peppol / VATEX) → същият преглед като сканирането.
+// Контрагент по ДДС/ЕИК, артикул по запомнено име или по код от XML.
+// Черновата се записва после с POST /v1/invoices. Без Mistral.
+
+import "../models/counterpart.baga"
+import "../models/product.baga"
+import "../models/product_name_mapping.baga"
+import "../models/invoice.baga"
+import "../models/company.baga"
+import "active_company.baga"
+import "ubl_parse.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/bytes/bytes.baga"
+import "std/json/json.baga"
+import "std/str/str.baga"
+
+struct UblParty {
+    direction: str,
+    name: str,
+    eik: str,
+    vat: str,
+    role: str
+}
+
+fn ubl_b64_clean(s: str) -> str {
+    let n = len(s)
+    let mut hn = n
+    if hn > 80 { hn = 80 }
+    let head = substr(s, 0, hn)
+    let mut raw = s
+    let c = str_find(head, ",")
+    if c >= 0 && str_find(head, "base64") >= 0 {
+        raw = substr(s, c + 1, n)
+    }
+    let mut out = ""
+    let mut i: i64 = 0
+    while i < len(raw) {
+        let ch = char_at(raw, i)
+        if ch != 32 && ch != 9 && ch != 10 && ch != 13 {
+            out = concat(out, substr(raw, i, i + 1))
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn ubl_bytes_str(v: Vec<i64>) -> str {
+    let mut out = ""
+    let mut i: i64 = 0
+    while i < vec_len(v) {
+        out = concat(out, chr(vec_get(v, i)))
+        i = i + 1
+    }
+    return out
+}
+
+fn ubl_strip_bom(s: str) -> str {
+    if len(s) >= 3 && char_at(s, 0) == 239 && char_at(s, 1) == 187 && char_at(s, 2) == 191 {
+        return substr(s, 3, len(s))
+    }
+    return s
+}
+
+fn ubl_eq_id(a: str, b: str) -> i64 {
+    let x = vatex_ascii_lower(str_trim(a))
+    let y = vatex_ascii_lower(str_trim(b))
+    if x == "" || y == "" {
+        return 0
+    }
+    if x == y {
+        return 1
+    }
+    return 0
+}
+
+fn ubl_digits(s: str) -> str {
+    let mut out = ""
+    let mut i: i64 = 0
+    while i < len(s) {
+        let c = char_at(s, i)
+        if c >= 48 && c <= 57 {
+            out = concat(out, substr(s, i, i + 1))
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn ubl_eq_party(vat_a: str, eik_a: str, vat_b: str, eik_b: str) -> i64 {
+    if ubl_eq_id(vat_a, vat_b) == 1 || ubl_eq_id(eik_a, eik_b) == 1 {
+        return 1
+    }
+    if ubl_eq_id(eik_a, ubl_digits(vat_b)) == 1 || ubl_eq_id(eik_b, ubl_digits(vat_a)) == 1 {
+        return 1
+    }
+    return 0
+}
+
+fn ubl_choose(doc: UblDoc, direction: str, cvat: str, ceik: str) -> UblParty {
+    let sup_us = ubl_eq_party(doc.sup_vat, doc.sup_eik, cvat, ceik)
+    let cus_us = ubl_eq_party(doc.cus_vat, doc.cus_eik, cvat, ceik)
+    let mut dir = direction
+    let mut role = "supplier"
+    if sup_us == 1 && cus_us == 0 {
+        dir = "out"
+        role = "customer"
+    } else {
+        if cus_us == 1 && sup_us == 0 {
+            dir = "in"
+            role = "supplier"
+        } else {
+            if direction == "out" {
+                role = "customer"
+            }
+        }
+    }
+    let mut p = UblParty { direction: dir, name: "", eik: "", vat: "", role: role }
+    if role == "customer" {
+        p.name = doc.cus_name
+        p.eik = doc.cus_eik
+        p.vat = doc.cus_vat
+    } else {
+        p.name = doc.sup_name
+        p.eik = doc.sup_eik
+        p.vat = doc.sup_vat
+    }
+    return p
+}
+
+fn ubl_digits_only(s: str) -> i64 {
+    if s == "" {
+        return 0
+    }
+    let mut i: i64 = 0
+    while i < len(s) {
+        let c = char_at(s, i)
+        if c < 48 || c > 57 {
+            return 0
+        }
+        i = i + 1
+    }
+    return 1
+}
+
+fn ubl_strip_zeros(s: str) -> str {
+    let mut i: i64 = 0
+    while i < len(s) - 1 && char_at(s, i) == 48 {
+        i = i + 1
+    }
+    return substr(s, i, len(s))
+}
+
+fn ubl_orig_score(num: str, want: str, doc_type: str, direction: str, want_dir: str, cp: i64, want_cp: i64, company_id: i64, want_co: i64) -> i64 {
+    if want_co > 0 && company_id != 0 && company_id != want_co {
+        return 0
+    }
+    if direction != want_dir {
+        return 0
+    }
+    if doc_type != "01" && doc_type != "11" {
+        return 0
+    }
+    let mut m: i64 = 0
+    if num == want {
+        m = 2
+    } else {
+        if ubl_digits_only(num) == 1 && ubl_digits_only(want) == 1 {
+            if ubl_strip_zeros(num) == ubl_strip_zeros(want) {
+                m = 1
+            }
+        }
+    }
+    if m == 0 {
+        return 0
+    }
+    if want_cp > 0 && cp == want_cp {
+        m = m + 2
+    }
+    return m
+}
+
+fn ubl_find_original(q: OrmQuery, number: str, direction: str, counterpart_id: i64, company_id: i64) -> i64 {
+    let want = str_trim(number)
+    if want == "" {
+        return 0
+    }
+    let mut best: i64 = 0
+    let mut score: i64 = 0
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        let sc = ubl_orig_score(orm_cell_by(q, i, "number"), want, orm_cell_by(q, i, "document_type"), orm_cell_by(q, i, "direction"), direction, orm_cell_by_i64(q, i, "counterpart_id"), counterpart_id, orm_cell_by_i64(q, i, "company_id"), company_id)
+        if sc > score {
+            score = sc
+            best = orm_cell_by_i64(q, i, "id")
+        }
+        i = i + 1
+    }
+    return best
+}
+
+fn ubl_product_code(q: OrmQuery, code: str, company_id: i64) -> i64 {
+    let want = str_trim(code)
+    if want == "" {
+        return 0
+    }
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        if orm_cell_by(q, i, "code") == want {
+            let co = orm_cell_by_i64(q, i, "company_id")
+            if company_id <= 0 || co == 0 || co == company_id {
+                return orm_cell_by_i64(q, i, "id")
+            }
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+fn ubl_copy_line(d: JsonDoc, root: i64, key: str, fallback: str) -> str {
+    let f = jopt_str(d, root, key, fallback)
+    if f.ok == 0 {
+        return fallback
+    }
+    return f.val
+}
+
+fn ubl_map_lines(lines: JArr, mapq: OrmQuery, have_map: i64, products: OrmQuery, company_id: i64) -> JArr {
+    let mut out = jarr_new()
+    let n = vec_len(lines.items)
+    let mut i: i64 = 0
+    while i < n {
+        let raw = vec_get(lines.items, i)
+        let parsed = jbody_parse_str(raw)
+        if parsed.ok == 0 || json_tag(parsed.doc, parsed.root) != 6 {
+            out = jarr_raw(out, raw)
+        } else {
+            let desc = ubl_copy_line(parsed.doc, parsed.root, "description", "")
+            let seller = ubl_copy_line(parsed.doc, parsed.root, "seller_code", "")
+            let mut o = jobj_new()
+            o = jobj_str(o, "description", desc)
+            o = jobj_str(o, "seller_code", seller)
+            o = jobj_str(o, "quantity", ubl_copy_line(parsed.doc, parsed.root, "quantity", "1"))
+            o = jobj_str(o, "unit", ubl_copy_line(parsed.doc, parsed.root, "unit", "C62"))
+            o = jobj_str(o, "unit_price", ubl_copy_line(parsed.doc, parsed.root, "unit_price", "0"))
+            o = jobj_str(o, "vat_rate", ubl_copy_line(parsed.doc, parsed.root, "vat_rate", "20"))
+            o = jobj_str(o, "net_amount", ubl_copy_line(parsed.doc, parsed.root, "net_amount", ""))
+            o = jobj_str(o, "vat_amount", ubl_copy_line(parsed.doc, parsed.root, "vat_amount", ""))
+            o = jobj_str(o, "total_amount", ubl_copy_line(parsed.doc, parsed.root, "total_amount", ""))
+            let mut pid: i64 = 0
+            if have_map == 1 {
+                let hit = pnmap_find_name(mapq, desc)
+                if hit >= 0 {
+                    pid = orm_cell_by_i64(mapq, hit, "product_id")
+                }
+                if pid == 0 && seller != "" {
+                    let hit2 = pnmap_find_name(mapq, seller)
+                    if hit2 >= 0 {
+                        pid = orm_cell_by_i64(mapq, hit2, "product_id")
+                    }
+                }
+            }
+            if pid == 0 {
+                pid = ubl_product_code(products, seller, company_id)
+            }
+            if pid > 0 {
+                o = jobj_i64(o, "product_id", pid)
+            }
+            out = jarr_obj(out, o)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn ubl_apply_names(lines: JArr, mapq: OrmQuery) -> JArr {
+    let mut out = jarr_new()
+    let n = vec_len(lines.items)
+    let mut i: i64 = 0
+    while i < n {
+        let raw = vec_get(lines.items, i)
+        let parsed = jbody_parse_str(raw)
+        if parsed.ok == 0 || json_tag(parsed.doc, parsed.root) != 6 {
+            out = jarr_raw(out, raw)
+        } else {
+            let desc = ubl_copy_line(parsed.doc, parsed.root, "description", "")
+            let seller = ubl_copy_line(parsed.doc, parsed.root, "seller_code", "")
+            let mut pid: i64 = 0
+            let hit = pnmap_find_name(mapq, desc)
+            if hit >= 0 {
+                pid = orm_cell_by_i64(mapq, hit, "product_id")
+            }
+            if pid == 0 && seller != "" {
+                let hit2 = pnmap_find_name(mapq, seller)
+                if hit2 >= 0 {
+                    pid = orm_cell_by_i64(mapq, hit2, "product_id")
+                }
+            }
+            if pid == 0 {
+                let existing = jreq_i64(parsed.doc, parsed.root, "product_id")
+                if existing.ok == 1 && existing.num > 0 {
+                    pid = existing.num
+                }
+            }
+            let mut o = jobj_new()
+            o = jobj_str(o, "description", desc)
+            o = jobj_str(o, "seller_code", seller)
+            o = jobj_str(o, "quantity", ubl_copy_line(parsed.doc, parsed.root, "quantity", "1"))
+            o = jobj_str(o, "unit", ubl_copy_line(parsed.doc, parsed.root, "unit", "C62"))
+            o = jobj_str(o, "unit_price", ubl_copy_line(parsed.doc, parsed.root, "unit_price", "0"))
+            o = jobj_str(o, "vat_rate", ubl_copy_line(parsed.doc, parsed.root, "vat_rate", "20"))
+            o = jobj_str(o, "net_amount", ubl_copy_line(parsed.doc, parsed.root, "net_amount", ""))
+            o = jobj_str(o, "vat_amount", ubl_copy_line(parsed.doc, parsed.root, "vat_amount", ""))
+            o = jobj_str(o, "total_amount", ubl_copy_line(parsed.doc, parsed.root, "total_amount", ""))
+            if pid > 0 {
+                o = jobj_i64(o, "product_id", pid)
+            }
+            out = jarr_obj(out, o)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn act_scans_ubl(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let filename = jopt_str(b.doc, b.root, "filename", "invoice.xml")
+    let direction = jopt_str(b.doc, b.root, "direction", "in")
+    if direction.val != "in" && direction.val != "out" {
+        return act_err(db, 422, "direction must be 'in' or 'out'")
+    }
+    let xml_in = jopt_str(b.doc, b.root, "xml", "")
+    let b64 = jopt_str(b.doc, b.root, "content_base64", "")
+    if xml_in.ok == 0 {
+        return act_422_field(db, "xml", xml_in)
+    }
+    if b64.ok == 0 {
+        return act_422_field(db, "content_base64", b64)
+    }
+    let mut xml = str_trim(xml_in.val)
+    if xml == "" {
+        if b64.val == "" {
+            return act_err(db, 422, "празен файл")
+        }
+        xml = ubl_strip_bom(ubl_bytes_str(base64_decode(ubl_b64_clean(b64.val))))
+    }
+    xml = ubl_strip_bom(str_trim(xml))
+    if len(xml) > 8000000 {
+        return act_err(db, 422, "Файлът е над 8 МБ.")
+    }
+    if str_find(xml, "<") < 0 {
+        return act_err(db, 422, "Файлът не е XML.")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let doc = ubl_parse_xml(xml)
+    if doc.ok == 0 {
+        return act_err(db, 422, doc.err)
+    }
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    let mut db2 = ac.db
+    let mut cvat = ""
+    let mut ceik = ""
+    if ac.id > 0 {
+        let cq = company_find(db2, ac.id)?
+        if orm_ok_q(cq) == 0 {
+            return act_err(orm_db_q(cq), 500, orm_err_q(cq))
+        }
+        db2 = orm_db_q(cq)
+        if orm_nrows(cq) >= 1 {
+            cvat = orm_cell_by(cq, 0, "vat_number")
+            ceik = orm_cell_by(cq, 0, "eik")
+        }
+    }
+    let party = ubl_choose(doc, direction.val, cvat, ceik)
+    let mut cp_id: i64 = 0
+    let mut cp_obj = jobj_new()
+    let vat = str_trim(party.vat)
+    let eik = str_trim(party.eik)
+    if vat != "" {
+        let cq = counterpart_by_vat(db2, vat)?
+        if orm_ok_q(cq) == 0 {
+            return act_err(orm_db_q(cq), 500, orm_err_q(cq))
+        }
+        db2 = orm_db_q(cq)
+        if orm_nrows(cq) >= 1 {
+            cp_id = orm_cell_by_i64(cq, 0, "id")
+            cp_obj = counterpart_to_json(cq, 0)
+        }
+    }
+    if cp_id == 0 && eik != "" {
+        let cq = counterpart_by_eik(db2, eik)?
+        if orm_ok_q(cq) == 0 {
+            return act_err(orm_db_q(cq), 500, orm_err_q(cq))
+        }
+        db2 = orm_db_q(cq)
+        if orm_nrows(cq) >= 1 {
+            cp_id = orm_cell_by_i64(cq, 0, "id")
+            cp_obj = counterpart_to_json(cq, 0)
+        }
+    }
+    let pq = product_all(db2)?
+    if orm_ok_q(pq) == 0 {
+        return act_err(orm_db_q(pq), 500, orm_err_q(pq))
+    }
+    db2 = orm_db_q(pq)
+    let mut lines = ubl_map_lines(doc.lines, pq, 0, pq, ac.id)
+    if cp_id > 0 {
+        let maps = pnmap_by_counterpart(db2, cp_id)?
+        if orm_ok_q(maps) == 0 {
+            return act_err(orm_db_q(maps), 500, orm_err_q(maps))
+        }
+        db2 = orm_db_q(maps)
+        lines = ubl_apply_names(lines, maps)
+    }
+    let mut orig_id: i64 = 0
+    if doc.orig != "" {
+        let iq = invoice_all(db2)?
+        if orm_ok_q(iq) == 0 {
+            return act_err(orm_db_q(iq), 500, orm_err_q(iq))
+        }
+        db2 = orm_db_q(iq)
+        orig_id = ubl_find_original(iq, doc.orig, party.direction, cp_id, ac.id)
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "direction", party.direction)
+    o = jobj_str(o, "filename", filename.val)
+    o = jobj_str(o, "invoice_number", doc.doc_id)
+    o = jobj_str(o, "issue_date", doc.issue_date)
+    o = jobj_str(o, "due_date", doc.due_date)
+    o = jobj_str(o, "tax_event_date", doc.tax_point)
+    o = jobj_str(o, "document_type", doc.document_type)
+    o = jobj_str(o, "counterpart_name", party.name)
+    o = jobj_str(o, "counterpart_eik", party.eik)
+    o = jobj_str(o, "counterpart_vat_number", party.vat)
+    o = jobj_str(o, "counterpart_role", party.role)
+    o = jobj_str(o, "currency", doc.currency)
+    o = jobj_str(o, "currency_rate", doc.currency_rate)
+    o = jobj_str(o, "payment_method", doc.payment_method)
+    o = jobj_str(o, "payment_note", doc.note)
+    o = jobj_str(o, "vat_exemption_reason", doc.exemption)
+    o = jobj_str(o, "original_invoice_number", doc.orig)
+    o = jobj_str(o, "total_net_amount", doc.net)
+    o = jobj_str(o, "total_vat_amount", doc.vat)
+    o = jobj_str(o, "total_amount", doc.total)
+    o = jobj_arr(o, "lines", lines)
+    if orig_id > 0 {
+        o = jobj_i64(o, "original_invoice_id", orig_id)
+    }
+    if cp_id > 0 {
+        o = jobj_i64(o, "counterpart_id", cp_id)
+        o = jobj_obj(o, "counterpart", cp_obj)
+    }
+    return act_ok(db2, o)
+}

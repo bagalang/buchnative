@@ -1,0 +1,96 @@
+// actions/active_company.baga — активна фирма за текущия потребител (мултитенант).
+// Пази се в настройки като ключ "активна_фирма:<суб>".
+
+import "../models/setting.baga"
+import "../models/company.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+fn active_company_key(sub: str) -> str {
+    return concat("активна_фирма:", sub)
+}
+
+// Активната фирма на потребителя (id или 0). db се предава напред.
+struct ActiveCompany {
+    id: i64,
+    db: OrmDb
+}
+
+fn active_company_id(db: OrmDb, sub: str) -> ActiveCompany !IO !Net {
+    let key = active_company_key(sub)
+    let q = setting_get_by_key(db, key)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return ActiveCompany { id: 0, db: orm_db_q(q) }
+    }
+    let val = orm_cell_by(q, 0, "value")
+    let cid = parse_int(val)
+    return ActiveCompany { id: cid, db: orm_db_q(q) }
+}
+
+fn act_active_company_get(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "няма налична база данни")
+    }
+    let key = active_company_key(auth.ctx.user_sub)
+    let q = setting_get_by_key(db, key)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return act_ok(orm_db_q(q), jobj_new())
+    }
+    let val = orm_cell_by(q, 0, "value")
+    if val == "" {
+        return act_ok(orm_db_q(q), jobj_new())
+    }
+    let cid = parse_int(val)
+    let cq = company_find(orm_db_q(q), cid)?
+    if orm_ok_q(cq) == 0 || orm_nrows(cq) < 1 {
+        return act_ok(orm_db_q(cq), jobj_new())
+    }
+    return act_ok(orm_db_q(cq), company_to_json(cq, 0))
+}
+
+fn act_active_company_set(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let cid = jreq_i64(b.doc, b.root, "company_id")
+    if cid.ok == 0 {
+        return act_422_field(db, "company_id", cid)
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "няма налична база данни")
+    }
+    // Проверка, че фирмата съществува.
+    let cq = company_find(db, cid.num)?
+    if orm_ok_q(cq) == 0 {
+        return act_err(orm_db_q(cq), 500, orm_err_q(cq))
+    }
+    if orm_nrows(cq) < 1 {
+        return act_404(orm_db_q(cq), "фирмата не е намерена")
+    }
+    let key = active_company_key(auth.ctx.user_sub)
+    let st = setting_set_by_key(orm_db_q(cq), key, int_to_str(cid.num))?
+    if orm_ok(st) == 0 {
+        return act_err(orm_db_exec(st), 500, orm_err_exec(st))
+    }
+    return act_ok(orm_db_exec(st), company_to_json(cq, 0))
+}

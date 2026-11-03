@@ -1,0 +1,188 @@
+// actions/reports_trial.baga — 6-колонна оборотна ведомост (и по контрагент).
+// Крайно салдо = начално + оборот, без нетиране (като su-doxis).
+
+import "reports_util.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+fn rpt_trial_header() -> str {
+    let mut r = "<tr>"
+    r = concat(r, rpt_cell("th", "Сметка"))
+    r = concat(r, rpt_cell("th", "Наименование"))
+    r = concat(r, rpt_cell("th", "НД"))
+    r = concat(r, rpt_cell("th", "НК"))
+    r = concat(r, rpt_cell("th", "ОД"))
+    r = concat(r, rpt_cell("th", "ОК"))
+    r = concat(r, rpt_cell("th", "КД"))
+    r = concat(r, rpt_cell("th", "КК"))
+    r = concat(r, "</tr>")
+    return r
+}
+
+fn rpt_trial_row(num: str, name: str, od: str, oc: str, td: str, tc: str, cd: str, cc: str) -> str {
+    let mut r = "<tr>"
+    r = concat(r, rpt_cell("td", num))
+    r = concat(r, rpt_cell("td", name))
+    r = concat(r, rpt_cell("td", rpt_bg_num(od)))
+    r = concat(r, rpt_cell("td", rpt_bg_num(oc)))
+    r = concat(r, rpt_cell("td", rpt_bg_num(td)))
+    r = concat(r, rpt_cell("td", rpt_bg_num(tc)))
+    r = concat(r, rpt_cell("td", rpt_bg_num(cd)))
+    r = concat(r, rpt_cell("td", rpt_bg_num(cc)))
+    r = concat(r, "</tr>")
+    return r
+}
+
+fn rpt_trial_item(num: str, name: str, od: str, oc: str, td: str, tc: str, cd: str, cc: str) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_str(o, "account_number", num)
+    o = jobj_str(o, "account_name", name)
+    o = jobj_str(o, "opening_debit", od)
+    o = jobj_str(o, "opening_credit", oc)
+    o = jobj_str(o, "turnover_debit", td)
+    o = jobj_str(o, "turnover_credit", tc)
+    o = jobj_str(o, "closing_debit", cd)
+    o = jobj_str(o, "closing_credit", cc)
+    return o
+}
+
+fn rpt_trial_build(kind: str, aq: OrmQuery, obq: OrmQuery, jq: OrmQuery, lq: OrmQuery, from: str, to: str, account: str, cpid: i64, firm: str) -> RptBuilt {
+    let year = substr(from, 0, 4)
+    let fiscal = concat(year, "-01-01")
+    let mut dates: Map<str, str> = map_new()
+    let mut ecp: Map<str, str> = map_new()
+    let mut ei: i64 = 0
+    while ei < orm_nrows(jq) {
+        let eid = int_to_str(orm_cell_by_i64(jq, ei, "id"))
+        map_set(dates, eid, rpt_day(orm_cell_by(jq, ei, "entry_date")))
+        map_set(ecp, eid, int_to_str(orm_cell_by_i64(jq, ei, "counterpart_id")))
+        ei = ei + 1
+    }
+    let mut od: Map<str, str> = map_new()
+    let mut oc: Map<str, str> = map_new()
+    let mut td: Map<str, str> = map_new()
+    let mut tc: Map<str, str> = map_new()
+    let mut oi: i64 = 0
+    while oi < orm_nrows(obq) {
+        let row_cp = orm_cell_by_i64(obq, oi, "counterpart_id")
+        if cpid <= 0 || row_cp == cpid {
+            let aid = int_to_str(orm_cell_by_i64(obq, oi, "account_id"))
+            od = rpt_add(od, aid, orm_cell_by(obq, oi, "debit"))
+            oc = rpt_add(oc, aid, orm_cell_by(obq, oi, "credit"))
+        }
+        oi = oi + 1
+    }
+    let mut li: i64 = 0
+    while li < orm_nrows(lq) {
+        let eid = int_to_str(orm_cell_by_i64(lq, li, "entry_id"))
+        let mut day = ""
+        if map_has(dates, eid) == 1 {
+            day = map_get(dates, eid)
+        }
+        let mut cp_ok: i64 = 1
+        if cpid > 0 {
+            cp_ok = 0
+            if orm_cell_by_i64(lq, li, "counterpart_id") == cpid {
+                cp_ok = 1
+            }
+            if map_has(ecp, eid) == 1 {
+                if parse_int(map_get(ecp, eid)) == cpid {
+                    cp_ok = 1
+                }
+            }
+        }
+        if cp_ok == 1 {
+            let aid = int_to_str(orm_cell_by_i64(lq, li, "account_id"))
+            let amt = orm_cell_by(lq, li, "amount")
+            let dir = orm_cell_by(lq, li, "direction")
+            if from != fiscal {
+                if rpt_in_range(day, fiscal, from, 1) == 1 {
+                    if dir == "debit" {
+                        od = rpt_add(od, aid, amt)
+                    }
+                    if dir == "credit" {
+                        oc = rpt_add(oc, aid, amt)
+                    }
+                }
+            }
+            if rpt_in_range(day, from, to, 0) == 1 {
+                if dir == "debit" {
+                    td = rpt_add(td, aid, amt)
+                }
+                if dir == "credit" {
+                    tc = rpt_add(tc, aid, amt)
+                }
+            }
+        }
+        li = li + 1
+    }
+    let title = rpt_title(kind)
+    let mut html = rpt_html_open(title, rpt_period(from, to), firm)
+    html = concat(html, rpt_trial_header())
+    let mut rows = jarr_new()
+    let mut t_od = "0"
+    let mut t_oc = "0"
+    let mut t_td = "0"
+    let mut t_tc = "0"
+    let mut t_cd = "0"
+    let mut t_cc = "0"
+    let mut i: i64 = 0
+    while i < orm_nrows(aq) {
+        let aid = int_to_str(orm_cell_by_i64(aq, i, "id"))
+        let num = orm_cell_by(aq, i, "number")
+        let name = orm_cell_by(aq, i, "name")
+        if rpt_starts(num, account) == 0 {
+            i = i + 1
+            continue
+        }
+        let mut rod = "0"
+        let mut roc = "0"
+        let mut rtd = "0"
+        let mut rtc = "0"
+        if map_has(od, aid) == 1 {
+            rod = map_get(od, aid)
+        }
+        if map_has(oc, aid) == 1 {
+            roc = map_get(oc, aid)
+        }
+        if map_has(td, aid) == 1 {
+            rtd = map_get(td, aid)
+        }
+        if map_has(tc, aid) == 1 {
+            rtc = map_get(tc, aid)
+        }
+        if rpt_zero(rod) == 1 && rpt_zero(roc) == 1 && rpt_zero(rtd) == 1 && rpt_zero(rtc) == 1 {
+            i = i + 1
+            continue
+        }
+        let rcd = rpt_sum(rod, rtd)
+        let rcc = rpt_sum(roc, rtc)
+        html = concat(html, rpt_trial_row(num, name, rod, roc, rtd, rtc, rcd, rcc))
+        rows = jarr_obj(rows, rpt_trial_item(num, name, rod, roc, rtd, rtc, rcd, rcc))
+        t_od = rpt_sum(t_od, rod)
+        t_oc = rpt_sum(t_oc, roc)
+        t_td = rpt_sum(t_td, rtd)
+        t_tc = rpt_sum(t_tc, rtc)
+        t_cd = rpt_sum(t_cd, rcd)
+        t_cc = rpt_sum(t_cc, rcc)
+        i = i + 1
+    }
+    html = concat(html, rpt_trial_row(" ", "Общо", t_od, t_oc, t_td, t_tc, t_cd, t_cc))
+    html = rpt_html_close(html)
+    let mut tot = jobj_new()
+    tot = jobj_str(tot, "opening_debit", t_od)
+    tot = jobj_str(tot, "opening_credit", t_oc)
+    tot = jobj_str(tot, "turnover_debit", t_td)
+    tot = jobj_str(tot, "turnover_credit", t_tc)
+    tot = jobj_str(tot, "closing_debit", t_cd)
+    tot = jobj_str(tot, "closing_credit", t_cc)
+    let mut body = jobj_new()
+    body = jobj_str(body, "kind", kind)
+    body = jobj_str(body, "from", from)
+    body = jobj_str(body, "to", to)
+    body = jobj_str(body, "title", title)
+    body = jobj_arr(body, "rows", rows)
+    body = jobj_raw(body, "totals", jobj_encode(tot))
+    return RptBuilt { body: body, html: html, title: title, slug: rpt_slug(kind) }
+}

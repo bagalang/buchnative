@@ -1,0 +1,106 @@
+// models/account.baga — accounts (сметкоплан) върху KV backend-а (rocksbaga).
+//
+// Сигнатурите са същите като SQL версията, затова actions/accounts.baga не се
+// пипа: орmbaga-овите accessor-и (orm_cell_by/orm_nrows/orm_db_q) четат
+// OrmQuery, който kv_select_* попълва от KV данни. parent_id е nullable.
+
+import "ormbaga/orm.baga"
+import "fmrbaga/jsonx.baga"
+import "kvtime.baga"
+import "std/str/str.baga"
+
+fn account_table() -> str {
+    return "accounts"
+}
+
+// Колоните на реда — заместват SELECT списъка от SQL версията.
+fn account_cols() -> Vec<str> {
+    let c: Vec<str> = vec_new()
+    vec_push(c, "id")
+    vec_push(c, "number")
+    vec_push(c, "name")
+    vec_push(c, "saft_account_type")
+    vec_push(c, "analytic_type")
+    vec_push(c, "parent_id")
+    vec_push(c, "created_at")
+    return c
+}
+
+// Следващ PK: броячът на таблицата (INCR при insert), четене тук.
+fn account_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return kv_count_sql(db, "SELECT MAX(id) AS count FROM accounts")?
+}
+
+fn account_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_str(o, "number", orm_cell_by(q, row, "number"))
+    o = jobj_str(o, "name", orm_cell_by(q, row, "name"))
+    o = jobj_str(o, "saft_account_type", orm_cell_by(q, row, "saft_account_type"))
+    o = jobj_str(o, "analytic_type", orm_cell_by(q, row, "analytic_type"))
+    let pid = orm_cell_by_i64(q, row, "parent_id")
+    if pid > 0 {
+        o = jobj_i64(o, "parent_id", pid)
+    }
+    let ca = orm_cell_by(q, row, "created_at")
+    if ca != "" {
+        o = jobj_str(o, "created_at", ca)
+    }
+    return o
+}
+
+fn account_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
+    return kv_select_by_id(db, account_table(), id, account_cols())?
+}
+
+fn account_by_number(db: OrmDb, number: str) -> OrmQuery !IO !Net {
+    return kv_select_where(db, account_table(), "number", number, account_cols())?
+}
+
+fn account_all(db: OrmDb) -> OrmQuery !IO !Net {
+    return kv_select_all_order(db, account_table(), "number", account_cols())?
+}
+
+// parent_null==1 → parent_id е NULL (йерархичен корен). id се раздава от
+// брояча на таблицата и се връща в реда (като RETURNING).
+fn account_create(db: OrmDb, number: str, name: str, saft_account_type: str, analytic_type: str, parent_id: i64, parent_null: i64) -> OrmQuery !IO !Net !Time {
+    let cols: Vec<str> = vec_new()
+    vec_push(cols, "number")
+    vec_push(cols, "name")
+    vec_push(cols, "saft_account_type")
+    vec_push(cols, "analytic_type")
+    vec_push(cols, "parent_id")
+    vec_push(cols, "created_at")
+    let vals: Vec<str> = vec_new()
+    vec_push(vals, number)
+    vec_push(vals, name)
+    vec_push(vals, saft_account_type)
+    vec_push(vals, analytic_type)
+    vec_push(vals, int_to_str(parent_id))
+    vec_push(vals, kv_now_iso()?)
+    let nulls: Vec<i64> = vec_new()
+    vec_push(nulls, 0)
+    vec_push(nulls, 0)
+    vec_push(nulls, 0)
+    vec_push(nulls, 0)
+    vec_push(nulls, parent_null)
+    vec_push(nulls, 0)
+    return kv_insert(db, account_table(), cols, vals, nulls)?
+}
+
+fn account_delete(db: OrmDb, id: i64) -> OrmExec !IO !Net {
+    return kv_delete_by_id(db, account_table(), id)?
+}
+
+fn account_list_json(q: OrmQuery) -> JObj {
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        arr = jarr_obj(arr, account_to_json(q, i))
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", orm_nrows(q))
+    return o
+}

@@ -1,0 +1,147 @@
+// actions/auth_reset.baga — забравена парола през SMTP sidecar (като baraba).
+
+import "../models/user.baga"
+import "../models/setting.baga"
+import "../models/auth_tokens.baga"
+import "admin_settings.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/crypto/sha256.baga"
+import "std/random/random.baga"
+import "std/bytes/bytes.baga"
+import "std/str/str.baga"
+import "std/time/time.baga"
+
+fn auth_reset_generic() -> str {
+    return "Ако съществува акаунт с този email, ще получите линк за възстановяване."
+}
+
+fn act_forgot_password(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let email = jreq_str(b.doc, b.root, "email")
+    if email.ok == 0 || str_trim(email.val) == "" {
+        return act_err(db, 422, "Email е задължителен")
+    }
+    let em = str_trim(email.val)
+    let uq = user_by_email(db, em)?
+    if orm_ok_q(uq) == 0 {
+        return act_err(orm_db_q(uq), 500, orm_err_q(uq))
+    }
+    let mut o = jobj_new()
+    o = jobj_i64(o, "ok", 1)
+    o = jobj_str(o, "message", auth_reset_generic())
+    if orm_nrows(uq) < 1 {
+        return act_ok(orm_db_q(uq), o)
+    }
+    let uid = orm_cell_by_i64(uq, 0, "id")
+    let raw = random_bytes(16)?
+    let token = bytes_to_hex(raw)
+    let th = sha256_hex(token)
+    let now = time_now_ms()? / 1000
+    let ins = prt_insert(orm_db_q(uq), uid, th, now + 3600)?
+    if orm_ok(ins) == 0 {
+        return act_err(orm_db_exec(ins), 500, orm_err_exec(ins))
+    }
+    let sq = setting_all(orm_db_exec(ins))?
+    if orm_ok_q(sq) == 0 {
+        return act_ok(orm_db_q(sq), o)
+    }
+    let app_url = setting_map_get(sq, "app.url")
+    if app_url == "" {
+        return act_ok(orm_db_q(sq), o)
+    }
+    let smtp_on = setting_map_get(sq, "smtp.enabled")
+    if smtp_on == "0" || smtp_on == "false" || setting_map_get(sq, "smtp.host") == "" {
+        return act_ok(orm_db_q(sq), o)
+    }
+    let link = concat(app_url, concat("/reset-password?token=", token))
+    let html = concat(concat("<p>Заявка за нова парола в buchnative.</p><p><a href=\"", link), "\">Смени паролата</a></p><p>Линкът е валиден 1 час.</p>")
+    let mut payload = jobj_new()
+    payload = jobj_raw(payload, "smtp_config", jobj_encode(smtp_cfg_from_settings(sq)))
+    let mut emsg = jobj_new()
+    emsg = jobj_str(emsg, "to", em)
+    emsg = jobj_str(emsg, "subject", "Възстановяване на парола — buchnative")
+    emsg = jobj_str(emsg, "body_html", html)
+    payload = jobj_raw(payload, "email", jobj_encode(emsg))
+    let _r = sidecar_post("/smtp/send", jobj_encode(payload))?
+    return act_ok(orm_db_q(sq), o)
+}
+
+fn act_reset_password(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let token = jreq_str(b.doc, b.root, "token")
+    if token.ok == 0 || token.val == "" {
+        return act_err(db, 422, "Невалиден или липсващ токен")
+    }
+    let password = jreq_str(b.doc, b.root, "password")
+    if password.ok == 0 || len(password.val) < 8 {
+        return act_err(db, 422, "паролата трябва да е поне 8 символа")
+    }
+    let confirm = jopt_str(b.doc, b.root, "password_confirmation", password.val)
+    if confirm.val != password.val {
+        return act_err(db, 422, "паролите не съвпадат")
+    }
+    let th = sha256_hex(token.val)
+    let tq = prt_by_hash(db, th)?
+    if orm_ok_q(tq) == 0 {
+        return act_err(orm_db_q(tq), 500, orm_err_q(tq))
+    }
+    if orm_nrows(tq) < 1 {
+        return act_err(orm_db_q(tq), 422, "Невалиден или изтекъл токен. Заявете нов линк.")
+    }
+    if orm_cell_by_i64(tq, 0, "used") == 1 {
+        return act_err(orm_db_q(tq), 422, "Невалиден или изтекъл токен. Заявете нов линк.")
+    }
+    let exp = orm_cell_by_i64(tq, 0, "expires_at")
+    let now = time_now_ms()? / 1000
+    if exp < now {
+        return act_err(orm_db_q(tq), 422, "Невалиден или изтекъл токен. Заявете нов линк.")
+    }
+    let uid = orm_cell_by_i64(tq, 0, "user_id")
+    let tid = orm_cell_by_i64(tq, 0, "id")
+    let uq = user_find(orm_db_q(tq), uid)?
+    if orm_ok_q(uq) == 0 || orm_nrows(uq) < 1 {
+        return act_err(orm_db_q(uq), 422, "Невалиден или изтекъл токен. Заявете нов линк.")
+    }
+    let em = orm_cell_by(uq, 0, "email")
+    let hash = user_hash_password(em, password.val)
+    let cols = vec_new()
+    vec_push(cols, "password_hash")
+    let vals = vec_new()
+    vec_push(vals, hash)
+    let up = orm_update_by_id(orm_db_q(uq), user_table(), uid, cols, vals)?
+    if orm_ok(up) == 0 {
+        return act_err(orm_db_exec(up), 500, orm_err_exec(up))
+    }
+    let mk = prt_mark_used(orm_db_exec(up), tid)?
+    if orm_ok(mk) == 0 {
+        return act_err(orm_db_exec(mk), 500, orm_err_exec(mk))
+    }
+    let mut o = jobj_new()
+    o = jobj_i64(o, "ok", 1)
+    o = jobj_str(o, "message", "Паролата е променена. Можете да влезете.")
+    return act_ok(orm_db_exec(mk), o)
+}

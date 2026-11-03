@@ -1,0 +1,32 @@
+// models/fs_nom_cash.baga — паричен поток, директен метод (СС 7).
+// Ред: code|parent|kind|side|name  side=cash
+
+fn fs_cf_push(rows: Vec<str>, line: str) -> Vec<str> {
+    vec_push(rows, line)
+    return rows
+}
+
+fn fs_nom_cash_rows() -> Vec<str> {
+    let mut r = vec_new()
+    r = fs_cf_push(r, "cf.op||header|cash|А. Оперативна дейност")
+    r = fs_cf_push(r, "cf.op.in.cust|cf.op|line|cash|Постъпления от клиенти")
+    r = fs_cf_push(r, "cf.op.out.sup|cf.op|line|cash|Плащания към доставчици")
+    r = fs_cf_push(r, "cf.op.out.staff|cf.op|line|cash|Плащания за персонал")
+    r = fs_cf_push(r, "cf.op.out.tax|cf.op|line|cash|Платени данъци")
+    r = fs_cf_push(r, "cf.op.out.other|cf.op|line|cash|Други плащания по оперативна дейност")
+    r = fs_cf_push(r, "cf.op.net|cf.op|total|cash|Нетен поток от оперативна дейност")
+    r = fs_cf_push(r, "cf.inv||header|cash|Б. Инвестиционна дейност")
+    r = fs_cf_push(r, "cf.inv.out.ppe|cf.inv|line|cash|Придобиване на дълготрайни активи")
+    r = fs_cf_push(r, "cf.inv.in.ppe|cf.inv|line|cash|Постъпления от продажба на дълготрайни активи")
+    r = fs_cf_push(r, "cf.inv.net|cf.inv|total|cash|Нетен поток от инвестиционна дейност")
+    r = fs_cf_push(r, "cf.fin||header|cash|В. Финансова дейност")
+    r = fs_cf_push(r, "cf.fin.in.cap|cf.fin|line|cash|Постъпления от собственици")
+    r = fs_cf_push(r, "cf.fin.in.loan|cf.fin|line|cash|Получени заеми")
+    r = fs_cf_push(r, "cf.fin.out.loan|cf.fin|line|cash|Погасени заеми")
+    r = fs_cf_push(r, "cf.fin.out.div|cf.fin|line|cash|Платени дивиденти")
+    r = fs_cf_push(r, "cf.fin.net|cf.fin|total|cash|Нетен поток от финансова дейност")
+    r = fs_cf_push(r, "cf.change||total|cash|Изменение на паричните средства")
+    r = fs_cf_push(r, "cf.open||line|cash|Парични средства в началото на периода")
+    r = fs_cf_push(r, "cf.close||total|cash|Парични средства в края на периода")
+    return r
+}

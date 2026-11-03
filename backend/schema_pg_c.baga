@@ -1,0 +1,228 @@
+// schema_pg_c.baga — настройки на фирмата за SAF-T BG (полета, обекти,
+// действителни собственици, предприятия-майки). Postgres наборът ползва
+// NOT NULL/DEFAULT; качените CREATE/ALTER не се пипат.
+
+import "ormbaga/migrate.baga"
+
+fn buchnative_migrations_c() -> MigrationSet {
+    let mut set = migrate_set_new()
+    set = migrate_add(set, 20260827101, "add_companies_country", "ALTER TABLE companies ADD COLUMN country TEXT NOT NULL DEFAULT 'BG'", "ALTER TABLE companies DROP COLUMN country")
+    set = migrate_add(set, 20260827102, "add_companies_manager_name", "ALTER TABLE companies ADD COLUMN manager_name TEXT NOT NULL DEFAULT ''", "ALTER TABLE companies DROP COLUMN manager_name")
+    set = migrate_add(set, 20260827103, "add_companies_manager_egn", "ALTER TABLE companies ADD COLUMN manager_egn TEXT NOT NULL DEFAULT ''", "ALTER TABLE companies DROP COLUMN manager_egn")
+    set = migrate_add(set, 20260827104, "add_companies_authorized_person_name", "ALTER TABLE companies ADD COLUMN authorized_person_name TEXT NOT NULL DEFAULT ''", "ALTER TABLE companies DROP COLUMN authorized_person_name")
+    set = migrate_add(set, 20260827105, "add_companies_authorized_person_egn", "ALTER TABLE companies ADD COLUMN authorized_person_egn TEXT NOT NULL DEFAULT ''", "ALTER TABLE companies DROP COLUMN authorized_person_egn")
+    set = migrate_add(set, 20260827106, "add_companies_vat_branch_number", "ALTER TABLE companies ADD COLUMN vat_branch_number TEXT NOT NULL DEFAULT ''", "ALTER TABLE companies DROP COLUMN vat_branch_number")
+    set = migrate_add(set, 20260827107, "add_companies_tax_accounting_basis", "ALTER TABLE companies ADD COLUMN tax_accounting_basis TEXT NOT NULL DEFAULT 'A'", "ALTER TABLE companies DROP COLUMN tax_accounting_basis")
+    set = migrate_add(set, 20260827108, "add_companies_tax_entity", "ALTER TABLE companies ADD COLUMN tax_entity TEXT NOT NULL DEFAULT ''", "ALTER TABLE companies DROP COLUMN tax_entity")
+    set = migrate_add(set, 20260827109, "add_companies_software_company_name", "ALTER TABLE companies ADD COLUMN software_company_name TEXT NOT NULL DEFAULT 'buchnative'", "ALTER TABLE companies DROP COLUMN software_company_name")
+    set = migrate_add(set, 20260827110, "add_companies_software_id", "ALTER TABLE companies ADD COLUMN software_id TEXT NOT NULL DEFAULT 'BUCHNATIVE'", "ALTER TABLE companies DROP COLUMN software_id")
+    set = migrate_add(set, 20260827111, "add_companies_software_version", "ALTER TABLE companies ADD COLUMN software_version TEXT NOT NULL DEFAULT '1.0'", "ALTER TABLE companies DROP COLUMN software_version")
+    set = migrate_add(set, 20260827112, "add_companies_is_part_of_group", "ALTER TABLE companies ADD COLUMN is_part_of_group TEXT NOT NULL DEFAULT ''", "ALTER TABLE companies DROP COLUMN is_part_of_group")
+    set = migrate_add(set, 20260827113, "add_companies_street_name", "ALTER TABLE companies ADD COLUMN street_name TEXT NOT NULL DEFAULT ''", "ALTER TABLE companies DROP COLUMN street_name")
+    set = migrate_add(set, 20260827114, "add_companies_building_number", "ALTER TABLE companies ADD COLUMN building_number TEXT NOT NULL DEFAULT ''", "ALTER TABLE companies DROP COLUMN building_number")
+    set = migrate_add(set, 20260827115, "add_companies_region", "ALTER TABLE companies ADD COLUMN region TEXT NOT NULL DEFAULT ''", "ALTER TABLE companies DROP COLUMN region")
+    set = migrate_add(set, 20260827116, "add_companies_settings", "ALTER TABLE companies ADD COLUMN settings TEXT NOT NULL DEFAULT '{}'", "ALTER TABLE companies DROP COLUMN settings")
+    set = migrate_add(
+        set,
+        20260827117,
+        "create_company_locations",
+        "CREATE TABLE company_locations (id BIGSERIAL PRIMARY KEY, company_id BIGINT NOT NULL, name TEXT NOT NULL, location_type TEXT NOT NULL DEFAULT 'OFFICE', street_name TEXT NOT NULL DEFAULT '', building_number TEXT NOT NULL DEFAULT '', city TEXT NOT NULL DEFAULT '', post_code TEXT NOT NULL DEFAULT '', region TEXT NOT NULL DEFAULT '', country TEXT NOT NULL DEFAULT 'BG', is_main BIGINT NOT NULL DEFAULT 0, is_active BIGINT NOT NULL DEFAULT 1, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+        "DROP TABLE IF EXISTS company_locations"
+    )
+    set = migrate_add(
+        set,
+        20260827118,
+        "create_beneficial_owners",
+        "CREATE TABLE beneficial_owners (id BIGSERIAL PRIMARY KEY, company_id BIGINT NOT NULL, first_name_bg TEXT NOT NULL, last_name_bg TEXT NOT NULL, egn TEXT NOT NULL DEFAULT '', first_name_latin TEXT NOT NULL DEFAULT '', last_name_latin TEXT NOT NULL DEFAULT '', country TEXT NOT NULL DEFAULT 'BG', ownership_percentage TEXT NOT NULL DEFAULT '0', is_active BIGINT NOT NULL DEFAULT 1, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+        "DROP TABLE IF EXISTS beneficial_owners"
+    )
+    set = migrate_add(
+        set,
+        20260827119,
+        "create_ultimate_parents",
+        "CREATE TABLE ultimate_parents (id BIGSERIAL PRIMARY KEY, company_id BIGINT NOT NULL, name_bg TEXT NOT NULL, uic TEXT NOT NULL DEFAULT '', name_latin TEXT NOT NULL DEFAULT '', country TEXT NOT NULL DEFAULT 'BG', is_active BIGINT NOT NULL DEFAULT 1, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+        "DROP TABLE IF EXISTS ultimate_parents"
+    )
+    set = migrate_add(set, 20260827120, "index_company_locations_company_id", "CREATE INDEX IF NOT EXISTS index_company_locations_company_id ON company_locations (company_id)", "DROP INDEX IF EXISTS index_company_locations_company_id")
+    set = migrate_add(set, 20260827121, "index_beneficial_owners_company_id", "CREATE INDEX IF NOT EXISTS index_beneficial_owners_company_id ON beneficial_owners (company_id)", "DROP INDEX IF EXISTS index_beneficial_owners_company_id")
+    set = migrate_add(set, 20260827122, "index_ultimate_parents_company_id", "CREATE INDEX IF NOT EXISTS index_ultimate_parents_company_id ON ultimate_parents (company_id)", "DROP INDEX IF EXISTS index_ultimate_parents_company_id")
+    set = migrate_add(set, 20260828101, "add_products_description", "ALTER TABLE products ADD COLUMN description TEXT NOT NULL DEFAULT ''", "ALTER TABLE products DROP COLUMN description")
+    set = migrate_add(set, 20260828102, "add_products_cost_price", "ALTER TABLE products ADD COLUMN cost_price NUMERIC(18,4) NOT NULL DEFAULT 0", "ALTER TABLE products DROP COLUMN cost_price")
+    set = migrate_add(set, 20260828103, "add_products_inventory_account_id", "ALTER TABLE products ADD COLUMN inventory_account_id BIGINT NOT NULL DEFAULT 0", "ALTER TABLE products DROP COLUMN inventory_account_id")
+    set = migrate_add(set, 20260828104, "add_products_revenue_account_id", "ALTER TABLE products ADD COLUMN revenue_account_id BIGINT NOT NULL DEFAULT 0", "ALTER TABLE products DROP COLUMN revenue_account_id")
+    set = migrate_add(set, 20260828105, "add_products_is_inventory", "ALTER TABLE products ADD COLUMN is_inventory BIGINT NOT NULL DEFAULT 0", "ALTER TABLE products DROP COLUMN is_inventory")
+    set = migrate_add(set, 20260828106, "add_products_stock_quantity", "ALTER TABLE products ADD COLUMN stock_quantity NUMERIC(18,4) NOT NULL DEFAULT 0", "ALTER TABLE products DROP COLUMN stock_quantity")
+    set = migrate_add(set, 20260828107, "add_products_stock_value", "ALTER TABLE products ADD COLUMN stock_value NUMERIC(18,2) NOT NULL DEFAULT 0", "ALTER TABLE products DROP COLUMN stock_value")
+    set = migrate_add(set, 20260828108, "add_products_is_active", "ALTER TABLE products ADD COLUMN is_active BIGINT NOT NULL DEFAULT 1", "ALTER TABLE products DROP COLUMN is_active")
+    set = migrate_add(
+        set,
+        20260828109,
+        "create_inventory_lots",
+        "CREATE TABLE inventory_lots (id BIGSERIAL PRIMARY KEY, product_id BIGINT NOT NULL, invoice_id BIGINT NOT NULL DEFAULT 0, invoice_line_id BIGINT NOT NULL DEFAULT 0, received_date TEXT NOT NULL DEFAULT '', quantity NUMERIC(18,4) NOT NULL DEFAULT 0, quantity_remaining NUMERIC(18,4) NOT NULL DEFAULT 0, unit_cost NUMERIC(18,4) NOT NULL DEFAULT 0)",
+        "DROP TABLE IF EXISTS inventory_lots"
+    )
+    set = migrate_add(set, 20260828110, "index_inventory_lots_product_id", "CREATE INDEX IF NOT EXISTS index_inventory_lots_product_id ON inventory_lots (product_id)", "DROP INDEX IF EXISTS index_inventory_lots_product_id")
+    set = migrate_add(
+        set,
+        20260829101,
+        "create_document_series",
+        "CREATE TABLE document_series (id BIGSERIAL PRIMARY KEY, company_id BIGINT NOT NULL, name TEXT NOT NULL, document_types TEXT NOT NULL DEFAULT '', pad_width BIGINT NOT NULL DEFAULT 10, start_number BIGINT NOT NULL DEFAULT 1, is_active BIGINT NOT NULL DEFAULT 1, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+        "DROP TABLE IF EXISTS document_series"
+    )
+    set = migrate_add(set, 20260829102, "index_document_series_company_id", "CREATE INDEX IF NOT EXISTS index_document_series_company_id ON document_series (company_id)", "DROP INDEX IF EXISTS index_document_series_company_id")
+    set = migrate_add(set, 20260829103, "add_inventory_lots_location_id", "ALTER TABLE inventory_lots ADD COLUMN location_id BIGINT NOT NULL DEFAULT 0", "ALTER TABLE inventory_lots DROP COLUMN location_id")
+    set = migrate_add(set, 20260829104, "add_invoices_location_id", "ALTER TABLE invoices ADD COLUMN location_id BIGINT NOT NULL DEFAULT 0", "ALTER TABLE invoices DROP COLUMN location_id")
+    set = migrate_add(set, 20260829105, "add_journal_lines_location_id", "ALTER TABLE journal_lines ADD COLUMN location_id BIGINT NOT NULL DEFAULT 0", "ALTER TABLE journal_lines DROP COLUMN location_id")
+    set = migrate_add(set, 20260829106, "add_fixed_assets_location_id", "ALTER TABLE fixed_assets ADD COLUMN location_id BIGINT NOT NULL DEFAULT 0", "ALTER TABLE fixed_assets DROP COLUMN location_id")
+    set = migrate_add(
+        set,
+        20260829107,
+        "create_internal_docs",
+        "CREATE TABLE internal_docs (id BIGSERIAL PRIMARY KEY, number TEXT NOT NULL DEFAULT '', doc_date TEXT NOT NULL DEFAULT '', from_location_id BIGINT NOT NULL DEFAULT 0, to_location_id BIGINT NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'draft', notes TEXT NOT NULL DEFAULT '', handed_by TEXT NOT NULL DEFAULT '', received_by TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+        "DROP TABLE IF EXISTS internal_docs"
+    )
+    set = migrate_add(
+        set,
+        20260829108,
+        "create_internal_doc_lines",
+        "CREATE TABLE internal_doc_lines (id BIGSERIAL PRIMARY KEY, doc_id BIGINT NOT NULL REFERENCES internal_docs(id) ON DELETE CASCADE, line_kind TEXT NOT NULL DEFAULT 'product', product_id BIGINT NOT NULL DEFAULT 0, asset_id BIGINT NOT NULL DEFAULT 0, quantity NUMERIC(18,4) NOT NULL DEFAULT 0, unit_cost NUMERIC(18,4) NOT NULL DEFAULT 0, amount NUMERIC(18,2) NOT NULL DEFAULT 0, description TEXT NOT NULL DEFAULT '')",
+        "DROP TABLE IF EXISTS internal_doc_lines"
+    )
+    set = migrate_add(set, 20260829109, "index_internal_doc_lines_doc_id", "CREATE INDEX IF NOT EXISTS index_internal_doc_lines_doc_id ON internal_doc_lines (doc_id)", "DROP INDEX IF EXISTS index_internal_doc_lines_doc_id")
+    set = migrate_add(
+        set,
+        20260829110,
+        "create_accounting_periods",
+        "CREATE TABLE accounting_periods (id BIGSERIAL PRIMARY KEY, year BIGINT NOT NULL, month BIGINT NOT NULL, status TEXT NOT NULL DEFAULT 'open', closed_at TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '')",
+        "DROP TABLE IF EXISTS accounting_periods"
+    )
+    set = migrate_add(
+        set,
+        20260829111,
+        "create_opening_balances",
+        "CREATE TABLE opening_balances (id BIGSERIAL PRIMARY KEY, fiscal_year BIGINT NOT NULL, account_id BIGINT NOT NULL, debit NUMERIC(18,2) NOT NULL DEFAULT 0, credit NUMERIC(18,2) NOT NULL DEFAULT 0, counterpart_id BIGINT NOT NULL DEFAULT 0, product_id BIGINT NOT NULL DEFAULT 0, quantity NUMERIC(18,4) NOT NULL DEFAULT 0, description TEXT NOT NULL DEFAULT '')",
+        "DROP TABLE IF EXISTS opening_balances"
+    )
+    set = migrate_add(set, 20260829112, "index_accounting_periods_year", "CREATE INDEX IF NOT EXISTS index_accounting_periods_year ON accounting_periods (year)", "DROP INDEX IF EXISTS index_accounting_periods_year")
+    set = migrate_add(set, 20260829113, "index_opening_balances_fiscal_year", "CREATE INDEX IF NOT EXISTS index_opening_balances_fiscal_year ON opening_balances (fiscal_year)", "DROP INDEX IF EXISTS index_opening_balances_fiscal_year")
+    set = migrate_add(set, 20260829114, "add_counterparts_street_name", "ALTER TABLE counterparts ADD COLUMN street_name TEXT NOT NULL DEFAULT ''", "ALTER TABLE counterparts DROP COLUMN street_name")
+    set = migrate_add(set, 20260829115, "add_counterparts_building_number", "ALTER TABLE counterparts ADD COLUMN building_number TEXT NOT NULL DEFAULT ''", "ALTER TABLE counterparts DROP COLUMN building_number")
+    set = migrate_add(set, 20260829116, "add_counterparts_region", "ALTER TABLE counterparts ADD COLUMN region TEXT NOT NULL DEFAULT ''", "ALTER TABLE counterparts DROP COLUMN region")
+    set = migrate_add(
+        set,
+        20260829117,
+        "create_product_name_mappings",
+        "CREATE TABLE product_name_mappings (id BIGSERIAL PRIMARY KEY, counterpart_id BIGINT NOT NULL, scanned_name TEXT NOT NULL, product_id BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+        "DROP TABLE IF EXISTS product_name_mappings"
+    )
+    set = migrate_add(set, 20260829118, "index_product_name_mappings_cp", "CREATE UNIQUE INDEX product_name_mappings_cp_name_idx ON product_name_mappings (counterpart_id, scanned_name)", "DROP INDEX IF EXISTS product_name_mappings_cp_name_idx")
+    set = migrate_add(set, 20260830101, "add_users_is_active", "ALTER TABLE users ADD COLUMN is_active BIGINT NOT NULL DEFAULT 1", "ALTER TABLE users DROP COLUMN is_active")
+    set = migrate_add(set, 20260830102, "add_users_is_super_admin", "ALTER TABLE users ADD COLUMN is_super_admin BIGINT NOT NULL DEFAULT 0", "ALTER TABLE users DROP COLUMN is_super_admin")
+    set = migrate_add(set, 20260830103, "add_users_role_id", "ALTER TABLE users ADD COLUMN role_id BIGINT NOT NULL DEFAULT 0", "ALTER TABLE users DROP COLUMN role_id")
+    set = migrate_add(
+        set,
+        20260830104,
+        "create_roles",
+        "CREATE TABLE roles (id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', permissions TEXT NOT NULL DEFAULT '[]', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+        "DROP TABLE IF EXISTS roles"
+    )
+    // Банков модул: обогатяване на bank_accounts (име, номер, ГЛ/буферна сметка).
+    set = migrate_add(set, 20260831101, "add_bank_accounts_name", "ALTER TABLE bank_accounts ADD COLUMN name TEXT NOT NULL DEFAULT ''", "ALTER TABLE bank_accounts DROP COLUMN name")
+    set = migrate_add(set, 20260831102, "add_bank_accounts_account_number", "ALTER TABLE bank_accounts ADD COLUMN account_number TEXT NOT NULL DEFAULT ''", "ALTER TABLE bank_accounts DROP COLUMN account_number")
+    set = migrate_add(set, 20260831103, "add_bank_accounts_gl_account_id", "ALTER TABLE bank_accounts ADD COLUMN gl_account_id BIGINT NOT NULL DEFAULT 0", "ALTER TABLE bank_accounts DROP COLUMN gl_account_id")
+    set = migrate_add(set, 20260831104, "add_bank_accounts_buffer_account_id", "ALTER TABLE bank_accounts ADD COLUMN buffer_account_id BIGINT NOT NULL DEFAULT 0", "ALTER TABLE bank_accounts DROP COLUMN buffer_account_id")
+    set = migrate_add(set, 20260831109, "add_bank_accounts_balance", "ALTER TABLE bank_accounts ADD COLUMN balance TEXT NOT NULL DEFAULT '0'", "ALTER TABLE bank_accounts DROP COLUMN balance")
+    set = migrate_add(set, 20260831110, "add_bank_accounts_company_id", "ALTER TABLE bank_accounts ADD COLUMN company_id BIGINT NOT NULL DEFAULT 0", "ALTER TABLE bank_accounts DROP COLUMN company_id")
+    set = migrate_add(set, 20260831112, "bank_accounts_company_id_index", "CREATE INDEX IF NOT EXISTS bank_accounts_company_id_idx ON bank_accounts (company_id)", "DROP INDEX IF EXISTS bank_accounts_company_id_idx")
+    // Банков модул: състояние на транзакциите (тип, осчетоводеност, разнасяне, запис).
+    set = migrate_add(set, 20260831105, "add_bank_transactions_transaction_type", "ALTER TABLE bank_transactions ADD COLUMN transaction_type TEXT NOT NULL DEFAULT ''", "ALTER TABLE bank_transactions DROP COLUMN transaction_type")
+    set = migrate_add(set, 20260831106, "add_bank_transactions_is_booked", "ALTER TABLE bank_transactions ADD COLUMN is_booked BIGINT NOT NULL DEFAULT 0", "ALTER TABLE bank_transactions DROP COLUMN is_booked")
+    set = migrate_add(set, 20260831107, "add_bank_transactions_is_allocated", "ALTER TABLE bank_transactions ADD COLUMN is_allocated BIGINT NOT NULL DEFAULT 0", "ALTER TABLE bank_transactions DROP COLUMN is_allocated")
+    set = migrate_add(set, 20260831108, "add_bank_transactions_journal_entry_id", "ALTER TABLE bank_transactions ADD COLUMN journal_entry_id BIGINT NOT NULL DEFAULT 0", "ALTER TABLE bank_transactions DROP COLUMN journal_entry_id")
+    set = migrate_add(set, 20260831111, "add_bank_transactions_company_id", "ALTER TABLE bank_transactions ADD COLUMN company_id BIGINT NOT NULL DEFAULT 0", "ALTER TABLE bank_transactions DROP COLUMN company_id")
+    set = migrate_add(set, 20260831113, "bank_transactions_company_id_index", "CREATE INDEX IF NOT EXISTS bank_transactions_company_id_idx ON bank_transactions (company_id)", "DROP INDEX IF EXISTS bank_transactions_company_id_idx")
+    set = migrate_add(
+        set,
+        20260905101,
+        "create_dividend_distributions",
+        "CREATE TABLE dividend_distributions (id BIGSERIAL PRIMARY KEY, company_id BIGINT NOT NULL, year BIGINT NOT NULL, total_amount NUMERIC(18,2) NOT NULL DEFAULT 0, decision_date TEXT NOT NULL DEFAULT '', decision_number TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'draft', notes TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+        "DROP TABLE IF EXISTS dividend_distributions"
+    )
+    set = migrate_add(
+        set,
+        20260905102,
+        "create_dividends",
+        "CREATE TABLE dividends (id BIGSERIAL PRIMARY KEY, company_id BIGINT NOT NULL, distribution_id BIGINT NOT NULL, beneficial_owner_id BIGINT NOT NULL DEFAULT 0, owner_name TEXT NOT NULL DEFAULT '', owner_egn TEXT NOT NULL DEFAULT '', ownership_percentage NUMERIC(18,4) NOT NULL DEFAULT 0, gross_amount NUMERIC(18,2) NOT NULL DEFAULT 0, tax_rate NUMERIC(8,4) NOT NULL DEFAULT 5, tax_amount NUMERIC(18,2) NOT NULL DEFAULT 0, net_amount NUMERIC(18,2) NOT NULL DEFAULT 0, decision_date TEXT NOT NULL DEFAULT '', payment_date TEXT NOT NULL DEFAULT '', is_paid BIGINT NOT NULL DEFAULT 0, notes TEXT NOT NULL DEFAULT '')",
+        "DROP TABLE IF EXISTS dividends"
+    )
+    set = migrate_add(set, 20260905103, "index_dividend_distributions_company_id", "CREATE INDEX IF NOT EXISTS index_dividend_distributions_company_id ON dividend_distributions (company_id)", "DROP INDEX IF EXISTS index_dividend_distributions_company_id")
+    set = migrate_add(set, 20260905104, "index_dividends_distribution_id", "CREATE INDEX IF NOT EXISTS index_dividends_distribution_id ON dividends (distribution_id)", "DROP INDEX IF EXISTS index_dividends_distribution_id")
+    set = migrate_add(
+        set,
+        20260906101,
+        "create_recipes",
+        "CREATE TABLE recipes (id BIGSERIAL PRIMARY KEY, company_id BIGINT NOT NULL, code TEXT NOT NULL DEFAULT '', name TEXT NOT NULL, output_product_id BIGINT NOT NULL DEFAULT 0, output_quantity NUMERIC(18,4) NOT NULL DEFAULT 1, output_unit TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '', is_active BIGINT NOT NULL DEFAULT 1, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+        "DROP TABLE IF EXISTS recipes"
+    )
+    set = migrate_add(
+        set,
+        20260906102,
+        "create_recipe_lines",
+        "CREATE TABLE recipe_lines (id BIGSERIAL PRIMARY KEY, recipe_id BIGINT NOT NULL, product_id BIGINT NOT NULL DEFAULT 0, quantity NUMERIC(18,4) NOT NULL DEFAULT 0, unit TEXT NOT NULL DEFAULT '', wastage_percent NUMERIC(8,4) NOT NULL DEFAULT 0, line_no BIGINT NOT NULL DEFAULT 0)",
+        "DROP TABLE IF EXISTS recipe_lines"
+    )
+    set = migrate_add(
+        set,
+        20260906103,
+        "create_production_orders",
+        "CREATE TABLE production_orders (id BIGSERIAL PRIMARY KEY, company_id BIGINT NOT NULL, number TEXT NOT NULL DEFAULT '', recipe_id BIGINT NOT NULL DEFAULT 0, output_product_id BIGINT NOT NULL DEFAULT 0, quantity NUMERIC(18,4) NOT NULL DEFAULT 0, location_id BIGINT NOT NULL DEFAULT 0, order_date TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'draft', notes TEXT NOT NULL DEFAULT '', material_cost NUMERIC(18,2) NOT NULL DEFAULT 0, journal_entry_id BIGINT NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+        "DROP TABLE IF EXISTS production_orders"
+    )
+    set = migrate_add(
+        set,
+        20260906104,
+        "create_production_order_lines",
+        "CREATE TABLE production_order_lines (id BIGSERIAL PRIMARY KEY, order_id BIGINT NOT NULL, product_id BIGINT NOT NULL DEFAULT 0, product_name TEXT NOT NULL DEFAULT '', quantity NUMERIC(18,4) NOT NULL DEFAULT 0, unit TEXT NOT NULL DEFAULT '', unit_cost NUMERIC(18,4) NOT NULL DEFAULT 0, amount NUMERIC(18,2) NOT NULL DEFAULT 0)",
+        "DROP TABLE IF EXISTS production_order_lines"
+    )
+    set = migrate_add(set, 20260906105, "index_recipes_company_id", "CREATE INDEX IF NOT EXISTS index_recipes_company_id ON recipes (company_id)", "DROP INDEX IF EXISTS index_recipes_company_id")
+    set = migrate_add(set, 20260906106, "index_recipe_lines_recipe_id", "CREATE INDEX IF NOT EXISTS index_recipe_lines_recipe_id ON recipe_lines (recipe_id)", "DROP INDEX IF EXISTS index_recipe_lines_recipe_id")
+    set = migrate_add(set, 20260906107, "index_production_orders_company_id", "CREATE INDEX IF NOT EXISTS index_production_orders_company_id ON production_orders (company_id)", "DROP INDEX IF EXISTS index_production_orders_company_id")
+    set = migrate_add(set, 20260906108, "index_production_order_lines_order_id", "CREATE INDEX IF NOT EXISTS index_production_order_lines_order_id ON production_order_lines (order_id)", "DROP INDEX IF EXISTS index_production_order_lines_order_id")
+    set = migrate_add(set, 20260907101, "add_invoices_company_id", "ALTER TABLE invoices ADD COLUMN company_id BIGINT NOT NULL DEFAULT 0", "ALTER TABLE invoices DROP COLUMN company_id")
+    set = migrate_add(set, 20260907102, "add_journal_entries_company_id", "ALTER TABLE journal_entries ADD COLUMN company_id BIGINT NOT NULL DEFAULT 0", "ALTER TABLE journal_entries DROP COLUMN company_id")
+    set = migrate_add(set, 20260907103, "add_products_company_id", "ALTER TABLE products ADD COLUMN company_id BIGINT NOT NULL DEFAULT 0", "ALTER TABLE products DROP COLUMN company_id")
+    set = migrate_add(set, 20260907104, "add_counterparts_company_id", "ALTER TABLE counterparts ADD COLUMN company_id BIGINT NOT NULL DEFAULT 0", "ALTER TABLE counterparts DROP COLUMN company_id")
+    set = migrate_add(set, 20260907105, "invoices_company_id_idx", "CREATE INDEX IF NOT EXISTS invoices_company_id_idx ON invoices (company_id)", "DROP INDEX IF EXISTS invoices_company_id_idx")
+    set = migrate_add(set, 20260907106, "journal_entries_company_id_idx", "CREATE INDEX IF NOT EXISTS journal_entries_company_id_idx ON journal_entries (company_id)", "DROP INDEX IF EXISTS journal_entries_company_id_idx")
+    set = migrate_add(set, 20260907107, "products_company_id_idx", "CREATE INDEX IF NOT EXISTS products_company_id_idx ON products (company_id)", "DROP INDEX IF EXISTS products_company_id_idx")
+    set = migrate_add(set, 20260907108, "counterparts_company_id_idx", "CREATE INDEX IF NOT EXISTS counterparts_company_id_idx ON counterparts (company_id)", "DROP INDEX IF EXISTS counterparts_company_id_idx")
+    set = migrate_add(
+        set,
+        20260908101,
+        "create_saft_account_mappings",
+        "CREATE TABLE saft_account_mappings (id BIGSERIAL PRIMARY KEY, company_id BIGINT NOT NULL, kind TEXT NOT NULL, type_code TEXT NOT NULL, debit_account TEXT NOT NULL, credit_account TEXT NOT NULL, debit_analytical TEXT NOT NULL DEFAULT '', credit_analytical TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', is_active BIGINT NOT NULL DEFAULT 1)",
+        "DROP TABLE IF EXISTS saft_account_mappings"
+    )
+    set = migrate_add(set, 20260908102, "saft_account_mappings_company_id_idx", "CREATE INDEX IF NOT EXISTS saft_account_mappings_company_id_idx ON saft_account_mappings (company_id)", "DROP INDEX IF EXISTS saft_account_mappings_company_id_idx")
+    set = migrate_add(
+        set,
+        20260908103,
+        "create_fs_line_formulas",
+        "CREATE TABLE fs_line_formulas (id BIGSERIAL PRIMARY KEY, company_id BIGINT NOT NULL, statement TEXT NOT NULL, line_code TEXT NOT NULL, formula TEXT NOT NULL DEFAULT '')",
+        "DROP TABLE IF EXISTS fs_line_formulas"
+    )
+    set = migrate_add(set, 20260908104, "fs_line_formulas_company_id_idx", "CREATE INDEX IF NOT EXISTS fs_line_formulas_company_id_idx ON fs_line_formulas (company_id)", "DROP INDEX IF EXISTS fs_line_formulas_company_id_idx")
+    set = migrate_add(set, 20260921101, "add_users_totp_enabled", "ALTER TABLE users ADD COLUMN totp_enabled BIGINT NOT NULL DEFAULT 0", "ALTER TABLE users DROP COLUMN totp_enabled")
+    set = migrate_add(set, 20260921102, "add_users_totp_secret_b32", "ALTER TABLE users ADD COLUMN totp_secret_b32 TEXT NOT NULL DEFAULT ''", "ALTER TABLE users DROP COLUMN totp_secret_b32")
+    set = migrate_add(set, 20260921103, "add_users_totp_pending_b32", "ALTER TABLE users ADD COLUMN totp_pending_b32 TEXT NOT NULL DEFAULT ''", "ALTER TABLE users DROP COLUMN totp_pending_b32")
+    set = migrate_add(set, 20260921104, "create_user_recovery_codes", "CREATE TABLE user_recovery_codes (id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, code_hash TEXT NOT NULL, used BIGINT NOT NULL DEFAULT 0)", "DROP TABLE IF EXISTS user_recovery_codes")
+    set = migrate_add(set, 20260921105, "create_password_reset_tokens", "CREATE TABLE password_reset_tokens (id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, token_hash TEXT NOT NULL, expires_at BIGINT NOT NULL, used BIGINT NOT NULL DEFAULT 0)", "DROP TABLE IF EXISTS password_reset_tokens")
+    set = migrate_add(set, 20260921106, "add_companies_address_building", "ALTER TABLE companies ADD COLUMN address_building TEXT NOT NULL DEFAULT ''", "ALTER TABLE companies DROP COLUMN address_building")
+    set = migrate_add(set, 20260921107, "add_companies_additional_address_detail", "ALTER TABLE companies ADD COLUMN additional_address_detail TEXT NOT NULL DEFAULT ''", "ALTER TABLE companies DROP COLUMN additional_address_detail")
+    set = migrate_add(set, 20260921108, "add_companies_address_type", "ALTER TABLE companies ADD COLUMN address_type TEXT NOT NULL DEFAULT ''", "ALTER TABLE companies DROP COLUMN address_type")
+    set = migrate_add(set, 20260921109, "add_counterparts_address_building", "ALTER TABLE counterparts ADD COLUMN address_building TEXT NOT NULL DEFAULT ''", "ALTER TABLE counterparts DROP COLUMN address_building")
+    set = migrate_add(set, 20260921110, "add_counterparts_additional_address_detail", "ALTER TABLE counterparts ADD COLUMN additional_address_detail TEXT NOT NULL DEFAULT ''", "ALTER TABLE counterparts DROP COLUMN additional_address_detail")
+    set = migrate_add(set, 20260921111, "add_counterparts_address_type", "ALTER TABLE counterparts ADD COLUMN address_type TEXT NOT NULL DEFAULT ''", "ALTER TABLE counterparts DROP COLUMN address_type")
+    return set
+}

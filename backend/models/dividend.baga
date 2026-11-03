@@ -1,0 +1,266 @@
+// models/dividend.baga — разпределение на дивиденти + редове по собственик.
+// Сумите са NUMERIC като стринг. Снимка на име/ЕГН/дял при създаване.
+
+import "ormbaga/orm.baga"
+import "ormbaga/sql.baga"
+import "fmrbaga/jsonx.baga"
+import "pgbaga/pg.baga"
+import "std/str/str.baga"
+import "std/os/os.baga"
+
+fn ddist_table() -> str { return "dividend_distributions" }
+fn div_table() -> str { return "dividends" }
+
+fn div_backend_boila() -> i64 !IO {
+    let be = env("ORM_BACKEND")?
+    if be == "boila" || be == "boiladb" || be == "boilaDB" {
+        return 1
+    }
+    return 0
+}
+
+fn ddist_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return orm_count_sql(db, "SELECT MAX(id) AS count FROM dividend_distributions")?
+}
+
+fn div_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return orm_count_sql(db, "SELECT MAX(id) AS count FROM dividends")?
+}
+
+fn ddist_select_sql() -> str {
+    return "SELECT id, company_id, year, total_amount, decision_date, decision_number, status, notes, created_at FROM dividend_distributions"
+}
+
+fn div_select_sql() -> str {
+    return "SELECT id, company_id, distribution_id, beneficial_owner_id, owner_name, owner_egn, ownership_percentage, gross_amount, tax_rate, tax_amount, net_amount, decision_date, payment_date, is_paid, notes FROM dividends"
+}
+
+fn ddist_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_i64(o, "company_id", orm_cell_by_i64(q, row, "company_id"))
+    o = jobj_i64(o, "year", orm_cell_by_i64(q, row, "year"))
+    o = jobj_str(o, "total_amount", orm_cell_by(q, row, "total_amount"))
+    o = jobj_str(o, "decision_date", orm_cell_by(q, row, "decision_date"))
+    o = jobj_str(o, "decision_number", orm_cell_by(q, row, "decision_number"))
+    o = jobj_str(o, "status", orm_cell_by(q, row, "status"))
+    o = jobj_str(o, "notes", orm_cell_by(q, row, "notes"))
+    let ca = orm_cell_by(q, row, "created_at")
+    if ca != "" {
+        o = jobj_str(o, "created_at", ca)
+    }
+    return o
+}
+
+fn div_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_i64(o, "distribution_id", orm_cell_by_i64(q, row, "distribution_id"))
+    o = jobj_i64(o, "beneficial_owner_id", orm_cell_by_i64(q, row, "beneficial_owner_id"))
+    o = jobj_str(o, "owner_name", orm_cell_by(q, row, "owner_name"))
+    o = jobj_str(o, "owner_egn", orm_cell_by(q, row, "owner_egn"))
+    o = jobj_str(o, "ownership_percentage", orm_cell_by(q, row, "ownership_percentage"))
+    o = jobj_str(o, "gross_amount", orm_cell_by(q, row, "gross_amount"))
+    o = jobj_str(o, "tax_rate", orm_cell_by(q, row, "tax_rate"))
+    o = jobj_str(o, "tax_amount", orm_cell_by(q, row, "tax_amount"))
+    o = jobj_str(o, "net_amount", orm_cell_by(q, row, "net_amount"))
+    o = jobj_str(o, "decision_date", orm_cell_by(q, row, "decision_date"))
+    o = jobj_str(o, "payment_date", orm_cell_by(q, row, "payment_date"))
+    o = jobj_i64(o, "is_paid", orm_cell_by_i64(q, row, "is_paid"))
+    o = jobj_str(o, "notes", orm_cell_by(q, row, "notes"))
+    return o
+}
+
+fn ddist_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
+    let sql = concat(ddist_select_sql(), " WHERE id = $1")
+    let vals = vec_new()
+    let nulls = vec_new()
+    pg_param_i64(vals, nulls, id)
+    return orm_query_params(db, sql, vals, nulls)?
+}
+
+fn ddist_by_company(db: OrmDb, company_id: i64) -> OrmQuery !IO !Net {
+    let sql = concat(ddist_select_sql(), " WHERE company_id = $1 ORDER BY year DESC, id DESC")
+    let vals = vec_new()
+    let nulls = vec_new()
+    pg_param_i64(vals, nulls, company_id)
+    return orm_query_params(db, sql, vals, nulls)?
+}
+
+fn div_by_distribution(db: OrmDb, distribution_id: i64) -> OrmQuery !IO !Net {
+    let sql = concat(div_select_sql(), " WHERE distribution_id = $1 ORDER BY id")
+    let vals = vec_new()
+    let nulls = vec_new()
+    pg_param_i64(vals, nulls, distribution_id)
+    return orm_query_params(db, sql, vals, nulls)?
+}
+
+fn div_by_company(db: OrmDb, company_id: i64) -> OrmQuery !IO !Net {
+    let sql = concat(div_select_sql(), " WHERE company_id = $1 ORDER BY id")
+    let vals = vec_new()
+    let nulls = vec_new()
+    pg_param_i64(vals, nulls, company_id)
+    return orm_query_params(db, sql, vals, nulls)?
+}
+
+fn div_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
+    let sql = concat(div_select_sql(), " WHERE id = $1")
+    let vals = vec_new()
+    let nulls = vec_new()
+    pg_param_i64(vals, nulls, id)
+    return orm_query_params(db, sql, vals, nulls)?
+}
+
+fn ddist_create(db: OrmDb, company_id: i64, year: i64, total_amount: str, decision_date: str, decision_number: str, notes: str) -> OrmQuery !IO !Net {
+    if div_backend_boila()? == 1 {
+        let c = ddist_next_id(db)?
+        if orm_ok_c(c) == 0 {
+            return OrmQErr(OrmQueryFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
+        }
+        let nid = orm_count_n(c) + 1
+        let mut d = orm_db_c(c)
+        let cols = vec_new()
+        vec_push(cols, "id")
+        vec_push(cols, "company_id")
+        vec_push(cols, "year")
+        vec_push(cols, "total_amount")
+        vec_push(cols, "decision_date")
+        vec_push(cols, "decision_number")
+        vec_push(cols, "status")
+        vec_push(cols, "notes")
+        let vals = vec_new()
+        vec_push(vals, int_to_str(nid))
+        vec_push(vals, int_to_str(company_id))
+        vec_push(vals, int_to_str(year))
+        vec_push(vals, total_amount)
+        vec_push(vals, decision_date)
+        vec_push(vals, decision_number)
+        vec_push(vals, "draft")
+        vec_push(vals, notes)
+        let nulls = vec_new()
+        let mut i: i64 = 0
+        while i < 8 {
+            vec_push(nulls, 0)
+            i = i + 1
+        }
+        return orm_insert_returning_full(d, ddist_table(), cols, vals, nulls)?
+    }
+    let cols = vec_new()
+    vec_push(cols, "company_id")
+    vec_push(cols, "year")
+    vec_push(cols, "total_amount")
+    vec_push(cols, "decision_date")
+    vec_push(cols, "decision_number")
+    vec_push(cols, "status")
+    vec_push(cols, "notes")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(company_id))
+    vec_push(vals, int_to_str(year))
+    vec_push(vals, total_amount)
+    vec_push(vals, decision_date)
+    vec_push(vals, decision_number)
+    vec_push(vals, "draft")
+    vec_push(vals, notes)
+    let nulls = vec_new()
+    let mut i: i64 = 0
+    while i < 7 {
+        vec_push(nulls, 0)
+        i = i + 1
+    }
+    return orm_insert_returning_full(db, ddist_table(), cols, vals, nulls)?
+}
+
+fn div_create(db: OrmDb, company_id: i64, distribution_id: i64, owner_id: i64, owner_name: str, owner_egn: str, pct: str, gross: str, tax_rate: str, tax_amount: str, net: str, decision_date: str) -> OrmQuery !IO !Net {
+    if div_backend_boila()? == 1 {
+        let c = div_next_id(db)?
+        if orm_ok_c(c) == 0 {
+            return OrmQErr(OrmQueryFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
+        }
+        let nid = orm_count_n(c) + 1
+        let mut d = orm_db_c(c)
+        let cols = vec_new()
+        vec_push(cols, "id")
+        vec_push(cols, "company_id")
+        vec_push(cols, "distribution_id")
+        vec_push(cols, "beneficial_owner_id")
+        vec_push(cols, "owner_name")
+        vec_push(cols, "owner_egn")
+        vec_push(cols, "ownership_percentage")
+        vec_push(cols, "gross_amount")
+        vec_push(cols, "tax_rate")
+        vec_push(cols, "tax_amount")
+        vec_push(cols, "net_amount")
+        vec_push(cols, "decision_date")
+        vec_push(cols, "is_paid")
+        let vals = vec_new()
+        vec_push(vals, int_to_str(nid))
+        vec_push(vals, int_to_str(company_id))
+        vec_push(vals, int_to_str(distribution_id))
+        vec_push(vals, int_to_str(owner_id))
+        vec_push(vals, owner_name)
+        vec_push(vals, owner_egn)
+        vec_push(vals, pct)
+        vec_push(vals, gross)
+        vec_push(vals, tax_rate)
+        vec_push(vals, tax_amount)
+        vec_push(vals, net)
+        vec_push(vals, decision_date)
+        vec_push(vals, "0")
+        let nulls = vec_new()
+        let mut i: i64 = 0
+        while i < 13 {
+            vec_push(nulls, 0)
+            i = i + 1
+        }
+        return orm_insert_returning_full(d, div_table(), cols, vals, nulls)?
+    }
+    let cols = vec_new()
+    vec_push(cols, "company_id")
+    vec_push(cols, "distribution_id")
+    vec_push(cols, "beneficial_owner_id")
+    vec_push(cols, "owner_name")
+    vec_push(cols, "owner_egn")
+    vec_push(cols, "ownership_percentage")
+    vec_push(cols, "gross_amount")
+    vec_push(cols, "tax_rate")
+    vec_push(cols, "tax_amount")
+    vec_push(cols, "net_amount")
+    vec_push(cols, "decision_date")
+    vec_push(cols, "is_paid")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(company_id))
+    vec_push(vals, int_to_str(distribution_id))
+    vec_push(vals, int_to_str(owner_id))
+    vec_push(vals, owner_name)
+    vec_push(vals, owner_egn)
+    vec_push(vals, pct)
+    vec_push(vals, gross)
+    vec_push(vals, tax_rate)
+    vec_push(vals, tax_amount)
+    vec_push(vals, net)
+    vec_push(vals, decision_date)
+    vec_push(vals, "0")
+    let nulls = vec_new()
+    let mut i: i64 = 0
+    while i < 12 {
+        vec_push(nulls, 0)
+        i = i + 1
+    }
+    return orm_insert_returning_full(db, div_table(), cols, vals, nulls)?
+}
+
+fn ddist_delete(db: OrmDb, id: i64) -> OrmExec !IO !Net {
+    return orm_delete_by_id(db, ddist_table(), id)?
+}
+
+fn div_delete(db: OrmDb, id: i64) -> OrmExec !IO !Net {
+    return orm_delete_by_id(db, div_table(), id)?
+}
+
+fn div_delete_by_distribution(db: OrmDb, distribution_id: i64) -> OrmExec !IO !Net {
+    let sql = "DELETE FROM dividends WHERE distribution_id = $1"
+    let vals = vec_new()
+    let nulls = vec_new()
+    pg_param_i64(vals, nulls, distribution_id)
+    return orm_exec_params(db, sql, vals, nulls)?
+}

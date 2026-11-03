@@ -1,0 +1,587 @@
+// actions/fixed_assets.baga — ДМА: категории, активи, амортизация.
+// Амортизацията (линейна/намаляващ остатък, счетоводна + данъчна норма)
+// се изчислява с багадесимал и при пост генерира счетоводен запис
+// Дт 603 / Кт 241 (сметките от категорията, иначе по подразбиране).
+
+import "../models/fixed_asset.baga"
+import "../models/account.baga"
+import "../models/journal.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "bagadecimal/src/decimal.baga"
+import "fixed_assets_ops.baga"
+import "periods.baga"
+import "std/str/str.baga"
+
+// ---------- категории ----------
+
+fn act_fa_categories_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let q = fac_all(db)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    return act_ok(orm_db_q(q), fac_list_json(q))
+}
+
+fn act_fa_categories_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let name = jreq_str(b.doc, b.root, "name")
+    if name.ok == 0 {
+        return act_422_field(db, "name", name)
+    }
+    let cita_category = jopt_str(b.doc, b.root, "cita_category", "")
+    let min_rate = jopt_str(b.doc, b.root, "min_depreciation_rate", "0")
+    let max_rate = jopt_str(b.doc, b.root, "max_depreciation_rate", "0")
+    let default_method = jopt_str(b.doc, b.root, "default_method", "linear")
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let cq = fac_create(db, name.val, cita_category.val, min_rate.val, max_rate.val, default_method.val, 0, 0, 0)?
+    if orm_ok_q(cq) == 0 || orm_nrows(cq) < 1 {
+        return act_err(orm_db_q(cq), 500, "category insert failed")
+    }
+    let new_id = orm_cell_by_i64(cq, 0, "id")
+    let q = fac_find(orm_db_q(cq), new_id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_err(orm_db_q(q), 500, "category missing after create")
+    }
+    return act_created(orm_db_q(q), fac_to_json(q, 0))
+}
+
+fn act_fa_categories_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let cols = vec_new()
+    let vals = vec_new()
+    let name = jreq_str(b.doc, b.root, "name")
+    if name.present == 1 {
+        if name.ok == 0 {
+            return act_422_field(db, "name", name)
+        }
+        vec_push(cols, "name")
+        vec_push(vals, name.val)
+    }
+    let cita_category = jreq_str(b.doc, b.root, "cita_category")
+    if cita_category.present == 1 {
+        if cita_category.ok == 0 {
+            return act_422_field(db, "cita_category", cita_category)
+        }
+        vec_push(cols, "cita_category")
+        vec_push(vals, cita_category.val)
+    }
+    let min_rate = jreq_str(b.doc, b.root, "min_depreciation_rate")
+    if min_rate.present == 1 {
+        if min_rate.ok == 0 {
+            return act_422_field(db, "min_depreciation_rate", min_rate)
+        }
+        vec_push(cols, "min_depreciation_rate")
+        vec_push(vals, min_rate.val)
+    }
+    let max_rate = jreq_str(b.doc, b.root, "max_depreciation_rate")
+    if max_rate.present == 1 {
+        if max_rate.ok == 0 {
+            return act_422_field(db, "max_depreciation_rate", max_rate)
+        }
+        vec_push(cols, "max_depreciation_rate")
+        vec_push(vals, max_rate.val)
+    }
+    let default_method = jreq_str(b.doc, b.root, "default_method")
+    if default_method.present == 1 {
+        if default_method.ok == 0 {
+            return act_422_field(db, "default_method", default_method)
+        }
+        vec_push(cols, "default_method")
+        vec_push(vals, default_method.val)
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    if vec_len(cols) == 0 {
+        let q0 = fac_find(db, id)?
+        if orm_ok_q(q0) == 0 || orm_nrows(q0) < 1 {
+            return act_404(orm_db_q(q0), "Category not found")
+        }
+        return act_ok(orm_db_q(q0), fac_to_json(q0, 0))
+    }
+    let upd = orm_update_by_id(db, fac_table(), id, cols, vals)?
+    if orm_ok(upd) == 0 {
+        return act_err(orm_db_exec(upd), 500, orm_err_exec(upd))
+    }
+    let q = fac_find(orm_db_exec(upd), id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "Category not found")
+    }
+    return act_ok(orm_db_q(q), fac_to_json(q, 0))
+}
+
+fn act_fa_categories_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let del = fac_delete(db, id)?
+    if orm_ok(del) == 0 {
+        return act_err(orm_db_exec(del), 500, orm_err_exec(del))
+    }
+    return act_no_content(orm_db_exec(del))
+}
+
+// ---------- активи ----------
+
+fn act_fa_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let q = fa_all(db)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    return act_ok(orm_db_q(q), fa_list_json(q))
+}
+
+fn act_fa_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let name = jreq_str(b.doc, b.root, "name")
+    if name.ok == 0 {
+        return act_422_field(db, "name", name)
+    }
+    let inventory_number = jopt_str(b.doc, b.root, "inventory_number", "")
+    let cid = jreq_i64(b.doc, b.root, "category_id")
+    let mut category_id: i64 = 0
+    if cid.present == 1 {
+        if cid.ok == 0 {
+            return act_422_field(db, "category_id", cid)
+        }
+        category_id = cid.num
+    }
+    let acquisition_date = jopt_str(b.doc, b.root, "acquisition_date", "")
+    let put_into_service_date = jopt_str(b.doc, b.root, "put_into_service_date", "")
+    let cost = jopt_str(b.doc, b.root, "cost", "0")
+    let salvage_value = jopt_str(b.doc, b.root, "salvage_value", "0")
+    let useful_life_months = jopt_str(b.doc, b.root, "useful_life_months", "0")
+    let depreciation_method = jopt_str(b.doc, b.root, "depreciation_method", "linear")
+    let accounting_rate = jopt_str(b.doc, b.root, "accounting_depreciation_rate", "0")
+    let tax_rate = jopt_str(b.doc, b.root, "tax_depreciation_rate", "0")
+    let status = jopt_str(b.doc, b.root, "status", "active")
+    let serial_number = jopt_str(b.doc, b.root, "serial_number", "")
+    let manufacturer = jopt_str(b.doc, b.root, "manufacturer", "")
+    let model = jopt_str(b.doc, b.root, "model", "")
+    let responsible_person = jopt_str(b.doc, b.root, "responsible_person", "")
+    let loc = jreq_i64(b.doc, b.root, "location_id")
+    let mut location_id: i64 = 0
+    if loc.present == 1 {
+        if loc.ok == 0 {
+            return act_422_field(db, "location_id", loc)
+        }
+        location_id = loc.num
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let cq = fa_create(db, name.val, inventory_number.val, category_id, acquisition_date.val, put_into_service_date.val, cost.val, salvage_value.val, useful_life_months.val, depreciation_method.val, accounting_rate.val, tax_rate.val, status.val, serial_number.val, manufacturer.val, model.val, responsible_person.val, 0)?
+    if orm_ok_q(cq) == 0 || orm_nrows(cq) < 1 {
+        return act_err(orm_db_q(cq), 500, "asset insert failed")
+    }
+    let new_id = orm_cell_by_i64(cq, 0, "id")
+    let mut dfa = orm_db_q(cq)
+    if location_id > 0 {
+        let lcols = vec_new()
+        vec_push(lcols, "location_id")
+        let lvals = vec_new()
+        vec_push(lvals, int_to_str(location_id))
+        let lup = orm_update_by_id(dfa, fa_table(), new_id, lcols, lvals)?
+        if orm_ok(lup) == 0 {
+            return act_err(orm_db_exec(lup), 500, orm_err_exec(lup))
+        }
+        dfa = orm_db_exec(lup)
+    }
+    let q = fa_find(dfa, new_id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_err(orm_db_q(q), 500, "asset missing after create")
+    }
+    return act_created(orm_db_q(q), fa_to_json(q, 0))
+}
+
+fn act_fa_show(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let q = fa_find(db, id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "Asset not found")
+    }
+    return act_ok(orm_db_q(q), fa_to_json(q, 0))
+}
+
+fn act_fa_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let cols = vec_new()
+    let vals = vec_new()
+    let fields: Vec<str> = vec_new()
+    vec_push(fields, "name")
+    vec_push(fields, "inventory_number")
+    vec_push(fields, "acquisition_date")
+    vec_push(fields, "put_into_service_date")
+    vec_push(fields, "cost")
+    vec_push(fields, "salvage_value")
+    vec_push(fields, "useful_life_months")
+    vec_push(fields, "depreciation_method")
+    vec_push(fields, "accounting_depreciation_rate")
+    vec_push(fields, "tax_depreciation_rate")
+    vec_push(fields, "status")
+    vec_push(fields, "serial_number")
+    vec_push(fields, "manufacturer")
+    vec_push(fields, "model")
+    vec_push(fields, "responsible_person")
+    let mut fi: i64 = 0
+    while fi < vec_len(fields) {
+        let f = jreq_str(b.doc, b.root, vec_get(fields, fi))
+        if f.present == 1 {
+            if f.ok == 0 {
+                return act_422_field(db, vec_get(fields, fi), f)
+            }
+            vec_push(cols, vec_get(fields, fi))
+            vec_push(vals, f.val)
+        }
+        fi = fi + 1
+    }
+    let cid = jreq_i64(b.doc, b.root, "category_id")
+    if cid.present == 1 {
+        if cid.ok == 0 {
+            return act_422_field(db, "category_id", cid)
+        }
+        vec_push(cols, "category_id")
+        vec_push(vals, int_to_str(cid.num))
+    }
+    let conv = jreq_bool(b.doc, b.root, "is_conserved")
+    if conv.present == 1 {
+        if conv.ok == 0 {
+            return act_422_field(db, "is_conserved", conv)
+        }
+        vec_push(cols, "is_conserved")
+        vec_push(vals, int_to_str(conv.num))
+    }
+    let locu = jreq_i64(b.doc, b.root, "location_id")
+    if locu.present == 1 {
+        if locu.ok == 0 {
+            return act_422_field(db, "location_id", locu)
+        }
+        vec_push(cols, "location_id")
+        vec_push(vals, int_to_str(locu.num))
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    if vec_len(cols) == 0 {
+        let q0 = fa_find(db, id)?
+        if orm_ok_q(q0) == 0 || orm_nrows(q0) < 1 {
+            return act_404(orm_db_q(q0), "Asset not found")
+        }
+        return act_ok(orm_db_q(q0), fa_to_json(q0, 0))
+    }
+    let upd = orm_update_by_id(db, fa_table(), id, cols, vals)?
+    if orm_ok(upd) == 0 {
+        return act_err(orm_db_exec(upd), 500, orm_err_exec(upd))
+    }
+    let q = fa_find(orm_db_exec(upd), id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "Asset not found")
+    }
+    return act_ok(orm_db_q(q), fa_to_json(q, 0))
+}
+
+fn act_fa_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let del = fa_delete(db, id)?
+    if orm_ok(del) == 0 {
+        return act_err(orm_db_exec(del), 500, orm_err_exec(del))
+    }
+    return act_no_content(orm_db_exec(del))
+}
+
+// ---------- амортизация ----------
+
+// Месечна амортизация на един актив (счетоводна). Връща десетичен стринг.
+fn dep_monthly(cost: Decimal, salvage: Decimal, accumulated: Decimal, rate: Decimal, method: str) -> DecResult {
+    // база: линеен → (цена − остатъчна); намаляващ → (цена − натрупана)
+    let mut base = dec_sub(cost, salvage)
+    if method == "declining" {
+        base = dec_sub(cost, accumulated)
+    }
+    if base.ok == 0 {
+        return base
+    }
+    if dec_is_negative(base.value) == 1 {
+        return dec_ok(dec_zero())
+    }
+    // месечна = база * норма / 100 / 12
+    let pct = dec_div(rate, dec_from_i64(100))
+    if pct.ok == 0 {
+        return pct
+    }
+    let amt = dec_mul(base.value, pct.value)
+    if amt.ok == 0 {
+        return amt
+    }
+    let monthly = dec_div(amt.value, dec_from_i64(12))
+    if monthly.ok == 0 {
+        return monthly
+    }
+    return dec_round_dp(monthly.value, 2)
+}
+
+fn act_fa_depreciation_preview(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let q = fa_all(db)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let mut arr = jarr_new()
+    let mut total = dec_zero()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        let status = orm_cell_by(q, i, "status")
+        let conserved = orm_cell_by_i64(q, i, "is_conserved")
+        if status == "active" && conserved == 0 {
+            let cost = dec_parse(orm_cell_by(q, i, "cost"))
+            let salvage = dec_parse(orm_cell_by(q, i, "salvage_value"))
+            let accum = dec_parse(orm_cell_by(q, i, "accumulated_depreciation"))
+            let rate = dec_parse(orm_cell_by(q, i, "accounting_depreciation_rate"))
+            let method = orm_cell_by(q, i, "depreciation_method")
+            if cost.ok == 1 && salvage.ok == 1 && accum.ok == 1 && rate.ok == 1 {
+                let m = dep_monthly(cost.value, salvage.value, accum.value, rate.value, method)
+                if m.ok == 1 {
+                    let mut o = jobj_new()
+                    o = jobj_i64(o, "id", orm_cell_by_i64(q, i, "id"))
+                    o = jobj_str(o, "name", orm_cell_by(q, i, "name"))
+                    o = jobj_str(o, "method", method)
+                    o = jobj_str(o, "monthly_amount", dec_to_string(m.value))
+                    arr = jarr_obj(arr, o)
+                    let t = dec_add(total, m.value)
+                    if t.ok == 1 {
+                        total = t.value
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_arr(o, "items", arr)
+    o = jobj_str(o, "total_amount", dec_to_string(total))
+    return act_ok(orm_db_q(q), o)
+}
+
+fn act_fa_depreciation_post(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let period = jreq_str(b.doc, b.root, "period")
+    if period.ok == 0 {
+        return act_422_field(db, "period", period)
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let pc = period_assert_open(db, period.val)?
+    if pc.ok == 0 {
+        return act_err(pc.db, 422, pc.err)
+    }
+    let mut dbp = pc.db
+    // Сметки: 603 (разход) и 241 (амортизация) — по номер.
+    let e_ids: Vec<i64> = vec_new()
+    let eq = account_by_number(dbp, "603")?
+    if orm_ok_q(eq) == 0 {
+        return act_err(orm_db_q(eq), 500, orm_err_q(eq))
+    }
+    if orm_nrows(eq) < 1 {
+        return act_err(orm_db_q(eq), 422, "липсва сметка 603 (разход за амортизации)")
+    }
+    vec_push(e_ids, orm_cell_by_i64(eq, 0, "id"))
+    let mut db2 = orm_db_q(eq)
+    let d_ids: Vec<i64> = vec_new()
+    let dq = account_by_number(db2, "241")?
+    if orm_ok_q(dq) == 0 {
+        return act_err(orm_db_q(dq), 500, orm_err_q(dq))
+    }
+    if orm_nrows(dq) < 1 {
+        return act_err(orm_db_q(dq), 422, "липсва сметка 241 (амортизация на ДМА)")
+    }
+    vec_push(d_ids, orm_cell_by_i64(dq, 0, "id"))
+    db2 = orm_db_q(dq)
+    // Изчисляване на месечните суми и обновяване на натрупаното.
+    let q = fa_all(db2)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    db2 = orm_db_q(q)
+    let mut total = dec_zero()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        let status = orm_cell_by(q, i, "status")
+        let conserved = orm_cell_by_i64(q, i, "is_conserved")
+        if status == "active" && conserved == 0 {
+            let faid = orm_cell_by_i64(q, i, "id")
+            let cost = dec_parse(orm_cell_by(q, i, "cost"))
+            let salvage = dec_parse(orm_cell_by(q, i, "salvage_value"))
+            let accum = dec_parse(orm_cell_by(q, i, "accumulated_depreciation"))
+            let rate = dec_parse(orm_cell_by(q, i, "accounting_depreciation_rate"))
+            let method = orm_cell_by(q, i, "depreciation_method")
+            if cost.ok == 1 && salvage.ok == 1 && accum.ok == 1 && rate.ok == 1 {
+                let m = dep_monthly(cost.value, salvage.value, accum.value, rate.value, method)
+                if m.ok == 1 {
+                    let na = dec_add(accum.value, m.value)
+                    if na.ok == 1 {
+                        let up = fa_update_accumulated(db2, faid, dec_to_string(na.value), dec_to_string(na.value))?
+                        if orm_ok(up) == 0 {
+                            return act_err(orm_db_exec(up), 500, orm_err_exec(up))
+                        }
+                        db2 = orm_db_exec(up)
+                        let t = dec_add(total, m.value)
+                        if t.ok == 1 {
+                            total = t.value
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    // Счетоводен запис Дт 603 / Кт 241.
+    let total_s = dec_to_string(total)
+    let eq2 = journal_entry_insert(db2, period.val, "depreciation", 0, "Месечна амортизация на ДМА", "no_vat", 0, "", "", "", period.val, period.val, total_s, "0", 0)?
+    if orm_ok_q(eq2) == 0 || orm_nrows(eq2) < 1 {
+        return act_err(orm_db_q(eq2), 500, "journal entry insert failed")
+    }
+    let entry_id = orm_cell_by_i64(eq2, 0, "id")
+    db2 = orm_db_q(eq2)
+    let l1 = journal_line_insert(db2, entry_id, vec_get(e_ids, 0), "debit", total_s, "0", 0, 0, 0)?
+    if orm_ok(l1) == 0 {
+        return act_err(orm_db_exec(l1), 500, orm_err_exec(l1))
+    }
+    db2 = orm_db_exec(l1)
+    let l2 = journal_line_insert(db2, entry_id, vec_get(d_ids, 0), "credit", total_s, "0", 0, 0, 0)?
+    if orm_ok(l2) == 0 {
+        return act_err(orm_db_exec(l2), 500, orm_err_exec(l2))
+    }
+    db2 = orm_db_exec(l2)
+    let jq = journal_find(db2, entry_id)?
+    if orm_ok_q(jq) == 0 || orm_nrows(jq) < 1 {
+        return act_err(orm_db_q(jq), 500, "journal entry missing after post")
+    }
+    let mut o = journal_entry_to_json(jq, 0)
+    let lq = journal_lines_by_entry(orm_db_q(jq), entry_id)?
+    o = jobj_arr(o, "lines", journal_lines_list_json(lq))
+    return act_created(orm_db_q(lq), o)
+}
+
+// ---------- жизнен цикъл ----------
+

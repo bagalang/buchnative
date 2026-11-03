@@ -1,0 +1,306 @@
+import "../models/invoice.baga"
+import "../models/counterpart.baga"
+import "../models/company.baga"
+import "../models/setting.baga"
+import "../models/doc_type.baga"
+import "document_series.baga"
+import "acl.baga"
+import "active_company.baga"
+import "txn.baga"
+import "invoices_bulk.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/json/json.baga"
+import "std/str/str.baga"
+
+fn act_invoices_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "invoice:read")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let page = act_page(ctx, 50, 200)
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    let q = invoice_all(ac.db)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let mut o = invoice_list_json_co(q, ac.id)
+    o = jobj_i64(o, "limit", page.limit)
+    o = jobj_i64(o, "offset", page.offset)
+    return act_ok(orm_db_q(q), o)
+}
+
+fn act_invoices_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "invoice:create")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let direction = jreq_str(b.doc, b.root, "direction")
+    if direction.ok == 0 {
+        return act_422_field(db, "direction", direction)
+    }
+    if direction.val != "in" && direction.val != "out" {
+        return act_err(db, 422, "direction must be 'in' or 'out'")
+    }
+    let number_in = jopt_str(b.doc, b.root, "number", "")
+    let issue_date = jreq_str(b.doc, b.root, "issue_date")
+    if issue_date.ok == 0 {
+        return act_422_field(db, "issue_date", issue_date)
+    }
+    let accounting_month_in = jopt_str(b.doc, b.root, "accounting_month", "")
+    let mut accounting_month = accounting_month_in.val
+    if accounting_month == "" {
+        if len(issue_date.val) >= 7 {
+            accounting_month = substr(issue_date.val, 0, 7)
+        } else {
+            accounting_month = issue_date.val
+        }
+    }
+    let cid = jreq_i64(b.doc, b.root, "counterpart_id")
+    if cid.ok == 0 {
+        return act_422_field(db, "counterpart_id", cid)
+    }
+    let currency = jopt_str(b.doc, b.root, "currency", "BGN")
+    let currency_rate = jopt_str(b.doc, b.root, "currency_rate", "1")
+    let document_type = jopt_str(b.doc, b.root, "document_type", "01")
+    if doc_type_valid_for(direction.val, document_type.val) == 0 {
+        return act_err(db, 422, "невалиден вид данъчен документ за тази посока (код по ППДДС)")
+    }
+    let oid = jreq_i64(b.doc, b.root, "original_invoice_id")
+    let mut original_invoice_id: i64 = 0
+    if oid.present == 1 {
+        if oid.ok == 0 {
+            return act_422_field(db, "original_invoice_id", oid)
+        }
+        original_invoice_id = oid.num
+    }
+    if doc_type_requires_original(document_type.val) == 1 {
+        if original_invoice_id <= 0 {
+            return act_err(db, 422, "известието трябва да сочи към първоначална фактура")
+        }
+    }
+    let due_date = jopt_str(b.doc, b.root, "due_date", "")
+    let tax_event_date_in = jopt_str(b.doc, b.root, "tax_event_date", "")
+    let mut tax_event_date = tax_event_date_in.val
+    if tax_event_date == "" {
+        tax_event_date = issue_date.val
+    }
+    let payment_method = jopt_str(b.doc, b.root, "payment_method", "")
+    let notes = jopt_str(b.doc, b.root, "notes", "")
+    let discount_percent = jopt_str(b.doc, b.root, "discount_percent", "0")
+    let discount_amount = jopt_str(b.doc, b.root, "discount_amount", "0")
+    let vat_exemption_reason = jopt_str(b.doc, b.root, "vat_exemption_reason", "")
+    let loc = jreq_i64(b.doc, b.root, "location_id")
+    let mut location_id: i64 = 0
+    if loc.present == 1 {
+        if loc.ok == 0 {
+            return act_422_field(db, "location_id", loc)
+        }
+        location_id = loc.num
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let mut number = number_in.val
+    let mut d0 = db
+    if number == "" {
+        if direction.val == "in" {
+            return act_err(db, 422, "номерът на входящия документ е задължителен")
+        }
+        number = invoice_auto_number(db, document_type.val)?
+        if number == "" {
+            number = "1"
+        }
+    }
+    let bgn = bb_begin(d0)?
+    if orm_ok(bgn) == 0 {
+        return act_err(orm_db_exec(bgn), 500, orm_err_exec(bgn))
+    }
+    d0 = orm_db_exec(bgn)
+    let hq = invoice_create_header(d0, direction.val, number, document_type.val, original_invoice_id, issue_date.val, due_date.val, tax_event_date, accounting_month, cid.num, currency.val, currency_rate.val, payment_method.val, notes.val, discount_percent.val, discount_amount.val, vat_exemption_reason.val, auth.ctx.user_sub)?
+    if orm_ok_q(hq) == 0 || orm_nrows(hq) < 1 {
+        return act_err_rb(orm_db_q(hq), 500, "header insert failed")
+    }
+    let new_id = orm_cell_by_i64(hq, 0, "id")
+    let mut db2 = orm_db_q(hq)
+    if location_id > 0 {
+        let lcols = vec_new()
+        vec_push(lcols, "location_id")
+        let lvals = vec_new()
+        vec_push(lvals, int_to_str(location_id))
+        let lup = orm_update_by_id(db2, invoice_table(), new_id, lcols, lvals)?
+        if orm_ok(lup) == 0 {
+            return act_err_rb(orm_db_exec(lup), 500, orm_err_exec(lup))
+        }
+        db2 = orm_db_exec(lup)
+    }
+    let lines_node = json_get(b.doc, b.root, "lines")
+    if lines_node >= 0 && json_tag(b.doc, lines_node) == 5 {
+        let n = json_count(b.doc, lines_node)
+        let mut i: i64 = 0
+        while i < n {
+            let elem = json_at(b.doc, lines_node, i)
+            if json_tag(b.doc, elem) != 6 {
+                return act_err_rb(db2, 422, "lines[i] must be an object")
+            }
+            let mut product_id: i64 = 0
+            let mut product_null: i64 = 1
+            let pn = json_get(b.doc, elem, "product_id")
+            if pn >= 0 && json_tag(b.doc, pn) != 0 {
+                let pid = jreq_i64(b.doc, elem, "product_id")
+                if pid.ok == 0 {
+                    return act_422_field_rb(db2, "lines[i].product_id", pid)
+                }
+                product_id = pid.num
+                product_null = 0
+            }
+            let description = jopt_str(b.doc, elem, "description", "")
+            let quantity = jreq_str(b.doc, elem, "quantity")
+            if quantity.ok == 0 {
+                return act_422_field_rb(db2, "lines[i].quantity", quantity)
+            }
+            let unit = jopt_str(b.doc, elem, "unit", "C62")
+            let unit_price = jreq_str(b.doc, elem, "unit_price")
+            if unit_price.ok == 0 {
+                return act_422_field_rb(db2, "lines[i].unit_price", unit_price)
+            }
+            let net_amount = jreq_str(b.doc, elem, "net_amount")
+            if net_amount.ok == 0 {
+                return act_422_field_rb(db2, "lines[i].net_amount", net_amount)
+            }
+            let vat_rate = jopt_str(b.doc, elem, "vat_rate", "20")
+            let vat_amount = jreq_str(b.doc, elem, "vat_amount")
+            if vat_amount.ok == 0 {
+                return act_422_field_rb(db2, "lines[i].vat_amount", vat_amount)
+            }
+            let total_amount = jreq_str(b.doc, elem, "total_amount")
+            if total_amount.ok == 0 {
+                return act_422_field_rb(db2, "lines[i].total_amount", total_amount)
+            }
+            let ins = invoice_line_insert(db2, new_id, product_id, product_null, description.val, quantity.val, unit.val, unit_price.val, amount_for_doc(document_type.val, net_amount.val), vat_rate.val, amount_for_doc(document_type.val, vat_amount.val), amount_for_doc(document_type.val, total_amount.val))?
+            if orm_ok(ins) == 0 {
+                return act_err_rb(orm_db_exec(ins), 500, orm_err_exec(ins))
+            }
+            db2 = orm_db_exec(ins)
+            i = i + 1
+        }
+    }
+    let rc = invoice_recalc_totals(db2, new_id)?
+    if orm_ok(rc) == 0 {
+        return act_err_rb(orm_db_exec(rc), 500, orm_err_exec(rc))
+    }
+    db2 = orm_db_exec(rc)
+    let cmt = bb_commit(db2)?
+    if orm_ok(cmt) == 0 {
+        return act_err_rb(orm_db_exec(cmt), 500, orm_err_exec(cmt))
+    }
+    db2 = orm_db_exec(cmt)
+    let q = invoice_find(db2, new_id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_err(orm_db_q(q), 500, "invoice missing after create")
+    }
+    let mut o = invoice_to_json(q, 0)
+    let lq = invoice_lines_by_invoice(orm_db_q(q), new_id)?
+    o = jobj_arr(o, "lines", invoice_lines_list_json(lq))
+    return act_created(orm_db_q(lq), o)
+}
+
+fn act_invoices_show(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "invoice:read")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let q = invoice_find(db, id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "Invoice not found")
+    }
+    let mut o = invoice_to_json(q, 0)
+    let cid = orm_cell_by_i64(q, 0, "counterpart_id")
+    let mut d = orm_db_q(q)
+    if cid > 0 {
+        let cq = counterpart_find(d, cid)?
+        if orm_ok_q(cq) == 1 {
+            if orm_nrows(cq) > 0 {
+                o = jobj_obj(o, "counterpart", counterpart_to_json(cq, 0))
+            }
+            d = orm_db_q(cq)
+        }
+    }
+    let key = concat("активна_фирма:", auth.ctx.user_sub)
+    let sq = setting_get_by_key(d, key)?
+    if orm_ok_q(sq) == 1 {
+        d = orm_db_q(sq)
+        if orm_nrows(sq) > 0 {
+            let coid = parse_int(orm_cell_by(sq, 0, "value"))
+            if coid > 0 {
+                let coq = company_find(d, coid)?
+                if orm_ok_q(coq) == 1 {
+                    if orm_nrows(coq) > 0 {
+                        o = jobj_obj(o, "company", company_to_json(coq, 0))
+                    }
+                    d = orm_db_q(coq)
+                }
+            }
+        }
+    }
+    let lq = invoice_lines_by_invoice(d, id)?
+    o = jobj_arr(o, "lines", invoice_lines_list_json(lq))
+    return act_ok(orm_db_q(lq), o)
+}
+
+fn act_invoices_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "invoice:delete")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let existing = invoice_find(db, id)?
+    if orm_ok_q(existing) == 0 {
+        return act_err(orm_db_q(existing), 500, orm_err_q(existing))
+    }
+    if orm_nrows(existing) < 1 {
+        return act_404(orm_db_q(existing), "Invoice not found")
+    }
+    // Изтриването е свободно и за осчетоводени: маха записа в дневника и
+    // връща стоката (вж. invoices_bulk.baga → bulk_delete_one). Няма сторно —
+    // корекциите стават с кредитни известия и отрицателни суми.
+    let bgn = bb_begin(orm_db_q(existing))?
+    if orm_ok(bgn) == 0 {
+        return act_err(orm_db_exec(bgn), 500, orm_err_exec(bgn))
+    }
+    let r = bulk_delete_one(orm_db_exec(bgn), id)?
+    if r.ok == 0 {
+        return act_err_rb(r.db, 422, r.err)
+    }
+    return act_no_content(r.db)
+}

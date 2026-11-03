@@ -1,0 +1,304 @@
+// actions/invoices_update.baga — PATCH на фактура (чернова).
+import "../models/invoice.baga"
+import "../models/doc_type.baga"
+import "acl.baga"
+import "txn.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/json/json.baga"
+import "std/str/str.baga"
+
+fn act_invoices_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "invoice:update")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let existing = invoice_find(db, id)?
+    if orm_ok_q(existing) == 0 {
+        return act_err(orm_db_q(existing), 500, orm_err_q(existing))
+    }
+    if orm_nrows(existing) < 1 {
+        return act_404(orm_db_q(existing), "Invoice not found")
+    }
+    let st0 = orm_cell_by(existing, 0, "status")
+    // Редакцията е свободна (ръчно въвеждане, големи грешки — вж. conventions.md).
+    // При осчетоводена фактура потребителят първо я връща към чернова, ако
+    // иска да пипа редовете; тук не блокираме.
+    let existing_direction = orm_cell_by(existing, 0, "direction")
+    let mut dbu = orm_db_q(existing)
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let cols = vec_new()
+    let vals = vec_new()
+    let direction = jreq_str(b.doc, b.root, "direction")
+    if direction.present == 1 {
+        if direction.ok == 0 {
+            return act_422_field(db, "direction", direction)
+        }
+        if direction.val != "in" && direction.val != "out" {
+            return act_err(db, 422, "direction must be 'in' or 'out'")
+        }
+        vec_push(cols, "direction")
+        vec_push(vals, direction.val)
+    }
+    let number = jreq_str(b.doc, b.root, "number")
+    if number.present == 1 {
+        if number.ok == 0 {
+            return act_422_field(db, "number", number)
+        }
+        vec_push(cols, "number")
+        vec_push(vals, number.val)
+    }
+    let issue_date = jreq_str(b.doc, b.root, "issue_date")
+    if issue_date.present == 1 {
+        if issue_date.ok == 0 {
+            return act_422_field(db, "issue_date", issue_date)
+        }
+        vec_push(cols, "issue_date")
+        vec_push(vals, issue_date.val)
+    }
+    let accounting_month = jreq_str(b.doc, b.root, "accounting_month")
+    if accounting_month.present == 1 {
+        if accounting_month.ok == 0 {
+            return act_422_field(db, "accounting_month", accounting_month)
+        }
+        vec_push(cols, "accounting_month")
+        vec_push(vals, accounting_month.val)
+    }
+    let cid = jreq_i64(b.doc, b.root, "counterpart_id")
+    if cid.present == 1 {
+        if cid.ok == 0 {
+            return act_422_field(db, "counterpart_id", cid)
+        }
+        vec_push(cols, "counterpart_id")
+        vec_push(vals, int_to_str(cid.num))
+    }
+    let currency = jreq_str(b.doc, b.root, "currency")
+    if currency.present == 1 {
+        if currency.ok == 0 {
+            return act_422_field(db, "currency", currency)
+        }
+        vec_push(cols, "currency")
+        vec_push(vals, currency.val)
+    }
+    let currency_rate = jreq_str(b.doc, b.root, "currency_rate")
+    if currency_rate.present == 1 {
+        if currency_rate.ok == 0 {
+            return act_422_field(db, "currency_rate", currency_rate)
+        }
+        vec_push(cols, "currency_rate")
+        vec_push(vals, currency_rate.val)
+    }
+    let status = jreq_str(b.doc, b.root, "status")
+    if status.present == 1 {
+        if status.ok == 0 {
+            return act_422_field(db, "status", status)
+        }
+        vec_push(cols, "status")
+        vec_push(vals, status.val)
+    }
+    let document_type = jreq_str(b.doc, b.root, "document_type")
+    if document_type.present == 1 {
+        if document_type.ok == 0 {
+            return act_422_field(db, "document_type", document_type)
+        }
+        let mut dir_for_type = existing_direction
+        if direction.present == 1 {
+            dir_for_type = direction.val
+        }
+        if doc_type_valid_for(dir_for_type, document_type.val) == 0 {
+            return act_err(db, 422, "невалиден вид данъчен документ за тази посока (код по ППДДС)")
+        }
+        vec_push(cols, "document_type")
+        vec_push(vals, document_type.val)
+    }
+    let oid = jreq_i64(b.doc, b.root, "original_invoice_id")
+    if oid.present == 1 {
+        if oid.ok == 0 {
+            return act_422_field(db, "original_invoice_id", oid)
+        }
+        vec_push(cols, "original_invoice_id")
+        vec_push(vals, int_to_str(oid.num))
+    }
+    let due_date = jreq_str(b.doc, b.root, "due_date")
+    if due_date.present == 1 {
+        if due_date.ok == 0 {
+            return act_422_field(db, "due_date", due_date)
+        }
+        vec_push(cols, "due_date")
+        vec_push(vals, due_date.val)
+    }
+    let tax_event_date = jreq_str(b.doc, b.root, "tax_event_date")
+    if tax_event_date.present == 1 {
+        if tax_event_date.ok == 0 {
+            return act_422_field(db, "tax_event_date", tax_event_date)
+        }
+        vec_push(cols, "tax_event_date")
+        vec_push(vals, tax_event_date.val)
+    }
+    let payment_method = jreq_str(b.doc, b.root, "payment_method")
+    if payment_method.present == 1 {
+        if payment_method.ok == 0 {
+            return act_422_field(db, "payment_method", payment_method)
+        }
+        vec_push(cols, "payment_method")
+        vec_push(vals, payment_method.val)
+    }
+    let notes = jreq_str(b.doc, b.root, "notes")
+    if notes.present == 1 {
+        if notes.ok == 0 {
+            return act_422_field(dbu, "notes", notes)
+        }
+        vec_push(cols, "notes")
+        vec_push(vals, notes.val)
+    }
+    let discount_percent = jreq_str(b.doc, b.root, "discount_percent")
+    if discount_percent.present == 1 {
+        if discount_percent.ok == 0 {
+            return act_422_field(dbu, "discount_percent", discount_percent)
+        }
+        vec_push(cols, "discount_percent")
+        vec_push(vals, discount_percent.val)
+    }
+    let discount_amount = jreq_str(b.doc, b.root, "discount_amount")
+    if discount_amount.present == 1 {
+        if discount_amount.ok == 0 {
+            return act_422_field(dbu, "discount_amount", discount_amount)
+        }
+        vec_push(cols, "discount_amount")
+        vec_push(vals, discount_amount.val)
+    }
+    let vat_exemption_reason = jreq_str(b.doc, b.root, "vat_exemption_reason")
+    if vat_exemption_reason.present == 1 {
+        if vat_exemption_reason.ok == 0 {
+            return act_422_field(dbu, "vat_exemption_reason", vat_exemption_reason)
+        }
+        vec_push(cols, "vat_exemption_reason")
+        vec_push(vals, vat_exemption_reason.val)
+    }
+    let locu = jreq_i64(b.doc, b.root, "location_id")
+    if locu.present == 1 {
+        if locu.ok == 0 {
+            return act_422_field(dbu, "location_id", locu)
+        }
+        vec_push(cols, "location_id")
+        vec_push(vals, int_to_str(locu.num))
+    }
+    let lines_node = json_get(b.doc, b.root, "lines")
+    let mut has_lines: i64 = 0
+    if lines_node >= 0 && json_tag(b.doc, lines_node) == 5 {
+        has_lines = 1
+    }
+    if vec_len(cols) == 0 && has_lines == 0 {
+        let q0 = invoice_find(dbu, id)?
+        if orm_ok_q(q0) == 0 {
+            return act_err(orm_db_q(q0), 500, orm_err_q(q0))
+        }
+        if orm_nrows(q0) < 1 {
+            return act_404(orm_db_q(q0), "Invoice not found")
+        }
+        return act_ok(orm_db_q(q0), invoice_to_json(q0, 0))
+    }
+    let bgn = bb_begin(dbu)?
+    if orm_ok(bgn) == 0 {
+        return act_err(orm_db_exec(bgn), 500, orm_err_exec(bgn))
+    }
+    dbu = orm_db_exec(bgn)
+    if vec_len(cols) > 0 {
+        let upd = orm_update_by_id(dbu, invoice_table(), id, cols, vals)?
+        if orm_ok(upd) == 0 {
+            return act_err_rb(orm_db_exec(upd), 500, orm_err_exec(upd))
+        }
+        dbu = orm_db_exec(upd)
+    }
+    if has_lines == 1 {
+        let dl = invoice_delete_lines(dbu, id)?
+        if orm_ok(dl) == 0 {
+            return act_err_rb(orm_db_exec(dl), 500, orm_err_exec(dl))
+        }
+        dbu = orm_db_exec(dl)
+        let n = json_count(b.doc, lines_node)
+        let mut i: i64 = 0
+        while i < n {
+            let elem = json_at(b.doc, lines_node, i)
+            if json_tag(b.doc, elem) != 6 {
+                return act_err_rb(dbu, 422, "lines[i] must be an object")
+            }
+            let mut product_id: i64 = 0
+            let mut product_null: i64 = 1
+            let pn = json_get(b.doc, elem, "product_id")
+            if pn >= 0 && json_tag(b.doc, pn) != 0 {
+                let pid = jreq_i64(b.doc, elem, "product_id")
+                if pid.ok == 0 {
+                    return act_422_field_rb(dbu, "lines[i].product_id", pid)
+                }
+                product_id = pid.num
+                product_null = 0
+            }
+            let description = jopt_str(b.doc, elem, "description", "")
+            let quantity = jreq_str(b.doc, elem, "quantity")
+            if quantity.ok == 0 {
+                return act_422_field_rb(dbu, "lines[i].quantity", quantity)
+            }
+            let unit = jopt_str(b.doc, elem, "unit", "C62")
+            let unit_price = jreq_str(b.doc, elem, "unit_price")
+            if unit_price.ok == 0 {
+                return act_422_field_rb(dbu, "lines[i].unit_price", unit_price)
+            }
+            let net_amount = jreq_str(b.doc, elem, "net_amount")
+            if net_amount.ok == 0 {
+                return act_422_field_rb(dbu, "lines[i].net_amount", net_amount)
+            }
+            let vat_rate = jopt_str(b.doc, elem, "vat_rate", "20")
+            let vat_amount = jreq_str(b.doc, elem, "vat_amount")
+            if vat_amount.ok == 0 {
+                return act_422_field_rb(dbu, "lines[i].vat_amount", vat_amount)
+            }
+            let total_amount = jreq_str(b.doc, elem, "total_amount")
+            if total_amount.ok == 0 {
+                return act_422_field_rb(dbu, "lines[i].total_amount", total_amount)
+            }
+            let ins = invoice_line_insert(dbu, id, product_id, product_null, description.val, quantity.val, unit.val, unit_price.val, amount_for_doc_pick(document_type.present, document_type.val, orm_cell_by(existing, 0, "document_type"), net_amount.val), vat_rate.val, amount_for_doc_pick(document_type.present, document_type.val, orm_cell_by(existing, 0, "document_type"), vat_amount.val), amount_for_doc_pick(document_type.present, document_type.val, orm_cell_by(existing, 0, "document_type"), total_amount.val))?
+            if orm_ok(ins) == 0 {
+                return act_err_rb(orm_db_exec(ins), 500, orm_err_exec(ins))
+            }
+            dbu = orm_db_exec(ins)
+            i = i + 1
+        }
+        let rc = invoice_recalc_totals(dbu, id)?
+        if orm_ok(rc) == 0 {
+            return act_err_rb(orm_db_exec(rc), 500, orm_err_exec(rc))
+        }
+        dbu = orm_db_exec(rc)
+    }
+    let cmt = bb_commit(dbu)?
+    if orm_ok(cmt) == 0 {
+        return act_err_rb(orm_db_exec(cmt), 500, orm_err_exec(cmt))
+    }
+    dbu = orm_db_exec(cmt)
+    let q = invoice_find(dbu, id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "Invoice not found")
+    }
+    let mut o = invoice_to_json(q, 0)
+    let lq = invoice_lines_by_invoice(orm_db_q(q), id)?
+    o = jobj_arr(o, "lines", invoice_lines_list_json(lq))
+    return act_ok(orm_db_q(lq), o)
+}
+

@@ -1,0 +1,475 @@
+// models/invoice.baga — invoices + invoice_lines table helpers over ormbaga.
+// Table DDL живее в schema.baga на buchnative.
+// Суми: редовете носят net/vat/total; header-ът преизчислява тоталите със SQL SUM.
+// NUMERIC се подава/чете като стринг (точност, без float).
+
+import "ormbaga/orm.baga"
+import "ormbaga/sql.baga"
+import "fmrbaga/jsonx.baga"
+import "pgbaga/pg.baga"
+import "std/str/str.baga"
+import "std/os/os.baga"
+import "setting.baga"
+
+fn invoice_table() -> str {
+    return "invoices"
+}
+
+fn invoice_line_table() -> str {
+    return "invoice_lines"
+}
+
+fn invoice_backend_boila() -> i64 !IO {
+    let be = env("ORM_BACKEND")?
+    if be == "boila" || be == "boiladb" || be == "boilaDB" {
+        return 1
+    }
+    return 0
+}
+
+fn invoice_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return orm_count_sql(db, "SELECT MAX(id) AS count FROM invoices")?
+}
+
+fn invoice_line_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return orm_count_sql(db, "SELECT MAX(id) AS count FROM invoice_lines")?
+}
+
+fn invoice_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_str(o, "direction", orm_cell_by(q, row, "direction"))
+    o = jobj_str(o, "number", orm_cell_by(q, row, "number"))
+    o = jobj_str(o, "document_type", orm_cell_by(q, row, "document_type"))
+    o = jobj_str(o, "issue_date", orm_cell_by(q, row, "issue_date"))
+    o = jobj_str(o, "due_date", orm_cell_by(q, row, "due_date"))
+    o = jobj_str(o, "tax_event_date", orm_cell_by(q, row, "tax_event_date"))
+    o = jobj_str(o, "accounting_month", orm_cell_by(q, row, "accounting_month"))
+    o = jobj_i64(o, "counterpart_id", orm_cell_by_i64(q, row, "counterpart_id"))
+    o = jobj_str(o, "currency", orm_cell_by(q, row, "currency"))
+    o = jobj_str(o, "currency_rate", orm_cell_by(q, row, "currency_rate"))
+    o = jobj_str(o, "net_amount", orm_cell_by(q, row, "net_amount"))
+    o = jobj_str(o, "vat_amount", orm_cell_by(q, row, "vat_amount"))
+    o = jobj_str(o, "total_amount", orm_cell_by(q, row, "total_amount"))
+    o = jobj_str(o, "status", orm_cell_by(q, row, "status"))
+    o = jobj_str(o, "payment_method", orm_cell_by(q, row, "payment_method"))
+    o = jobj_str(o, "notes", orm_cell_by(q, row, "notes"))
+    o = jobj_str(o, "discount_percent", orm_cell_by(q, row, "discount_percent"))
+    o = jobj_str(o, "discount_amount", orm_cell_by(q, row, "discount_amount"))
+    o = jobj_str(o, "vat_exemption_reason", orm_cell_by(q, row, "vat_exemption_reason"))
+    o = jobj_i64(o, "location_id", orm_cell_by_i64(q, row, "location_id"))
+    o = jobj_i64(o, "company_id", orm_cell_by_i64(q, row, "company_id"))
+    let oid = orm_cell_by_i64(q, row, "original_invoice_id")
+    if oid > 0 {
+        o = jobj_i64(o, "original_invoice_id", oid)
+    }
+    let jid = orm_cell_by_i64(q, row, "journal_entry_id")
+    if jid > 0 {
+        o = jobj_i64(o, "journal_entry_id", jid)
+    }
+    let mut cname = orm_cell_by(q, row, "counterpart_name")
+    if cname == "" {
+        cname = orm_cell_by(q, row, "name")
+    }
+    if cname != "" {
+        o = jobj_str(o, "counterpart_name", cname)
+    }
+    let ca = orm_cell_by(q, row, "created_at")
+    if ca != "" {
+        o = jobj_str(o, "created_at", ca)
+    }
+    return o
+}
+
+fn invoice_line_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_i64(o, "invoice_id", orm_cell_by_i64(q, row, "invoice_id"))
+    let pid = orm_cell_by_i64(q, row, "product_id")
+    if pid > 0 {
+        o = jobj_i64(o, "product_id", pid)
+    }
+    o = jobj_str(o, "description", orm_cell_by(q, row, "description"))
+    o = jobj_str(o, "quantity", orm_cell_by(q, row, "quantity"))
+    o = jobj_str(o, "unit", orm_cell_by(q, row, "unit"))
+    o = jobj_str(o, "unit_price", orm_cell_by(q, row, "unit_price"))
+    o = jobj_str(o, "net_amount", orm_cell_by(q, row, "net_amount"))
+    o = jobj_str(o, "vat_rate", orm_cell_by(q, row, "vat_rate"))
+    o = jobj_str(o, "vat_amount", orm_cell_by(q, row, "vat_amount"))
+    o = jobj_str(o, "total_amount", orm_cell_by(q, row, "total_amount"))
+    return o
+}
+
+fn invoice_select_cols() -> str {
+    return "id, direction, number, document_type, original_invoice_id, issue_date, due_date, tax_event_date, accounting_month, counterpart_id, currency, currency_rate, net_amount, vat_amount, total_amount, status, payment_method, notes, discount_percent, discount_amount, vat_exemption_reason, journal_entry_id, location_id, company_id, created_at"
+}
+
+fn invoice_select_sql() -> str {
+    return concat("SELECT ", concat(invoice_select_cols(), " FROM invoices"))
+}
+
+fn invoice_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
+    let sql = concat(invoice_select_sql(), " WHERE id = $1")
+    let vals = vec_new()
+    let nulls = vec_new()
+    pg_param_i64(vals, nulls, id)
+    return orm_query_params(db, sql, vals, nulls)?
+}
+
+fn invoice_all(db: OrmDb) -> OrmQuery !IO !Net {
+    // P28 LEFT JOIN: името на контрагента в същия ред (без N+1). ON ползва
+    // неквалифицирани колони — counterpart_id е само в invoices, id е в дясната.
+    let sql = concat(concat("SELECT ", concat(invoice_select_cols(), ", name FROM invoices")), " LEFT JOIN counterparts ON counterpart_id = id ORDER BY number")
+    return orm_query(db, sql)?
+}
+
+fn invoice_by_period(db: OrmDb, accounting_month: str) -> OrmQuery !IO !Net {
+    let sql = concat(invoice_select_sql(), " WHERE accounting_month = $1 ORDER BY issue_date, id")
+    let vals = vec_new()
+    vec_push(vals, accounting_month)
+    let nulls = vec_new()
+    vec_push(nulls, 0)
+    return orm_query_params(db, sql, vals, nulls)?
+}
+
+fn invoice_lines_by_invoice(db: OrmDb, invoice_id: i64) -> OrmQuery !IO !Net {
+    let sql = "SELECT id, invoice_id, product_id, description, quantity, unit, unit_price, net_amount, vat_rate, vat_amount, total_amount FROM invoice_lines WHERE invoice_id = $1 ORDER BY id"
+    let vals = vec_new()
+    let nulls = vec_new()
+    pg_param_i64(vals, nulls, invoice_id)
+    return orm_query_params(db, sql, vals, nulls)?
+}
+
+// Вмъква header с тотали 0 и статус draft; връща реда през RETURNING (id вътре).
+// За boila ид-то се предоставя явно (таблицата е преди P20, без SERIAL).
+fn invoice_create_header(db: OrmDb, direction: str, number: str, document_type: str, original_invoice_id: i64, issue_date: str, due_date: str, tax_event_date: str, accounting_month: str, counterpart_id: i64, currency: str, currency_rate: str, payment_method: str, notes: str, discount_percent: str, discount_amount: str, vat_exemption_reason: str, sub: str) -> OrmQuery !IO !Net {
+    let mut company_id: i64 = 0
+    let sq = setting_get_by_key(db, concat("активна_фирма:", sub))?
+    if orm_ok_q(sq) == 0 {
+        return OrmQErr(OrmQueryFail { err: orm_err_q(sq), tag: "", db: orm_db_q(sq) })
+    }
+    let mut d0 = orm_db_q(sq)
+    if orm_nrows(sq) > 0 {
+        company_id = parse_int(orm_cell_by(sq, 0, "value"))
+    }
+    if invoice_backend_boila()? == 1 {
+        let c = invoice_next_id(d0)?
+        if orm_ok_c(c) == 0 {
+            return OrmQErr(OrmQueryFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
+        }
+        let nid = orm_count_n(c) + 1
+        let mut d = orm_db_c(c)
+        let cols = vec_new()
+        vec_push(cols, "id")
+        vec_push(cols, "direction")
+        vec_push(cols, "number")
+        vec_push(cols, "document_type")
+        vec_push(cols, "original_invoice_id")
+        vec_push(cols, "issue_date")
+        vec_push(cols, "due_date")
+        vec_push(cols, "tax_event_date")
+        vec_push(cols, "accounting_month")
+        vec_push(cols, "counterpart_id")
+        vec_push(cols, "currency")
+        vec_push(cols, "currency_rate")
+        vec_push(cols, "net_amount")
+        vec_push(cols, "vat_amount")
+        vec_push(cols, "total_amount")
+        vec_push(cols, "status")
+        vec_push(cols, "payment_method")
+        vec_push(cols, "notes")
+        vec_push(cols, "discount_percent")
+        vec_push(cols, "discount_amount")
+        vec_push(cols, "vat_exemption_reason")
+        vec_push(cols, "company_id")
+        let vals = vec_new()
+        vec_push(vals, int_to_str(nid))
+        vec_push(vals, direction)
+        vec_push(vals, number)
+        vec_push(vals, document_type)
+        vec_push(vals, int_to_str(original_invoice_id))
+        vec_push(vals, issue_date)
+        vec_push(vals, due_date)
+        vec_push(vals, tax_event_date)
+        vec_push(vals, accounting_month)
+        vec_push(vals, int_to_str(counterpart_id))
+        vec_push(vals, currency)
+        vec_push(vals, currency_rate)
+        vec_push(vals, "0")
+        vec_push(vals, "0")
+        vec_push(vals, "0")
+        vec_push(vals, "draft")
+        vec_push(vals, payment_method)
+        vec_push(vals, notes)
+        vec_push(vals, discount_percent)
+        vec_push(vals, discount_amount)
+        vec_push(vals, vat_exemption_reason)
+        vec_push(vals, int_to_str(company_id))
+        let nulls = vec_new()
+        let mut i: i64 = 0
+        while i < 22 {
+            vec_push(nulls, 0)
+            i = i + 1
+        }
+        return orm_insert_returning_full(d, invoice_table(), cols, vals, nulls)?
+    }
+    let cols = vec_new()
+    vec_push(cols, "direction")
+    vec_push(cols, "number")
+    vec_push(cols, "document_type")
+    vec_push(cols, "original_invoice_id")
+    vec_push(cols, "issue_date")
+    vec_push(cols, "due_date")
+    vec_push(cols, "tax_event_date")
+    vec_push(cols, "accounting_month")
+    vec_push(cols, "counterpart_id")
+    vec_push(cols, "currency")
+    vec_push(cols, "currency_rate")
+    vec_push(cols, "net_amount")
+    vec_push(cols, "vat_amount")
+    vec_push(cols, "total_amount")
+    vec_push(cols, "status")
+    vec_push(cols, "payment_method")
+    vec_push(cols, "notes")
+    vec_push(cols, "discount_percent")
+    vec_push(cols, "discount_amount")
+    vec_push(cols, "vat_exemption_reason")
+    vec_push(cols, "company_id")
+    let vals = vec_new()
+    vec_push(vals, direction)
+    vec_push(vals, number)
+    vec_push(vals, document_type)
+    vec_push(vals, int_to_str(original_invoice_id))
+    vec_push(vals, issue_date)
+    vec_push(vals, due_date)
+    vec_push(vals, tax_event_date)
+    vec_push(vals, accounting_month)
+    vec_push(vals, int_to_str(counterpart_id))
+    vec_push(vals, currency)
+    vec_push(vals, currency_rate)
+    vec_push(vals, "0")
+    vec_push(vals, "0")
+    vec_push(vals, "0")
+    vec_push(vals, "draft")
+    vec_push(vals, payment_method)
+    vec_push(vals, notes)
+    vec_push(vals, discount_percent)
+    vec_push(vals, discount_amount)
+    vec_push(vals, vat_exemption_reason)
+    vec_push(vals, int_to_str(company_id))
+    let nulls = vec_new()
+    let mut i: i64 = 0
+    while i < 21 {
+        vec_push(nulls, 0)
+        i = i + 1
+    }
+    return orm_insert_returning_full(d0, invoice_table(), cols, vals, nulls)?
+}
+
+// Вмъква ред; product_id е nullable (product_null==1 → NULL).
+fn invoice_line_insert(db: OrmDb, invoice_id: i64, product_id: i64, product_null: i64, description: str, quantity: str, unit: str, unit_price: str, net_amount: str, vat_rate: str, vat_amount: str, total_amount: str) -> OrmExec !IO !Net {
+    if invoice_backend_boila()? == 1 {
+        let c = invoice_line_next_id(db)?
+        if orm_ok_c(c) == 0 {
+            return OrmEErr(OrmExecFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
+        }
+        let nid = orm_count_n(c) + 1
+        let mut d = orm_db_c(c)
+        let cols = vec_new()
+        vec_push(cols, "id")
+        vec_push(cols, "invoice_id")
+        vec_push(cols, "product_id")
+        vec_push(cols, "description")
+        vec_push(cols, "quantity")
+        vec_push(cols, "unit")
+        vec_push(cols, "unit_price")
+        vec_push(cols, "net_amount")
+        vec_push(cols, "vat_rate")
+        vec_push(cols, "vat_amount")
+        vec_push(cols, "total_amount")
+        let vals = vec_new()
+        vec_push(vals, int_to_str(nid))
+        vec_push(vals, int_to_str(invoice_id))
+        vec_push(vals, int_to_str(product_id))
+        vec_push(vals, description)
+        vec_push(vals, quantity)
+        vec_push(vals, unit)
+        vec_push(vals, unit_price)
+        vec_push(vals, net_amount)
+        vec_push(vals, vat_rate)
+        vec_push(vals, vat_amount)
+        vec_push(vals, total_amount)
+        let nulls = vec_new()
+        vec_push(nulls, 0)
+        vec_push(nulls, 0)
+        vec_push(nulls, product_null)
+        vec_push(nulls, 0)
+        vec_push(nulls, 0)
+        vec_push(nulls, 0)
+        vec_push(nulls, 0)
+        vec_push(nulls, 0)
+        vec_push(nulls, 0)
+        vec_push(nulls, 0)
+        vec_push(nulls, 0)
+        return orm_insert_full(d, invoice_line_table(), cols, vals, nulls)?
+    }
+    let cols = vec_new()
+    vec_push(cols, "invoice_id")
+    vec_push(cols, "product_id")
+    vec_push(cols, "description")
+    vec_push(cols, "quantity")
+    vec_push(cols, "unit")
+    vec_push(cols, "unit_price")
+    vec_push(cols, "net_amount")
+    vec_push(cols, "vat_rate")
+    vec_push(cols, "vat_amount")
+    vec_push(cols, "total_amount")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(invoice_id))
+    vec_push(vals, int_to_str(product_id))
+    vec_push(vals, description)
+    vec_push(vals, quantity)
+    vec_push(vals, unit)
+    vec_push(vals, unit_price)
+    vec_push(vals, net_amount)
+    vec_push(vals, vat_rate)
+    vec_push(vals, vat_amount)
+    vec_push(vals, total_amount)
+    let nulls = vec_new()
+    vec_push(nulls, 0)
+    vec_push(nulls, product_null)
+    vec_push(nulls, 0)
+    vec_push(nulls, 0)
+    vec_push(nulls, 0)
+    vec_push(nulls, 0)
+    vec_push(nulls, 0)
+    vec_push(nulls, 0)
+    vec_push(nulls, 0)
+    vec_push(nulls, 0)
+    return orm_insert_full(db, invoice_line_table(), cols, vals, nulls)?
+}
+
+// Преизчислява тоталите на header-а от сумата на редовете (SQL SUM, decimal-exact).
+// Две стъпки: SELECT SUM (без редове → NULL → "0"), после UPDATE.
+fn invoice_recalc_totals(db: OrmDb, invoice_id: i64) -> OrmExec !IO !Net {
+    let svals = vec_new()
+    let snulls = vec_new()
+    pg_param_i64(svals, snulls, invoice_id)
+    let q = orm_query_params(db, "SELECT SUM(net_amount) AS n, SUM(vat_amount) AS v, SUM(total_amount) AS t FROM invoice_lines WHERE invoice_id = $1", svals, snulls)?
+    if orm_ok_q(q) == 0 {
+        return OrmEErr(OrmExecFail { err: orm_err_q(q), tag: "", db: orm_db_q(q) })
+    }
+    let mut n = orm_cell_by(q, 0, "n")
+    let mut v = orm_cell_by(q, 0, "v")
+    let mut t = orm_cell_by(q, 0, "t")
+    if n == "" {
+        n = "0"
+    }
+    if v == "" {
+        v = "0"
+    }
+    if t == "" {
+        t = "0"
+    }
+    let d = orm_db_q(q)
+    let uvals = vec_new()
+    vec_push(uvals, n)
+    vec_push(uvals, v)
+    vec_push(uvals, t)
+    vec_push(uvals, int_to_str(invoice_id))
+    let unulls = vec_new()
+    vec_push(unulls, 0)
+    vec_push(unulls, 0)
+    vec_push(unulls, 0)
+    vec_push(unulls, 0)
+    return orm_exec_params(d, "UPDATE invoices SET net_amount = $1, vat_amount = $2, total_amount = $3 WHERE id = $4", uvals, unulls)?
+}
+
+fn invoice_delete_lines(db: OrmDb, invoice_id: i64) -> OrmExec !IO !Net {
+    let sql = "DELETE FROM invoice_lines WHERE invoice_id = $1"
+    let vals = vec_new()
+    let nulls = vec_new()
+    pg_param_i64(vals, nulls, invoice_id)
+    return orm_exec_params(db, sql, vals, nulls)?
+}
+
+fn invoice_delete(db: OrmDb, id: i64) -> OrmExec !IO !Net {
+    return orm_delete_by_id(db, invoice_table(), id)?
+}
+
+fn invoice_row_in_company(q: OrmQuery, row: i64, cid: i64) -> i64 {
+    if cid <= 0 {
+        return 1
+    }
+    let row_co = orm_cell_by_i64(q, row, "company_id")
+    if row_co == 0 || row_co == cid {
+        return 1
+    }
+    return 0
+}
+
+fn invoice_list_json_co(q: OrmQuery, cid: i64) -> JObj {
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    let mut n: i64 = 0
+    while i < orm_nrows(q) {
+        if invoice_row_in_company(q, i, cid) == 1 {
+            arr = jarr_obj(arr, invoice_to_json(q, i))
+            n = n + 1
+        }
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", n)
+    return o
+}
+
+fn invoice_list_json(q: OrmQuery) -> JObj {
+    return invoice_list_json_co(q, 0)
+}
+
+fn invoice_lines_list_json(q: OrmQuery) -> JArr {
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        arr = jarr_obj(arr, invoice_line_to_json(q, i))
+        i = i + 1
+    }
+    return arr
+}
+
+fn invoice_pad10(n: i64) -> str {
+    let s = int_to_str(n)
+    if len(s) >= 10 {
+        return s
+    }
+    let mut zeros = ""
+    let mut i = 10 - len(s)
+    while i > 0 {
+        zeros = concat(zeros, "0")
+        i = i - 1
+    }
+    return concat(zeros, s)
+}
+
+fn invoice_numbers_by_type(db: OrmDb) -> OrmQuery !IO !Net {
+    return orm_query(db, "SELECT number, document_type, direction FROM invoices")?
+}
+
+fn invoice_next_number_str(q: OrmQuery, document_type: str, direction: str) -> str {
+    let mut maxn: i64 = 0
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        if orm_cell_by(q, i, "document_type") == document_type {
+            if orm_cell_by(q, i, "direction") == direction {
+                let n = parse_int(orm_cell_by(q, i, "number"))
+                if n > maxn {
+                    maxn = n
+                }
+            }
+        }
+        i = i + 1
+    }
+    return invoice_pad10(maxn + 1)
+}

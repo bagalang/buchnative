@@ -1,0 +1,22 @@
+// models/fs_nom_equity.baga — СС 1 Приложение 4, опростена колона „общо“.
+// Ред: code|parent|kind|side|name  side=equity
+
+fn fs_eq_push(rows: Vec<str>, line: str) -> Vec<str> {
+    vec_push(rows, line)
+    return rows
+}
+
+fn fs_nom_equity_rows() -> Vec<str> {
+    let mut r = vec_new()
+    r = fs_eq_push(r, "eq.open||line|equity|1. Салдо в началото на отчетния период")
+    r = fs_eq_push(r, "eq.policy||line|equity|2. Промени в счетоводната политика")
+    r = fs_eq_push(r, "eq.errors||line|equity|3. Грешки")
+    r = fs_eq_push(r, "eq.after||total|equity|4. Салдо след промени в политиката и грешки")
+    r = fs_eq_push(r, "eq.owners||line|equity|5. Изменения за сметка на собствениците")
+    r = fs_eq_push(r, "eq.result||line|equity|6. Финансов резултат за текущия период")
+    r = fs_eq_push(r, "eq.div||line|equity|7. Разпределения на печалба (дивиденти)")
+    r = fs_eq_push(r, "eq.reval||line|equity|9. Последващи оценки на активи и пасиви")
+    r = fs_eq_push(r, "eq.other||line|equity|10. Други изменения в собствения капитал")
+    r = fs_eq_push(r, "eq.close||total|equity|11. Салдо към края на отчетния период")
+    return r
+}

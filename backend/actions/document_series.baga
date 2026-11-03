@@ -1,0 +1,286 @@
+// actions/document_series.baga — CRUD на кочани (номерации) за изходящи документи.
+
+import "../models/document_series.baga"
+import "../models/company.baga"
+import "../models/invoice.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/json/json.baga"
+import "std/str/str.baga"
+
+fn dser_types_from_body(d: JsonDoc, obj: i64) -> str {
+    let n = json_get(d, obj, "document_types")
+    if n < 0 {
+        return ""
+    }
+    if json_tag(d, n) == 4 {
+        return json_str(d, n)
+    }
+    if json_tag(d, n) != 5 {
+        return ""
+    }
+    let mut out = ""
+    let mut i: i64 = 0
+    let c = json_count(d, n)
+    while i < c {
+        let el = json_at(d, n, i)
+        if json_tag(d, el) == 4 {
+            let t = str_trim(json_str(d, el))
+            if t != "" {
+                if out != "" { out = concat(out, ",") }
+                out = concat(out, t)
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn dser_steal_types(db: OrmDb, company_id: i64, keep_id: i64, types_csv: str) -> OrmDb !IO !Net {
+    let q = dser_by_company(db, company_id)?
+    if orm_ok_q(q) == 0 {
+        return orm_db_q(q)
+    }
+    let mut d = orm_db_q(q)
+    let parts = str_split(types_csv, ",")
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        let sid = orm_cell_by_i64(q, i, "id")
+        if sid != keep_id && orm_cell_by_i64(q, i, "is_active") != 0 {
+            let mut csv = orm_cell_by(q, i, "document_types")
+            let mut j: i64 = 0
+            while j < vec_len(parts) {
+                let t = str_trim(vec_get(parts, j))
+                if t != "" {
+                    csv = csv_without(csv, t)
+                }
+                j = j + 1
+            }
+            if csv != orm_cell_by(q, i, "document_types") {
+                let cols = vec_new()
+                vec_push(cols, "document_types")
+                let vals = vec_new()
+                vec_push(vals, csv)
+                let u = orm_update_by_id(d, dser_table(), sid, cols, vals)?
+                if orm_ok(u) == 1 {
+                    d = orm_db_exec(u)
+                }
+            }
+        }
+        i = i + 1
+    }
+    return d
+}
+
+fn act_dser_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let company_id = fmr_param_i64(ctx, "id")
+    if company_id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let name = jreq_str(b.doc, b.root, "name")
+    if name.ok == 0 {
+        return act_422_field(db, "name", name)
+    }
+    let mut types = dser_types_from_body(b.doc, b.root)
+    if types == "" {
+        let ts = jopt_str(b.doc, b.root, "document_types", "")
+        if ts.val != "" {
+            types = ts.val
+        }
+    }
+    let padf = jreq_i64(b.doc, b.root, "pad_width")
+    let mut pad: i64 = 10
+    if padf.present == 1 {
+        if padf.ok == 0 { return act_422_field(db, "pad_width", padf) }
+        pad = padf.num
+    }
+    if pad < 1 { pad = 1 }
+    if pad > 10 { pad = 10 }
+    let startf = jreq_i64(b.doc, b.root, "start_number")
+    let mut start: i64 = 1
+    if startf.present == 1 {
+        if startf.ok == 0 { return act_422_field(db, "start_number", startf) }
+        start = startf.num
+    }
+    if start < 1 { start = 1 }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let cq = company_find(db, company_id)?
+    if orm_ok_q(cq) == 0 {
+        return act_err(orm_db_q(cq), 500, orm_err_q(cq))
+    }
+    if orm_nrows(cq) < 1 {
+        return act_404(orm_db_q(cq), "Company not found")
+    }
+    let ins = dser_create(orm_db_q(cq), company_id, name.val, types, pad, start)?
+    if orm_ok(ins) == 0 {
+        return act_err(orm_db_exec(ins), 409, orm_err_exec(ins))
+    }
+    let mut d = orm_db_exec(ins)
+    let q = dser_by_company(d, company_id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_err(orm_db_q(q), 500, "insert ok but row missing")
+    }
+    let new_id = orm_cell_by_i64(q, orm_nrows(q) - 1, "id")
+    d = dser_steal_types(orm_db_q(q), company_id, new_id, types)?
+    let q2 = dser_find(d, new_id)?
+    if orm_ok_q(q2) == 0 || orm_nrows(q2) < 1 {
+        return act_err(orm_db_q(q2), 500, "insert ok but row missing")
+    }
+    return act_created(orm_db_q(q2), dser_to_json(q2, 0))
+}
+
+fn act_dser_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let q0 = dser_find(db, id)?
+    if orm_ok_q(q0) == 0 {
+        return act_err(orm_db_q(q0), 500, orm_err_q(q0))
+    }
+    if orm_nrows(q0) < 1 {
+        return act_404(orm_db_q(q0), "Document series not found")
+    }
+    let company_id = orm_cell_by_i64(q0, 0, "company_id")
+    let mut d = orm_db_q(q0)
+    let cols = vec_new()
+    let vals = vec_new()
+    let name = jreq_str(b.doc, b.root, "name")
+    if name.present == 1 {
+        if name.ok == 0 { return act_422_field(d, "name", name) }
+        vec_push(cols, "name")
+        vec_push(vals, name.val)
+    }
+    let mut types = ""
+    let mut types_set: i64 = 0
+    if jhas(b.doc, b.root, "document_types") == 1 {
+        types = dser_types_from_body(b.doc, b.root)
+        types_set = 1
+        vec_push(cols, "document_types")
+        vec_push(vals, types)
+    }
+    let padf = jreq_i64(b.doc, b.root, "pad_width")
+    if padf.present == 1 {
+        if padf.ok == 0 { return act_422_field(d, "pad_width", padf) }
+        let mut pad = padf.num
+        if pad < 1 { pad = 1 }
+        if pad > 10 { pad = 10 }
+        vec_push(cols, "pad_width")
+        vec_push(vals, int_to_str(pad))
+    }
+    let startf = jreq_i64(b.doc, b.root, "start_number")
+    if startf.present == 1 {
+        if startf.ok == 0 { return act_422_field(d, "start_number", startf) }
+        let mut start = startf.num
+        if start < 1 { start = 1 }
+        vec_push(cols, "start_number")
+        vec_push(vals, int_to_str(start))
+    }
+    if vec_len(cols) > 0 {
+        let u = orm_update_by_id(d, dser_table(), id, cols, vals)?
+        if orm_ok(u) == 0 {
+            return act_err(orm_db_exec(u), 500, orm_err_exec(u))
+        }
+        d = orm_db_exec(u)
+    }
+    if types_set == 1 {
+        d = dser_steal_types(d, company_id, id, types)?
+    }
+    let q = dser_find(d, id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "Document series not found")
+    }
+    return act_ok(orm_db_q(q), dser_to_json(q, 0))
+}
+
+fn act_dser_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let q0 = dser_find(db, id)?
+    if orm_ok_q(q0) == 0 {
+        return act_err(orm_db_q(q0), 500, orm_err_q(q0))
+    }
+    if orm_nrows(q0) < 1 {
+        return act_404(orm_db_q(q0), "Document series not found")
+    }
+    let del = rel_soft_delete(orm_db_q(q0), dser_table(), id)?
+    if orm_ok(del) == 0 {
+        return act_err(orm_db_exec(del), 500, orm_err_exec(del))
+    }
+    return act_no_content(orm_db_exec(del))
+}
+
+fn dser_company_id(db: OrmDb) -> i64 !IO !Net {
+    let cq = company_all(db)?
+    if orm_ok_q(cq) == 0 || orm_nrows(cq) < 1 {
+        return 0
+    }
+    return orm_cell_by_i64(cq, 0, "id")
+}
+
+fn invoice_auto_number(db: OrmDb, document_type: str) -> str !IO !Net {
+    let nq = invoice_numbers_by_type(db)?
+    if orm_ok_q(nq) == 0 {
+        return invoice_pad(1, 10)
+    }
+    let mut d = orm_db_q(nq)
+    let cid = dser_company_id(d)?
+    if cid <= 0 {
+        return invoice_next_in_series(nq, document_type, 1, 10)
+    }
+    let sq = dser_by_company(d, cid)?
+    if orm_ok_q(sq) == 0 {
+        return invoice_next_in_series(nq, document_type, 1, 10)
+    }
+    let row = dser_find_for_type(sq, document_type)
+    if row < 0 {
+        return invoice_next_in_series(nq, document_type, 1, 10)
+    }
+    let types = orm_cell_by(sq, row, "document_types")
+    let mut pad = orm_cell_by_i64(sq, row, "pad_width")
+    if pad <= 0 { pad = 10 }
+    let mut start = orm_cell_by_i64(sq, row, "start_number")
+    if start <= 0 { start = 1 }
+    return invoice_next_in_series(nq, types, start, pad)
+}

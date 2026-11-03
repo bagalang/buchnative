@@ -1,0 +1,45 @@
+// models/fs_nom_pl.baga — СС 1 Приложение 2, ОПР по икономически елементи.
+// Ред: code|parent|kind|side|name  side=expense|income
+
+fn fs_pl_push(rows: Vec<str>, line: str) -> Vec<str> {
+    vec_push(rows, line)
+    return rows
+}
+
+fn fs_nom_pl_rows() -> Vec<str> {
+    let mut r = vec_new()
+    r = fs_pl_push(r, "pl.e||header|expense|А. Разходи")
+    r = fs_pl_push(r, "pl.e.1|pl.e|line|expense|1. Намаление на запасите от продукция и незавършено производство")
+    r = fs_pl_push(r, "pl.e.2|pl.e|line|expense|2. Разходи за суровини, материали и външни услуги")
+    r = fs_pl_push(r, "pl.e.2a|pl.e.2|line|expense|а) суровини и материали")
+    r = fs_pl_push(r, "pl.e.2b|pl.e.2|line|expense|б) външни услуги")
+    r = fs_pl_push(r, "pl.e.3|pl.e|line|expense|3. Разходи за персонала")
+    r = fs_pl_push(r, "pl.e.3a|pl.e.3|line|expense|а) разходи за възнаграждения")
+    r = fs_pl_push(r, "pl.e.3b|pl.e.3|line|expense|б) разходи за осигуровки")
+    r = fs_pl_push(r, "pl.e.4|pl.e|line|expense|4. Разходи за амортизация и обезценка")
+    r = fs_pl_push(r, "pl.e.5|pl.e|line|expense|5. Други разходи")
+    r = fs_pl_push(r, "pl.e.5a|pl.e.5|line|expense|а) балансова стойност на продадените активи")
+    r = fs_pl_push(r, "pl.e.op|pl.e|total|expense|Общо разходи за оперативна дейност")
+    r = fs_pl_push(r, "pl.e.6|pl.e|line|expense|6. Разходи от обезценка на финансови активи")
+    r = fs_pl_push(r, "pl.e.7|pl.e|line|expense|7. Разходи за лихви и други финансови разходи")
+    r = fs_pl_push(r, "pl.e.fin|pl.e|total|expense|Общо финансови разходи")
+    r = fs_pl_push(r, "pl.e.t|pl.e|total|expense|Общо разходи")
+    r = fs_pl_push(r, "pl.e.tax|pl.e|line|expense|10. Разходи за данъци от печалбата")
+    r = fs_pl_push(r, "pl.e.profit|pl.e|total|expense|12. Печалба")
+    r = fs_pl_push(r, "pl.i||header|income|Б. Приходи")
+    r = fs_pl_push(r, "pl.i.1|pl.i|line|income|1. Нетни приходи от продажби")
+    r = fs_pl_push(r, "pl.i.1a|pl.i.1|line|income|а) продукция")
+    r = fs_pl_push(r, "pl.i.1b|pl.i.1|line|income|б) стоки")
+    r = fs_pl_push(r, "pl.i.1c|pl.i.1|line|income|в) услуги")
+    r = fs_pl_push(r, "pl.i.2|pl.i|line|income|2. Увеличение на запасите от продукция и незавършено производство")
+    r = fs_pl_push(r, "pl.i.3|pl.i|line|income|3. Разходи за придобиване на активи по стопански начин")
+    r = fs_pl_push(r, "pl.i.4|pl.i|line|income|4. Други приходи")
+    r = fs_pl_push(r, "pl.i.op|pl.i|total|income|Общо приходи от оперативна дейност")
+    r = fs_pl_push(r, "pl.i.5|pl.i|line|income|5. Приходи от участия")
+    r = fs_pl_push(r, "pl.i.6|pl.i|line|income|6. Приходи от други инвестиции и заеми")
+    r = fs_pl_push(r, "pl.i.7|pl.i|line|income|7. Други лихви и финансови приходи")
+    r = fs_pl_push(r, "pl.i.fin|pl.i|total|income|Общо финансови приходи")
+    r = fs_pl_push(r, "pl.i.t|pl.i|total|income|Общо приходи")
+    r = fs_pl_push(r, "pl.i.loss|pl.i|total|income|10. Загуба")
+    return r
+}

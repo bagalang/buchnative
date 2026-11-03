@@ -1,0 +1,266 @@
+// models/company.baga — companies table helpers over ormbaga.
+// Table DDL живее в schema.baga на buchnative (buchnative_migrations / buchnative_boila_migrations).
+
+import "ormbaga/orm.baga"
+import "ormbaga/sql.baga"
+import "fmrbaga/jsonx.baga"
+import "pgbaga/pg.baga"
+import "std/str/str.baga"
+import "std/os/os.baga"
+
+fn company_table() -> str {
+    return "companies"
+}
+
+fn company_backend_boila() -> i64 !IO {
+    let be = env("ORM_BACKEND")?
+    if be == "boila" || be == "boiladb" || be == "boilaDB" {
+        return 1
+    }
+    return 0
+}
+
+// Следващ PK: таблицата е създадена преди P20 (без BIGSERIAL). NULL max → 0.
+fn company_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return orm_count_sql(db, "SELECT MAX(id) AS count FROM companies")?
+}
+
+fn company_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_str(o, "name", orm_cell_by(q, row, "name"))
+    o = jobj_str(o, "eik", orm_cell_by(q, row, "eik"))
+    o = jobj_str(o, "vat_number", orm_cell_by(q, row, "vat_number"))
+    o = jobj_i64(o, "is_vat_registered", orm_cell_by_i64(q, row, "is_vat_registered"))
+    o = jobj_str(o, "vat_period", orm_cell_by(q, row, "vat_period"))
+    o = jobj_str(o, "currency", orm_cell_by(q, row, "currency"))
+    o = jobj_str(o, "address", orm_cell_by(q, row, "address"))
+    o = jobj_str(o, "city", orm_cell_by(q, row, "city"))
+    o = jobj_str(o, "post_code", orm_cell_by(q, row, "post_code"))
+    o = jobj_str(o, "phone", orm_cell_by(q, row, "phone"))
+    o = jobj_str(o, "email", orm_cell_by(q, row, "email"))
+    o = jobj_str(o, "website", orm_cell_by(q, row, "website"))
+    o = jobj_str(o, "mol", orm_cell_by(q, row, "mol"))
+    o = jobj_str(o, "manager_eik", orm_cell_by(q, row, "manager_eik"))
+    o = jobj_str(o, "accountant_name", orm_cell_by(q, row, "accountant_name"))
+    o = jobj_str(o, "accountant_egn", orm_cell_by(q, row, "accountant_egn"))
+    o = jobj_str(o, "tax_authority", orm_cell_by(q, row, "tax_authority"))
+    o = jobj_str(o, "nap_office", orm_cell_by(q, row, "nap_office"))
+    o = jobj_str(o, "iban", orm_cell_by(q, row, "iban"))
+    o = jobj_str(o, "bic", orm_cell_by(q, row, "bic"))
+    o = jobj_str(o, "inventory_valuation_method", orm_cell_by(q, row, "inventory_valuation_method"))
+    let fysm = orm_cell_by_i64(q, row, "fiscal_year_start_month")
+    if fysm > 0 {
+        o = jobj_i64(o, "fiscal_year_start_month", fysm)
+    }
+    o = jobj_str(o, "country", orm_cell_by(q, row, "country"))
+    o = jobj_str(o, "manager_name", orm_cell_by(q, row, "manager_name"))
+    o = jobj_str(o, "manager_egn", orm_cell_by(q, row, "manager_egn"))
+    o = jobj_str(o, "authorized_person_name", orm_cell_by(q, row, "authorized_person_name"))
+    o = jobj_str(o, "authorized_person_egn", orm_cell_by(q, row, "authorized_person_egn"))
+    o = jobj_str(o, "vat_branch_number", orm_cell_by(q, row, "vat_branch_number"))
+    o = jobj_str(o, "tax_accounting_basis", orm_cell_by(q, row, "tax_accounting_basis"))
+    o = jobj_str(o, "tax_entity", orm_cell_by(q, row, "tax_entity"))
+    o = jobj_str(o, "software_company_name", orm_cell_by(q, row, "software_company_name"))
+    o = jobj_str(o, "software_id", orm_cell_by(q, row, "software_id"))
+    o = jobj_str(o, "software_version", orm_cell_by(q, row, "software_version"))
+    o = jobj_str(o, "is_part_of_group", orm_cell_by(q, row, "is_part_of_group"))
+    o = jobj_str(o, "street_name", orm_cell_by(q, row, "street_name"))
+    o = jobj_str(o, "building_number", orm_cell_by(q, row, "building_number"))
+    o = jobj_str(o, "address_building", orm_cell_by(q, row, "address_building"))
+    o = jobj_str(o, "additional_address_detail", orm_cell_by(q, row, "additional_address_detail"))
+    o = jobj_str(o, "address_type", orm_cell_by(q, row, "address_type"))
+    o = jobj_str(o, "region", orm_cell_by(q, row, "region"))
+    o = jobj_str(o, "settings", orm_cell_by(q, row, "settings"))
+    let ca = orm_cell_by(q, row, "created_at")
+    if ca != "" {
+        o = jobj_str(o, "created_at", ca)
+    }
+    return o
+}
+
+// Dual-safe: без ::text кастове (граматиката на boila за кастове е по-тясна).
+fn company_select_sql() -> str {
+    return "SELECT id, name, eik, vat_number, is_vat_registered, vat_period, currency, address, city, post_code, phone, email, website, mol, manager_eik, accountant_name, accountant_egn, tax_authority, nap_office, iban, bic, inventory_valuation_method, fiscal_year_start_month, country, manager_name, manager_egn, authorized_person_name, authorized_person_egn, vat_branch_number, tax_accounting_basis, tax_entity, software_company_name, software_id, software_version, is_part_of_group, street_name, building_number, address_building, additional_address_detail, address_type, region, settings, created_at FROM companies"
+}
+
+fn company_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
+    let sql = concat(company_select_sql(), " WHERE id = $1")
+    let vals = vec_new()
+    let nulls = vec_new()
+    pg_param_i64(vals, nulls, id)
+    return orm_query_params(db, sql, vals, nulls)?
+}
+
+fn company_all(db: OrmDb) -> OrmQuery !IO !Net {
+    return orm_query(db, concat(company_select_sql(), " ORDER BY id"))?
+}
+
+// SAF-T колони, добавени след първия INSERT. vat_branch_number е ДДС
+// поделение (НАП), не търговски обект. ДДС регистрация по подразбиране е 0.
+fn company_push_defaults(cols: Vec<str>, vals: Vec<str>) {
+    vec_push(cols, "country")
+    vec_push(vals, "BG")
+    vec_push(cols, "manager_name")
+    vec_push(vals, "")
+    vec_push(cols, "manager_egn")
+    vec_push(vals, "")
+    vec_push(cols, "authorized_person_name")
+    vec_push(vals, "")
+    vec_push(cols, "authorized_person_egn")
+    vec_push(vals, "")
+    vec_push(cols, "vat_branch_number")
+    vec_push(vals, "")
+    vec_push(cols, "tax_accounting_basis")
+    vec_push(vals, "A")
+    vec_push(cols, "tax_entity")
+    vec_push(vals, "")
+    vec_push(cols, "software_company_name")
+    vec_push(vals, "buchnative")
+    vec_push(cols, "software_id")
+    vec_push(vals, "BUCHNATIVE")
+    vec_push(cols, "software_version")
+    vec_push(vals, "1.0")
+    vec_push(cols, "is_part_of_group")
+    vec_push(vals, "")
+    vec_push(cols, "street_name")
+    vec_push(vals, "")
+    vec_push(cols, "building_number")
+    vec_push(vals, "")
+    vec_push(cols, "address_building")
+    vec_push(vals, "")
+    vec_push(cols, "additional_address_detail")
+    vec_push(vals, "")
+    vec_push(cols, "address_type")
+    vec_push(vals, "")
+    vec_push(cols, "region")
+    vec_push(vals, "")
+    vec_push(cols, "settings")
+    vec_push(vals, "{}")
+}
+
+fn company_create(db: OrmDb, name: str, eik: str, vat_number: str, is_vat_registered: i64, vat_period: str, currency: str, address: str, city: str, post_code: str, phone: str, email: str, website: str, mol: str, manager_eik: str, accountant_name: str, accountant_egn: str, tax_authority: str, nap_office: str, iban: str, bic: str, inventory_valuation_method: str, fiscal_year_start_month: i64) -> OrmExec !IO !Net {
+    if company_backend_boila()? == 1 {
+        let c = company_next_id(db)?
+        if orm_ok_c(c) == 0 {
+            return OrmEErr(OrmExecFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
+        }
+        let nid = orm_count_n(c) + 1
+        let mut d = orm_db_c(c)
+        let cols = vec_new()
+        vec_push(cols, "id")
+        vec_push(cols, "name")
+        vec_push(cols, "eik")
+        vec_push(cols, "vat_number")
+        vec_push(cols, "is_vat_registered")
+        vec_push(cols, "vat_period")
+        vec_push(cols, "currency")
+        vec_push(cols, "address")
+        vec_push(cols, "city")
+        vec_push(cols, "post_code")
+        vec_push(cols, "phone")
+        vec_push(cols, "email")
+        vec_push(cols, "website")
+        vec_push(cols, "mol")
+        vec_push(cols, "manager_eik")
+        vec_push(cols, "accountant_name")
+        vec_push(cols, "accountant_egn")
+        vec_push(cols, "tax_authority")
+        vec_push(cols, "nap_office")
+        vec_push(cols, "iban")
+        vec_push(cols, "bic")
+        vec_push(cols, "inventory_valuation_method")
+        vec_push(cols, "fiscal_year_start_month")
+        let vals = vec_new()
+        vec_push(vals, int_to_str(nid))
+        vec_push(vals, name)
+        vec_push(vals, eik)
+        vec_push(vals, vat_number)
+        vec_push(vals, int_to_str(is_vat_registered))
+        vec_push(vals, vat_period)
+        vec_push(vals, currency)
+        vec_push(vals, address)
+        vec_push(vals, city)
+        vec_push(vals, post_code)
+        vec_push(vals, phone)
+        vec_push(vals, email)
+        vec_push(vals, website)
+        vec_push(vals, mol)
+        vec_push(vals, manager_eik)
+        vec_push(vals, accountant_name)
+        vec_push(vals, accountant_egn)
+        vec_push(vals, tax_authority)
+        vec_push(vals, nap_office)
+        vec_push(vals, iban)
+        vec_push(vals, bic)
+        vec_push(vals, inventory_valuation_method)
+        vec_push(vals, int_to_str(fiscal_year_start_month))
+        company_push_defaults(cols, vals)
+        return orm_insert_strs(d, company_table(), cols, vals)?
+    }
+    let cols = vec_new()
+    vec_push(cols, "name")
+    vec_push(cols, "eik")
+    vec_push(cols, "vat_number")
+    vec_push(cols, "is_vat_registered")
+    vec_push(cols, "vat_period")
+    vec_push(cols, "currency")
+    vec_push(cols, "address")
+    vec_push(cols, "city")
+    vec_push(cols, "post_code")
+    vec_push(cols, "phone")
+    vec_push(cols, "email")
+    vec_push(cols, "website")
+    vec_push(cols, "mol")
+    vec_push(cols, "manager_eik")
+    vec_push(cols, "accountant_name")
+    vec_push(cols, "accountant_egn")
+    vec_push(cols, "tax_authority")
+    vec_push(cols, "nap_office")
+    vec_push(cols, "iban")
+    vec_push(cols, "bic")
+    vec_push(cols, "inventory_valuation_method")
+    vec_push(cols, "fiscal_year_start_month")
+    let vals = vec_new()
+    vec_push(vals, name)
+    vec_push(vals, eik)
+    vec_push(vals, vat_number)
+    vec_push(vals, int_to_str(is_vat_registered))
+    vec_push(vals, vat_period)
+    vec_push(vals, currency)
+    vec_push(vals, address)
+    vec_push(vals, city)
+    vec_push(vals, post_code)
+    vec_push(vals, phone)
+    vec_push(vals, email)
+    vec_push(vals, website)
+    vec_push(vals, mol)
+    vec_push(vals, manager_eik)
+    vec_push(vals, accountant_name)
+    vec_push(vals, accountant_egn)
+    vec_push(vals, tax_authority)
+    vec_push(vals, nap_office)
+    vec_push(vals, iban)
+    vec_push(vals, bic)
+    vec_push(vals, inventory_valuation_method)
+    vec_push(vals, int_to_str(fiscal_year_start_month))
+    company_push_defaults(cols, vals)
+    return orm_insert_strs(db, company_table(), cols, vals)?
+}
+
+fn company_delete(db: OrmDb, id: i64) -> OrmExec !IO !Net {
+    return orm_delete_by_id(db, company_table(), id)?
+}
+
+fn company_list_json(q: OrmQuery) -> JObj {
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        arr = jarr_obj(arr, company_to_json(q, i))
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", orm_nrows(q))
+    return o
+}

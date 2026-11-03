@@ -1,0 +1,55 @@
+// actions/addresses.baga — дели свободен адрес към SAF-T полета.
+// Не записва. Ключът е на активната фирма. Без ключ връща бележка, не грешка.
+
+import "mistral.baga"
+import "acl.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+fn addr_parts_json(parts: AddrParts, note: str) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_str(o, "street_name", parts.street_name)
+    o = jobj_str(o, "building_number", parts.building_number)
+    o = jobj_str(o, "address_building", parts.address_building)
+    o = jobj_str(o, "additional_address_detail", parts.additional_address_detail)
+    o = jobj_str(o, "city", parts.city)
+    o = jobj_str(o, "post_code", parts.post_code)
+    o = jobj_str(o, "region", parts.region)
+    o = jobj_str(o, "country", parts.country)
+    o = jobj_str(o, "address_type", parts.address_type)
+    o = jobj_bool(o, "parse_ok", parts.ok)
+    o = jobj_str(o, "parse_note", note)
+    return o
+}
+
+fn act_address_parse(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
+    let auth = act_require_perm(ctx, db, "accounting:read")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let address = jreq_str(b.doc, b.root, "address")
+    if address.ok == 0 || str_trim(address.val) == "" {
+        return act_err(db, 422, "address е задължителен")
+    }
+    let country = jopt_str(b.doc, b.root, "country", "BG")
+    let city = jopt_str(b.doc, b.root, "city", "")
+    let post = jopt_str(b.doc, b.root, "post_code", "")
+    let mk = company_mistral_key(db, auth.ctx.user_sub)?
+    let mut parts = addr_parts_empty()
+    if mk.key != "" {
+        parts = mistral_parse_address_ex(mk.key, str_trim(address.val), country.val, city.val, post.val)?
+    }
+    return act_ok(mk.db, addr_parts_json(parts, vies_parse_note(mk.key, parts)))
+}

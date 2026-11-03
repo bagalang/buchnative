@@ -1,0 +1,338 @@
+// schema_boila_a.baga — boilaDB миграции на buchnative, първа половина
+// (изнесено от schema.baga заради filesize gate 600).
+
+import "ormbaga/migrate.baga"
+
+fn buchnative_boila_migrations_a() -> MigrationSet {
+    let mut set = migrate_set_new()
+    set = migrate_add(
+        set,
+        20260824001,
+        "create_companies",
+        "CREATE TABLE IF NOT EXISTS companies (id BIGINT, name TEXT, eik TEXT, vat_number TEXT, address TEXT, city TEXT, mol TEXT, iban TEXT, bic TEXT, created_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS companies"
+    )
+    set = migrate_add(
+        set,
+        20260824002,
+        "create_accounts",
+        "CREATE TABLE IF NOT EXISTS accounts (id BIGINT, number TEXT, name TEXT, saft_account_type TEXT, analytic_type TEXT, parent_id BIGINT, created_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS accounts"
+    )
+    set = migrate_add(
+        set,
+        20260824003,
+        "create_counterparts",
+        "CREATE TABLE IF NOT EXISTS counterparts (id BIGINT, name TEXT, eik TEXT, vat_number TEXT, address TEXT, city TEXT, country TEXT, is_client BIGINT, is_supplier BIGINT, created_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS counterparts"
+    )
+    set = migrate_add(
+        set,
+        20260824004,
+        "create_products",
+        "CREATE TABLE IF NOT EXISTS products (id BIGINT, name TEXT, code TEXT, unit TEXT, price NUMERIC(18,2), vat_rate NUMERIC(5,2), is_service BIGINT, created_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS products"
+    )
+    set = migrate_add(
+        set,
+        20260824005,
+        "create_invoices",
+        "CREATE TABLE IF NOT EXISTS invoices (id BIGINT, direction TEXT, number TEXT, issue_date TEXT, accounting_month TEXT, counterpart_id BIGINT, currency TEXT, currency_rate NUMERIC(18,6), net_amount NUMERIC(18,2), vat_amount NUMERIC(18,2), total_amount NUMERIC(18,2), status TEXT, created_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS invoices"
+    )
+    set = migrate_add(
+        set,
+        20260824006,
+        "create_invoice_lines",
+        "CREATE TABLE IF NOT EXISTS invoice_lines (id BIGINT, invoice_id BIGINT, product_id BIGINT, description TEXT, quantity NUMERIC(18,4), unit_price NUMERIC(18,2), net_amount NUMERIC(18,2), vat_rate NUMERIC(5,2), vat_amount NUMERIC(18,2), total_amount NUMERIC(18,2), PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS invoice_lines"
+    )
+    set = migrate_add(
+        set,
+        20260824007,
+        "create_journal_entries",
+        "CREATE TABLE IF NOT EXISTS journal_entries (id BIGINT, entry_date TEXT, document_type TEXT, document_id BIGINT, description TEXT, created_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS journal_entries"
+    )
+    set = migrate_add(
+        set,
+        20260824008,
+        "create_journal_lines",
+        "CREATE TABLE IF NOT EXISTS journal_lines (id BIGINT, entry_id BIGINT, account_id BIGINT, direction TEXT, amount NUMERIC(18,2), counterpart_id BIGINT, product_id BIGINT, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS journal_lines"
+    )
+    set = migrate_add(
+        set,
+        20260824009,
+        "create_vat_return_lines",
+        "CREATE TABLE IF NOT EXISTS vat_return_lines (id BIGINT, period TEXT, cell_no BIGINT, amount NUMERIC(18,2), PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS vat_return_lines"
+    )
+    set = migrate_add(
+        set,
+        20260824010,
+        "create_fixed_assets",
+        "CREATE TABLE IF NOT EXISTS fixed_assets (id BIGINT, name TEXT, category TEXT, acquisition_date TEXT, cost NUMERIC(18,2), salvage_value NUMERIC(18,2), useful_life_months BIGINT, created_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS fixed_assets"
+    )
+    set = migrate_add(
+        set,
+        20260824011,
+        "create_bank_accounts",
+        "CREATE TABLE IF NOT EXISTS bank_accounts (id BIGINT, iban TEXT, bic TEXT, bank_name TEXT, currency TEXT, created_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS bank_accounts"
+    )
+    set = migrate_add(
+        set,
+        20260824012,
+        "create_bank_transactions",
+        "CREATE TABLE IF NOT EXISTS bank_transactions (id BIGINT, bank_account_id BIGINT, txn_date TEXT, amount NUMERIC(18,2), currency TEXT, counterpart_name TEXT, counterpart_iban TEXT, description TEXT, reference TEXT, created_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS bank_transactions"
+    )
+    set = migrate_add(
+        set,
+        20260824013,
+        "create_users",
+        "CREATE TABLE IF NOT EXISTS users (id BIGINT, email TEXT, name TEXT, password_hash TEXT, role TEXT, created_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS users"
+    )
+    set = migrate_add(
+        set,
+        20260824014,
+        "create_settings",
+        "CREATE TABLE IF NOT EXISTS settings (id BIGINT, key TEXT, value TEXT, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS settings"
+    )
+    set = migrate_add(
+        set,
+        20260824015,
+        "index_accounts_number",
+        "CREATE INDEX index_accounts_number ON accounts (number)",
+        "DROP INDEX IF EXISTS index_accounts_number"
+    )
+    set = migrate_add(
+        set,
+        20260824016,
+        "index_counterparts_eik",
+        "CREATE INDEX index_counterparts_eik ON counterparts (eik)",
+        "DROP INDEX IF EXISTS index_counterparts_eik"
+    )
+    set = migrate_add(
+        set,
+        20260824017,
+        "index_products_code",
+        "CREATE INDEX index_products_code ON products (code)",
+        "DROP INDEX IF EXISTS index_products_code"
+    )
+    set = migrate_add(
+        set,
+        20260824018,
+        "index_invoices_counterpart_id",
+        "CREATE INDEX index_invoices_counterpart_id ON invoices (counterpart_id)",
+        "DROP INDEX IF EXISTS index_invoices_counterpart_id"
+    )
+    set = migrate_add(
+        set,
+        20260824019,
+        "index_invoices_month",
+        "CREATE INDEX index_invoices_month ON invoices (accounting_month)",
+        "DROP INDEX IF EXISTS index_invoices_month"
+    )
+    set = migrate_add(
+        set,
+        20260824020,
+        "index_invoice_lines_invoice_id",
+        "CREATE INDEX index_invoice_lines_invoice_id ON invoice_lines (invoice_id)",
+        "DROP INDEX IF EXISTS index_invoice_lines_invoice_id"
+    )
+    set = migrate_add(
+        set,
+        20260824021,
+        "index_journal_entries_date",
+        "CREATE INDEX index_journal_entries_date ON journal_entries (entry_date)",
+        "DROP INDEX IF EXISTS index_journal_entries_date"
+    )
+    set = migrate_add(
+        set,
+        20260824022,
+        "index_journal_lines_entry_id",
+        "CREATE INDEX index_journal_lines_entry_id ON journal_lines (entry_id)",
+        "DROP INDEX IF EXISTS index_journal_lines_entry_id"
+    )
+    set = migrate_add(
+        set,
+        20260824023,
+        "index_journal_lines_account_id",
+        "CREATE INDEX index_journal_lines_account_id ON journal_lines (account_id)",
+        "DROP INDEX IF EXISTS index_journal_lines_account_id"
+    )
+    set = migrate_add(
+        set,
+        20260824024,
+        "index_vat_return_lines_period",
+        "CREATE INDEX index_vat_return_lines_period ON vat_return_lines (period)",
+        "DROP INDEX IF EXISTS index_vat_return_lines_period"
+    )
+    set = migrate_add(
+        set,
+        20260824025,
+        "index_bank_transactions_account",
+        "CREATE INDEX index_bank_transactions_account ON bank_transactions (bank_account_id)",
+        "DROP INDEX IF EXISTS index_bank_transactions_account"
+    )
+    set = migrate_add(
+        set,
+        20260824026,
+        "index_bank_transactions_date",
+        "CREATE INDEX index_bank_transactions_date ON bank_transactions (txn_date)",
+        "DROP INDEX IF EXISTS index_bank_transactions_date"
+    )
+    set = migrate_add(
+        set,
+        20260824027,
+        "index_companies_eik",
+        "CREATE INDEX index_companies_eik ON companies (eik)",
+        "DROP INDEX IF EXISTS index_companies_eik"
+    )
+    set = migrate_add(
+        set,
+        20260824028,
+        "index_bank_accounts_iban",
+        "CREATE INDEX index_bank_accounts_iban ON bank_accounts (iban)",
+        "DROP INDEX IF EXISTS index_bank_accounts_iban"
+    )
+    set = migrate_add(
+        set,
+        20260824029,
+        "index_users_email",
+        "CREATE INDEX index_users_email ON users (email)",
+        "DROP INDEX IF EXISTS index_users_email"
+    )
+    set = migrate_add(
+        set,
+        20260824030,
+        "index_settings_key",
+        "CREATE INDEX index_settings_key ON settings (key)",
+        "DROP INDEX IF EXISTS index_settings_key"
+    )
+    set = migrate_add(
+        set,
+        20260824031,
+        "add_companies_is_vat_registered",
+        "ALTER TABLE companies ADD COLUMN is_vat_registered BIGINT",
+        "ALTER TABLE companies DROP COLUMN is_vat_registered"
+    )
+    set = migrate_add(
+        set,
+        20260824032,
+        "add_companies_vat_period",
+        "ALTER TABLE companies ADD COLUMN vat_period TEXT",
+        "ALTER TABLE companies DROP COLUMN vat_period"
+    )
+    set = migrate_add(
+        set,
+        20260824033,
+        "add_companies_currency",
+        "ALTER TABLE companies ADD COLUMN currency TEXT",
+        "ALTER TABLE companies DROP COLUMN currency"
+    )
+    set = migrate_add(
+        set,
+        20260824034,
+        "add_companies_manager_eik",
+        "ALTER TABLE companies ADD COLUMN manager_eik TEXT",
+        "ALTER TABLE companies DROP COLUMN manager_eik"
+    )
+    set = migrate_add(
+        set,
+        20260824035,
+        "add_companies_accountant_name",
+        "ALTER TABLE companies ADD COLUMN accountant_name TEXT",
+        "ALTER TABLE companies DROP COLUMN accountant_name"
+    )
+    set = migrate_add(
+        set,
+        20260824036,
+        "add_companies_accountant_egn",
+        "ALTER TABLE companies ADD COLUMN accountant_egn TEXT",
+        "ALTER TABLE companies DROP COLUMN accountant_egn"
+    )
+    set = migrate_add(
+        set,
+        20260824037,
+        "add_companies_tax_authority",
+        "ALTER TABLE companies ADD COLUMN tax_authority TEXT",
+        "ALTER TABLE companies DROP COLUMN tax_authority"
+    )
+    set = migrate_add(
+        set,
+        20260824038,
+        "add_companies_nap_office",
+        "ALTER TABLE companies ADD COLUMN nap_office TEXT",
+        "ALTER TABLE companies DROP COLUMN nap_office"
+    )
+    set = migrate_add(
+        set,
+        20260824039,
+        "add_companies_post_code",
+        "ALTER TABLE companies ADD COLUMN post_code TEXT",
+        "ALTER TABLE companies DROP COLUMN post_code"
+    )
+    set = migrate_add(
+        set,
+        20260824040,
+        "add_companies_phone",
+        "ALTER TABLE companies ADD COLUMN phone TEXT",
+        "ALTER TABLE companies DROP COLUMN phone"
+    )
+    set = migrate_add(
+        set,
+        20260824041,
+        "add_companies_email",
+        "ALTER TABLE companies ADD COLUMN email TEXT",
+        "ALTER TABLE companies DROP COLUMN email"
+    )
+    set = migrate_add(
+        set,
+        20260824042,
+        "add_companies_website",
+        "ALTER TABLE companies ADD COLUMN website TEXT",
+        "ALTER TABLE companies DROP COLUMN website"
+    )
+    set = migrate_add(
+        set,
+        20260824043,
+        "add_companies_inventory_valuation_method",
+        "ALTER TABLE companies ADD COLUMN inventory_valuation_method TEXT",
+        "ALTER TABLE companies DROP COLUMN inventory_valuation_method"
+    )
+    set = migrate_add(
+        set,
+        20260824044,
+        "add_companies_fiscal_year_start_month",
+        "ALTER TABLE companies ADD COLUMN fiscal_year_start_month BIGINT",
+        "ALTER TABLE companies DROP COLUMN fiscal_year_start_month"
+    )
+    set = migrate_add(
+        set,
+        20260824045,
+        "add_counterparts_contact_person",
+        "ALTER TABLE counterparts ADD COLUMN contact_person TEXT",
+        "ALTER TABLE counterparts DROP COLUMN contact_person"
+    )
+    set = migrate_add(
+        set,
+        20260824046,
+        "add_counterparts_post_code",
+        "ALTER TABLE counterparts ADD COLUMN post_code TEXT",
+        "ALTER TABLE counterparts DROP COLUMN post_code"
+    )
+    set = migrate_add(
+        set,
+        20260824047,
+        "add_counterparts_email",
+        "ALTER TABLE counterparts ADD COLUMN email TEXT",
+        "ALTER TABLE counterparts DROP COLUMN email"
+    )
+    return set
+}

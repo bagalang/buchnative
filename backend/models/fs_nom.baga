@@ -1,0 +1,121 @@
+// models/fs_nom.baga — каталог на бланките по СС 1 / СС 7. Без таблица.
+
+import "fs_nom_balance.baga"
+import "fs_nom_pl.baga"
+import "fs_nom_cash.baga"
+import "fs_nom_equity.baga"
+import "fmrbaga/jsonx.baga"
+import "std/str/str.baga"
+
+fn fs_nom_known(statement: str) -> i64 {
+    if statement == "balance" || statement == "pl" || statement == "cashflow" || statement == "equity" {
+        return 1
+    }
+    return 0
+}
+
+fn fs_nom_rows(statement: str) -> Vec<str> {
+    if statement == "balance" {
+        return fs_nom_balance_rows()
+    }
+    if statement == "pl" {
+        return fs_nom_pl_rows()
+    }
+    if statement == "cashflow" {
+        return fs_nom_cash_rows()
+    }
+    if statement == "equity" {
+        return fs_nom_equity_rows()
+    }
+    return vec_new()
+}
+
+fn fs_nom_at(p: Vec<str>, i: i64) -> str {
+    if i < vec_len(p) {
+        return vec_get(p, i)
+    }
+    return ""
+}
+
+fn fs_nom_parse(line: str) -> JObj {
+    let p = str_split(line, "|")
+    let mut o = jobj_new()
+    o = jobj_str(o, "code", fs_nom_at(p, 0))
+    o = jobj_str(o, "parent", fs_nom_at(p, 1))
+    o = jobj_str(o, "kind", fs_nom_at(p, 2))
+    o = jobj_str(o, "side", fs_nom_at(p, 3))
+    o = jobj_str(o, "name", fs_nom_at(p, 4))
+    return o
+}
+
+fn fs_nom_kind_of(statement: str, code: str) -> str {
+    let rows = fs_nom_rows(statement)
+    let mut i: i64 = 0
+    while i < vec_len(rows) {
+        let p = str_split(vec_get(rows, i), "|")
+        if fs_nom_at(p, 0) == code {
+            return fs_nom_at(p, 2)
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn fs_nom_parent_of(statement: str, code: str) -> str {
+    let rows = fs_nom_rows(statement)
+    let mut i: i64 = 0
+    while i < vec_len(rows) {
+        let p = str_split(vec_get(rows, i), "|")
+        if fs_nom_at(p, 0) == code {
+            return fs_nom_at(p, 1)
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn fs_nom_has_code(statement: str, code: str) -> i64 {
+    if fs_nom_kind_of(statement, code) == "" {
+        return 0
+    }
+    return 1
+}
+
+fn fs_nom_list_json(statement: str) -> JObj {
+    let rows = fs_nom_rows(statement)
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < vec_len(rows) {
+        arr = jarr_obj(arr, fs_nom_parse(vec_get(rows, i)))
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "statement", statement)
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", vec_len(rows))
+    return o
+}
+
+fn fs_nom_statements_json() -> JObj {
+    let mut arr = jarr_new()
+    let mut a = jobj_new()
+    a = jobj_str(a, "id", "balance")
+    a = jobj_str(a, "name", "Счетоводен баланс")
+    arr = jarr_obj(arr, a)
+    let mut b = jobj_new()
+    b = jobj_str(b, "id", "pl")
+    b = jobj_str(b, "name", "Отчет за приходите и разходите")
+    arr = jarr_obj(arr, b)
+    let mut c = jobj_new()
+    c = jobj_str(c, "id", "cashflow")
+    c = jobj_str(c, "name", "Отчет за паричните потоци")
+    arr = jarr_obj(arr, c)
+    let mut d = jobj_new()
+    d = jobj_str(d, "id", "equity")
+    d = jobj_str(d, "name", "Отчет за собствения капитал")
+    arr = jarr_obj(arr, d)
+    let mut o = jobj_new()
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", 4)
+    return o
+}

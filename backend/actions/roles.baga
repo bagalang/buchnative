@@ -1,0 +1,152 @@
+// actions/roles.baga — роли и права CRUD.
+
+import "../models/role.baga"
+import "acl.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/json/json.baga"
+import "std/json/json_write.baga"
+
+fn role_perms_from_body(d: JsonDoc, root: i64) -> str {
+    let n = json_get(d, root, "permissions")
+    if n < 0 {
+        return "[]"
+    }
+    return json_serialize(d, n)
+}
+
+fn act_roles_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "role:read")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let q = role_all(db)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    return act_ok(orm_db_q(q), role_list_json(q))
+}
+
+fn act_roles_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "role:create")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let name = jreq_str(b.doc, b.root, "name")
+    if name.ok == 0 {
+        return act_422_field(db, "name", name)
+    }
+    let description = jopt_str(b.doc, b.root, "description", "")
+    let perms = role_perms_from_body(b.doc, b.root)
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let ins = role_create(db, name.val, description.val, perms)?
+    if orm_ok_q(ins) == 0 || orm_nrows(ins) < 1 {
+        return act_err(orm_db_q(ins), 500, "role insert failed")
+    }
+    let new_id = orm_cell_by_i64(ins, 0, "id")
+    let q = role_find(orm_db_q(ins), new_id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_err(orm_db_q(q), 500, "role missing after create")
+    }
+    return act_created(orm_db_q(q), role_to_json(q, 0))
+}
+
+fn act_roles_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "role:update")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let cols = vec_new()
+    let vals = vec_new()
+    let nulls = vec_new()
+    let name = jreq_str(b.doc, b.root, "name")
+    if name.present == 1 {
+        if name.ok == 0 {
+            return act_422_field(db, "name", name)
+        }
+        vec_push(cols, "name")
+        vec_push(vals, name.val)
+        vec_push(nulls, 0)
+    }
+    let description = jreq_str(b.doc, b.root, "description")
+    if description.present == 1 {
+        if description.ok == 0 {
+            return act_422_field(db, "description", description)
+        }
+        vec_push(cols, "description")
+        vec_push(vals, description.val)
+        vec_push(nulls, 0)
+    }
+    let pn = json_get(b.doc, b.root, "permissions")
+    if pn >= 0 {
+        vec_push(cols, "permissions")
+        vec_push(vals, json_serialize(b.doc, pn))
+        vec_push(nulls, 0)
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    if vec_len(cols) == 0 {
+        let q0 = role_find(db, id)?
+        if orm_ok_q(q0) == 0 || orm_nrows(q0) < 1 {
+            return act_404(orm_db_q(q0), "Role not found")
+        }
+        return act_ok(orm_db_q(q0), role_to_json(q0, 0))
+    }
+    let upd = orm_update_by_id_full(db, role_table(), id, cols, vals, nulls)?
+    if orm_ok(upd) == 0 {
+        return act_err(orm_db_exec(upd), 500, orm_err_exec(upd))
+    }
+    let q = role_find(orm_db_exec(upd), id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "Role not found")
+    }
+    return act_ok(orm_db_q(q), role_to_json(q, 0))
+}
+
+fn act_roles_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "role:delete")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let del = role_delete(db, id)?
+    if orm_ok(del) == 0 {
+        return act_err(orm_db_exec(del), 500, orm_err_exec(del))
+    }
+    return act_no_content(orm_db_exec(del))
+}

@@ -1,0 +1,332 @@
+// schema_pg_b.baga — Postgres миграции на buchnative, втора половина
+// (изнесено от schema.baga заради filesize gate 600).
+
+import "ormbaga/migrate.baga"
+
+fn buchnative_migrations_b() -> MigrationSet {
+    let mut set = migrate_set_new()
+    set = migrate_add(
+        set,
+        20260824148,
+        "add_invoices_tax_event_date",
+        "ALTER TABLE invoices ADD COLUMN tax_event_date TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE invoices DROP COLUMN tax_event_date"
+    )
+    set = migrate_add(
+        set,
+        20260824149,
+        "add_invoices_payment_method",
+        "ALTER TABLE invoices ADD COLUMN payment_method TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE invoices DROP COLUMN payment_method"
+    )
+    set = migrate_add(
+        set,
+        20260824150,
+        "add_invoices_notes",
+        "ALTER TABLE invoices ADD COLUMN notes TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE invoices DROP COLUMN notes"
+    )
+    set = migrate_add(
+        set,
+        20260824151,
+        "add_invoices_journal_entry_id",
+        "ALTER TABLE invoices ADD COLUMN journal_entry_id BIGINT NOT NULL DEFAULT 0",
+        "ALTER TABLE invoices DROP COLUMN journal_entry_id"
+    )
+    set = migrate_add(
+        set,
+        20260824152,
+        "add_journal_entries_vat_type",
+        "ALTER TABLE journal_entries ADD COLUMN vat_type TEXT NOT NULL DEFAULT 'no_vat'",
+        "ALTER TABLE journal_entries DROP COLUMN vat_type"
+    )
+    set = migrate_add(
+        set,
+        20260824153,
+        "add_journal_entries_counterpart_id",
+        "ALTER TABLE journal_entries ADD COLUMN counterpart_id BIGINT NOT NULL DEFAULT 0",
+        "ALTER TABLE journal_entries DROP COLUMN counterpart_id"
+    )
+    set = migrate_add(
+        set,
+        20260824154,
+        "add_journal_entries_counterpart_name",
+        "ALTER TABLE journal_entries ADD COLUMN counterpart_name TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE journal_entries DROP COLUMN counterpart_name"
+    )
+    set = migrate_add(
+        set,
+        20260824155,
+        "add_journal_entries_counterpart_vat_number",
+        "ALTER TABLE journal_entries ADD COLUMN counterpart_vat_number TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE journal_entries DROP COLUMN counterpart_vat_number"
+    )
+    set = migrate_add(
+        set,
+        20260824156,
+        "add_journal_entries_document_number",
+        "ALTER TABLE journal_entries ADD COLUMN document_number TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE journal_entries DROP COLUMN document_number"
+    )
+    set = migrate_add(
+        set,
+        20260824157,
+        "add_journal_entries_document_date",
+        "ALTER TABLE journal_entries ADD COLUMN document_date TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE journal_entries DROP COLUMN document_date"
+    )
+    set = migrate_add(
+        set,
+        20260824158,
+        "add_journal_entries_vat_period",
+        "ALTER TABLE journal_entries ADD COLUMN vat_period TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE journal_entries DROP COLUMN vat_period"
+    )
+    set = migrate_add(
+        set,
+        20260824159,
+        "add_journal_entries_total_vat_amount",
+        "ALTER TABLE journal_entries ADD COLUMN total_vat_amount NUMERIC(18,2) NOT NULL DEFAULT 0",
+        "ALTER TABLE journal_entries DROP COLUMN total_vat_amount"
+    )
+    set = migrate_add(
+        set,
+        20260824160,
+        "add_journal_lines_vat_amount",
+        "ALTER TABLE journal_lines ADD COLUMN vat_amount NUMERIC(18,2) NOT NULL DEFAULT 0",
+        "ALTER TABLE journal_lines DROP COLUMN vat_amount"
+    )
+    set = migrate_add(
+        set,
+        20260824161,
+        "add_journal_entries_total_amount",
+        "ALTER TABLE journal_entries ADD COLUMN total_amount NUMERIC(18,2) NOT NULL DEFAULT 0",
+        "ALTER TABLE journal_entries DROP COLUMN total_amount"
+    )
+    set = migrate_add(
+        set,
+        20260824162,
+        "create_fixed_asset_categories",
+        "CREATE TABLE fixed_asset_categories (id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL, cita_category TEXT NOT NULL DEFAULT '', min_depreciation_rate NUMERIC(18,4) NOT NULL DEFAULT 0, max_depreciation_rate NUMERIC(18,4) NOT NULL DEFAULT 0, default_method TEXT NOT NULL DEFAULT 'linear', asset_account_id BIGINT, depreciation_account_id BIGINT, expense_account_id BIGINT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+        "DROP TABLE IF EXISTS fixed_asset_categories"
+    )
+    set = migrate_add(
+        set,
+        20260824163,
+        "add_fixed_assets_inventory_number",
+        "ALTER TABLE fixed_assets ADD COLUMN inventory_number TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE fixed_assets DROP COLUMN inventory_number"
+    )
+    set = migrate_add(
+        set,
+        20260824164,
+        "add_fixed_assets_category_id",
+        "ALTER TABLE fixed_assets ADD COLUMN category_id BIGINT NOT NULL DEFAULT 0",
+        "ALTER TABLE fixed_assets DROP COLUMN category_id"
+    )
+    set = migrate_add(
+        set,
+        20260824165,
+        "add_fixed_assets_put_into_service_date",
+        "ALTER TABLE fixed_assets ADD COLUMN put_into_service_date TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE fixed_assets DROP COLUMN put_into_service_date"
+    )
+    set = migrate_add(
+        set,
+        20260824166,
+        "add_fixed_assets_depreciation_method",
+        "ALTER TABLE fixed_assets ADD COLUMN depreciation_method TEXT NOT NULL DEFAULT 'linear'",
+        "ALTER TABLE fixed_assets DROP COLUMN depreciation_method"
+    )
+    set = migrate_add(
+        set,
+        20260824167,
+        "add_fixed_assets_accounting_depreciation_rate",
+        "ALTER TABLE fixed_assets ADD COLUMN accounting_depreciation_rate NUMERIC(18,4) NOT NULL DEFAULT 0",
+        "ALTER TABLE fixed_assets DROP COLUMN accounting_depreciation_rate"
+    )
+    set = migrate_add(
+        set,
+        20260824168,
+        "add_fixed_assets_tax_depreciation_rate",
+        "ALTER TABLE fixed_assets ADD COLUMN tax_depreciation_rate NUMERIC(18,4) NOT NULL DEFAULT 0",
+        "ALTER TABLE fixed_assets DROP COLUMN tax_depreciation_rate"
+    )
+    set = migrate_add(
+        set,
+        20260824169,
+        "add_fixed_assets_accumulated_depreciation",
+        "ALTER TABLE fixed_assets ADD COLUMN accumulated_depreciation NUMERIC(18,2) NOT NULL DEFAULT 0",
+        "ALTER TABLE fixed_assets DROP COLUMN accumulated_depreciation"
+    )
+    set = migrate_add(
+        set,
+        20260824170,
+        "add_fixed_assets_tax_accumulated_depreciation",
+        "ALTER TABLE fixed_assets ADD COLUMN tax_accumulated_depreciation NUMERIC(18,2) NOT NULL DEFAULT 0",
+        "ALTER TABLE fixed_assets DROP COLUMN tax_accumulated_depreciation"
+    )
+    set = migrate_add(
+        set,
+        20260824171,
+        "add_fixed_assets_status",
+        "ALTER TABLE fixed_assets ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
+        "ALTER TABLE fixed_assets DROP COLUMN status"
+    )
+    set = migrate_add(
+        set,
+        20260824172,
+        "add_fixed_assets_serial_number",
+        "ALTER TABLE fixed_assets ADD COLUMN serial_number TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE fixed_assets DROP COLUMN serial_number"
+    )
+    set = migrate_add(
+        set,
+        20260824173,
+        "add_fixed_assets_manufacturer",
+        "ALTER TABLE fixed_assets ADD COLUMN manufacturer TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE fixed_assets DROP COLUMN manufacturer"
+    )
+    set = migrate_add(
+        set,
+        20260824174,
+        "add_fixed_assets_model",
+        "ALTER TABLE fixed_assets ADD COLUMN model TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE fixed_assets DROP COLUMN model"
+    )
+    set = migrate_add(
+        set,
+        20260824175,
+        "add_fixed_assets_responsible_person",
+        "ALTER TABLE fixed_assets ADD COLUMN responsible_person TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE fixed_assets DROP COLUMN responsible_person"
+    )
+    set = migrate_add(
+        set,
+        20260824176,
+        "add_fixed_assets_is_conserved",
+        "ALTER TABLE fixed_assets ADD COLUMN is_conserved BIGINT NOT NULL DEFAULT 0",
+        "ALTER TABLE fixed_assets DROP COLUMN is_conserved"
+    )
+    set = migrate_add(
+        set,
+        20260824177,
+        "create_fixed_asset_events",
+        "CREATE TABLE fixed_asset_events (id BIGSERIAL PRIMARY KEY, asset_id BIGINT NOT NULL, event_type TEXT NOT NULL, event_date TEXT NOT NULL DEFAULT '', amount TEXT NOT NULL DEFAULT '', prev_value TEXT NOT NULL DEFAULT '', location TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+        "DROP TABLE IF EXISTS fixed_asset_events"
+    )
+    set = migrate_add(
+        set,
+        20260824178,
+        "add_invoice_lines_unit",
+        "ALTER TABLE invoice_lines ADD COLUMN unit TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE invoice_lines DROP COLUMN unit"
+    )
+    set = migrate_add(
+        set,
+        20260824179,
+        "add_invoices_discount_percent",
+        "ALTER TABLE invoices ADD COLUMN discount_percent NUMERIC(18,2) NOT NULL DEFAULT 0",
+        "ALTER TABLE invoices DROP COLUMN discount_percent"
+    )
+    set = migrate_add(
+        set,
+        20260824180,
+        "add_invoices_discount_amount",
+        "ALTER TABLE invoices ADD COLUMN discount_amount NUMERIC(18,2) NOT NULL DEFAULT 0",
+        "ALTER TABLE invoices DROP COLUMN discount_amount"
+    )
+    set = migrate_add(
+        set,
+        20260824181,
+        "add_invoices_vat_exemption_reason",
+        "ALTER TABLE invoices ADD COLUMN vat_exemption_reason TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE invoices DROP COLUMN vat_exemption_reason"
+    )
+    // Видовете данъчни документи стават кодовете по ППДДС: 01 фактура, 02 дебитно, 03 кредитно.
+    set = migrate_add(
+        set,
+        20260824182,
+        "invoice_doc_types_to_ppdds_01",
+        "UPDATE invoices SET document_type = '01' WHERE document_type = 'invoice'",
+        "UPDATE invoices SET document_type = 'invoice' WHERE document_type = '01'"
+    )
+    set = migrate_add(
+        set,
+        20260824183,
+        "invoice_doc_types_to_ppdds_02",
+        "UPDATE invoices SET document_type = '02' WHERE document_type = 'debit_note'",
+        "UPDATE invoices SET document_type = 'debit_note' WHERE document_type = '02'"
+    )
+    set = migrate_add(
+        set,
+        20260824184,
+        "invoice_doc_types_to_ppdds_03",
+        "UPDATE invoices SET document_type = '03' WHERE document_type = 'credit_note'",
+        "UPDATE invoices SET document_type = 'credit_note' WHERE document_type = '03'"
+    )
+    set = migrate_add(
+        set,
+        20260824185,
+        "journal_doc_types_to_ppdds_01",
+        "UPDATE journal_entries SET document_type = '01' WHERE document_type = 'invoice'",
+        "UPDATE journal_entries SET document_type = 'invoice' WHERE document_type = '01'"
+    )
+    set = migrate_add(
+        set,
+        20260824186,
+        "invoices_document_type_default_01",
+        "ALTER TABLE invoices ALTER COLUMN document_type SET DEFAULT '01'",
+        "ALTER TABLE invoices ALTER COLUMN document_type SET DEFAULT 'invoice'"
+    )
+    // Обменни курсове на ЕЦБ (eurofxref); курс за 1 EUR, rate като TEXT за точност.
+    set = migrate_add(
+        set,
+        20260824187,
+        "create_exchange_rates",
+        "CREATE TABLE exchange_rates (id BIGSERIAL PRIMARY KEY, currency_code TEXT NOT NULL, rate TEXT NOT NULL, date TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+        "DROP TABLE IF EXISTS exchange_rates"
+    )
+    set = migrate_add(
+        set,
+        20260824188,
+        "exchange_rates_currency_date_unique",
+        "CREATE UNIQUE INDEX exchange_rates_currency_date_idx ON exchange_rates (currency_code, date)",
+        "DROP INDEX IF EXISTS exchange_rates_currency_date_idx"
+    )
+    // P21 unique вече е в 24188; date индексът обслужва by-date и latest (P5 ORDER BY/LIMIT).
+    set = migrate_add(
+        set,
+        20260824189,
+        "index_exchange_rates_date",
+        "CREATE INDEX IF NOT EXISTS index_exchange_rates_date ON exchange_rates (date)",
+        "DROP INDEX IF EXISTS index_exchange_rates_date"
+    )
+    set = migrate_add(
+        set,
+        20260824190,
+        "index_fixed_asset_events_asset_id",
+        "CREATE INDEX IF NOT EXISTS index_fixed_asset_events_asset_id ON fixed_asset_events (asset_id)",
+        "DROP INDEX IF EXISTS index_fixed_asset_events_asset_id"
+    )
+    set = migrate_add(
+        set,
+        20260824191,
+        "index_invoices_original_invoice_id",
+        "CREATE INDEX IF NOT EXISTS index_invoices_original_invoice_id ON invoices (original_invoice_id)",
+        "DROP INDEX IF EXISTS index_invoices_original_invoice_id"
+    )
+    // Суровият (дълъг) адрес от VIES се пази отделно; структурираните полета
+    // address/city/post_code се пълнят от парсването (SAF-T BG).
+    set = migrate_add(
+        set,
+        20260824192,
+        "add_counterparts_vies_address",
+        "ALTER TABLE counterparts ADD COLUMN vies_address TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE counterparts DROP COLUMN vies_address"
+    )
+    return set
+}
+
+// Исторически BoilaSQL набор (преди P20–P21). Нови миграции оттук нататък
+// ползват текущия диалект: UNIQUE INDEX, IF NOT EXISTS, DROP INDEX … ON t.

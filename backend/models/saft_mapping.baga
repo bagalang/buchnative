@@ -1,0 +1,264 @@
+// models/saft_mapping.baga — Дт/Кт кореспонденции → SAF-T тип движение.
+// kind: stock | asset | cash. Шаблонът на сметка допуска * (префикс).
+
+import "saft_nom_movements.baga"
+import "ormbaga/orm.baga"
+import "ormbaga/sql.baga"
+import "fmrbaga/jsonx.baga"
+import "pgbaga/pg.baga"
+import "std/str/str.baga"
+import "std/os/os.baga"
+
+fn smap_table() -> str {
+    return "saft_account_mappings"
+}
+
+fn smap_backend_boila() -> i64 !IO {
+    let be = env("ORM_BACKEND")?
+    if be == "boila" || be == "boiladb" || be == "boilaDB" {
+        return 1
+    }
+    return 0
+}
+
+fn smap_kind_ok(kind: str) -> i64 {
+    if kind == "stock" || kind == "asset" || kind == "cash" {
+        return 1
+    }
+    return 0
+}
+
+fn smap_type_rows(kind: str) -> Vec<str> {
+    if kind == "stock" {
+        return saft_stock_movement_rows()
+    }
+    if kind == "asset" {
+        return saft_asset_movement_rows()
+    }
+    if kind == "cash" {
+        return saft_cash_movement_rows()
+    }
+    return vec_new()
+}
+
+fn smap_type_name(kind: str, code: str) -> str {
+    let rows = smap_type_rows(kind)
+    let mut i: i64 = 0
+    while i < vec_len(rows) {
+        let p = str_split(vec_get(rows, i), "|")
+        if vec_len(p) > 1 {
+            if vec_get(p, 0) == code {
+                return vec_get(p, 1)
+            }
+        }
+        i = i + 1
+    }
+    return code
+}
+
+fn smap_type_known(kind: str, code: str) -> i64 {
+    if code == "" {
+        return 0
+    }
+    let rows = smap_type_rows(kind)
+    let mut i: i64 = 0
+    while i < vec_len(rows) {
+        let p = str_split(vec_get(rows, i), "|")
+        if vec_len(p) > 0 {
+            if vec_get(p, 0) == code {
+                return 1
+            }
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+fn smap_types_json(kind: str) -> JArr {
+    let rows = smap_type_rows(kind)
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < vec_len(rows) {
+        let p = str_split(vec_get(rows, i), "|")
+        let mut o = jobj_new()
+        let mut code = ""
+        let mut name = ""
+        let mut name_en = ""
+        if vec_len(p) > 0 {
+            code = vec_get(p, 0)
+        }
+        if vec_len(p) > 1 {
+            name = vec_get(p, 1)
+        }
+        if vec_len(p) > 2 {
+            name_en = vec_get(p, 2)
+        }
+        o = jobj_str(o, "code", code)
+        o = jobj_str(o, "name", name)
+        o = jobj_str(o, "name_en", name_en)
+        arr = jarr_obj(arr, o)
+        i = i + 1
+    }
+    return arr
+}
+
+// Шаблон: "302*" = префикс; без * — точно или аналитично продължение (3021).
+fn smap_pattern_ok(account: str, pattern: str, analytical: str) -> i64 {
+    if analytical != "" {
+        if str_ends_with(analytical, "*") {
+            let prefix = substr(analytical, 0, len(analytical) - 1)
+            if str_starts_with(account, prefix) {
+                return 1
+            }
+            return 0
+        }
+        if account == analytical {
+            return 1
+        }
+        if str_starts_with(account, analytical) {
+            return 1
+        }
+        return 0
+    }
+    if pattern == "" {
+        return 0
+    }
+    if str_ends_with(pattern, "*") {
+        let prefix = substr(pattern, 0, len(pattern) - 1)
+        if str_starts_with(account, prefix) {
+            return 1
+        }
+        return 0
+    }
+    if account == pattern {
+        return 1
+    }
+    if str_starts_with(account, pattern) {
+        return 1
+    }
+    return 0
+}
+
+fn smap_matches(dt: str, kt: str, debit: str, credit: str, debit_an: str, credit_an: str) -> i64 {
+    if smap_pattern_ok(dt, debit, debit_an) == 0 {
+        return 0
+    }
+    if smap_pattern_ok(kt, credit, credit_an) == 0 {
+        return 0
+    }
+    return 1
+}
+
+fn smap_select_sql() -> str {
+    return "SELECT id, company_id, kind, type_code, debit_account, credit_account, debit_analytical, credit_analytical, description, is_active FROM saft_account_mappings"
+}
+
+fn smap_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_i64(o, "company_id", orm_cell_by_i64(q, row, "company_id"))
+    let kind = orm_cell_by(q, row, "kind")
+    let code = orm_cell_by(q, row, "type_code")
+    o = jobj_str(o, "kind", kind)
+    o = jobj_str(o, "type_code", code)
+    o = jobj_str(o, "type_name", smap_type_name(kind, code))
+    o = jobj_str(o, "debit_account", orm_cell_by(q, row, "debit_account"))
+    o = jobj_str(o, "credit_account", orm_cell_by(q, row, "credit_account"))
+    o = jobj_str(o, "debit_analytical", orm_cell_by(q, row, "debit_analytical"))
+    o = jobj_str(o, "credit_analytical", orm_cell_by(q, row, "credit_analytical"))
+    o = jobj_str(o, "description", orm_cell_by(q, row, "description"))
+    o = jobj_i64(o, "is_active", orm_cell_by_i64(q, row, "is_active"))
+    return o
+}
+
+fn smap_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
+    let sql = concat(smap_select_sql(), " WHERE id = $1")
+    let vals = vec_new()
+    let nulls = vec_new()
+    pg_param_i64(vals, nulls, id)
+    return orm_query_params(db, sql, vals, nulls)?
+}
+
+fn smap_by_company(db: OrmDb, company_id: i64) -> OrmQuery !IO !Net {
+    let sql = concat(smap_select_sql(), " WHERE company_id = $1 ORDER BY id")
+    let vals = vec_new()
+    let nulls = vec_new()
+    pg_param_i64(vals, nulls, company_id)
+    return orm_query_params(db, sql, vals, nulls)?
+}
+
+fn smap_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return orm_count_sql(db, "SELECT MAX(id) AS count FROM saft_account_mappings")?
+}
+
+fn smap_insert(db: OrmDb, cols: Vec<str>, vals: Vec<str>) -> OrmQuery !IO !Net {
+    let nulls = vec_new()
+    let mut i: i64 = 0
+    let n = vec_len(cols)
+    if smap_backend_boila()? == 1 {
+        let c = smap_next_id(db)?
+        if orm_ok_c(c) == 0 {
+            return OrmQErr(OrmQueryFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
+        }
+        let nid = orm_count_n(c) + 1
+        let d = orm_db_c(c)
+        let allc = vec_new()
+        vec_push(allc, "id")
+        i = 0
+        while i < n {
+            vec_push(allc, vec_get(cols, i))
+            i = i + 1
+        }
+        let allv = vec_new()
+        vec_push(allv, int_to_str(nid))
+        i = 0
+        while i < n {
+            vec_push(allv, vec_get(vals, i))
+            i = i + 1
+        }
+        i = 0
+        while i < n + 1 {
+            vec_push(nulls, 0)
+            i = i + 1
+        }
+        return orm_insert_returning_full(d, smap_table(), allc, allv, nulls)?
+    }
+    i = 0
+    while i < n {
+        vec_push(nulls, 0)
+        i = i + 1
+    }
+    return orm_insert_returning_full(db, smap_table(), cols, vals, nulls)?
+}
+
+fn smap_create(db: OrmDb, company_id: i64, kind: str, type_code: str, debit: str, credit: str, debit_an: str, credit_an: str, description: str) -> OrmQuery !IO !Net {
+    let cols = vec_new()
+    vec_push(cols, "company_id")
+    vec_push(cols, "kind")
+    vec_push(cols, "type_code")
+    vec_push(cols, "debit_account")
+    vec_push(cols, "credit_account")
+    vec_push(cols, "debit_analytical")
+    vec_push(cols, "credit_analytical")
+    vec_push(cols, "description")
+    vec_push(cols, "is_active")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(company_id))
+    vec_push(vals, kind)
+    vec_push(vals, type_code)
+    vec_push(vals, debit)
+    vec_push(vals, credit)
+    vec_push(vals, debit_an)
+    vec_push(vals, credit_an)
+    vec_push(vals, description)
+    vec_push(vals, "1")
+    return smap_insert(db, cols, vals)?
+}
+
+fn smap_update(db: OrmDb, id: i64, cols: Vec<str>, vals: Vec<str>) -> OrmExec !IO !Net {
+    return orm_update_by_id(db, smap_table(), id, cols, vals)?
+}
+
+fn smap_delete(db: OrmDb, id: i64) -> OrmExec !IO !Net {
+    return orm_delete_by_id(db, smap_table(), id)?
+}

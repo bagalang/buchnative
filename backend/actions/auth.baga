@@ -1,0 +1,214 @@
+// actions/auth.baga — вход с email/парола; JWT през jwtbaga (fmr_issue_token).
+// Празен users = bootstrap за seed. После паролата се проверява.
+
+import "../models/user.baga"
+import "acl.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/deps.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+import "std/time/time.baga"
+import "std/os/os.baga"
+
+fn auth_default_sub() -> str {
+    return "superadmin"
+}
+
+fn auth_default_pass() -> str {
+    return "123+123"
+}
+
+fn auth_is_default(sub: str, password: str) -> i64 {
+    if sub == auth_default_sub() && password == auth_default_pass() {
+        return 1
+    }
+    return 0
+}
+
+fn auth_ttl_sec() -> i64 !IO {
+    let raw = env("FMR_JWT_TTL_SEC")?
+    if raw == "" {
+        return 604800
+    }
+    let n = parse_int(raw)
+    if n < 300 {
+        return 604800
+    }
+    return n
+}
+
+fn auth_issue(ctx: FmrCtx, db: OrmDb, sub: str) -> FmrOut !Time !IO {
+    let now = time_now_ms()? / 1000
+    let ttl = auth_ttl_sec()?
+    let extra = concat("\"iat\":", int_to_str(now))
+    let extra_exp = concat(extra, concat(",\"exp\":", int_to_str(now + ttl)))
+    let extra2 = concat(extra_exp, ",\"iss\":\"buchnative\"")
+    let token = fmr_issue_token(ctx.jwt_secret, sub, extra2)
+    let mut o = jobj_new()
+    o = jobj_str(o, "access_token", token)
+    o = jobj_str(o, "token_type", "bearer")
+    o = jobj_str(o, "sub", sub)
+    o = jobj_i64(o, "expires_in", ttl)
+    return act_ok(db, o)
+}
+
+fn auth_issue_mfa(ctx: FmrCtx, db: OrmDb, sub: str) -> FmrOut !Time !IO {
+    let now = time_now_ms()? / 1000
+    let ttl: i64 = 300
+    let extra = concat("\"iat\":", int_to_str(now))
+    let extra_exp = concat(extra, concat(",\"exp\":", int_to_str(now + ttl)))
+    let extra2 = concat(extra_exp, ",\"iss\":\"buchnative\",\"mfa\":1")
+    let token = fmr_issue_token(ctx.jwt_secret, sub, extra2)
+    let mut o = jobj_new()
+    o = jobj_str(o, "mfa", "totp")
+    o = jobj_str(o, "mfa_token", token)
+    o = jobj_i64(o, "expires_in", ttl)
+    o = jobj_str(o, "message", "Въведи кода от приложението или резервен код")
+    return act_ok(db, o)
+}
+
+fn auth_provision_superadmin(db: OrmDb) -> FmrOut !IO !Net {
+    let sub = auth_default_sub()
+    let hash = user_hash_password(sub, auth_default_pass())
+    let uq = user_by_email(db, sub)?
+    if orm_ok_q(uq) == 0 {
+        return act_err(orm_db_q(uq), 500, orm_err_q(uq))
+    }
+    if orm_nrows(uq) > 0 {
+        let id = orm_cell_by_i64(uq, 0, "id")
+        let cols = vec_new()
+        vec_push(cols, "password_hash")
+        vec_push(cols, "is_active")
+        vec_push(cols, "is_super_admin")
+        let vals = vec_new()
+        vec_push(vals, hash)
+        vec_push(vals, "1")
+        vec_push(vals, "1")
+        let up = orm_update_by_id(orm_db_q(uq), user_table(), id, cols, vals)?
+        if orm_ok(up) == 0 {
+            return act_err(orm_db_exec(up), 500, orm_err_exec(up))
+        }
+        return FmrOut { resp: fmr_json(200, "{}"), db: orm_db_exec(up) }
+    }
+    let ins = user_create(orm_db_q(uq), sub, "Superadmin", hash, "super_admin", 1, 1, 0)?
+    if orm_ok_q(ins) == 0 {
+        return act_err(orm_db_q(ins), 500, orm_err_q(ins))
+    }
+    return FmrOut { resp: fmr_json(200, "{}"), db: orm_db_q(ins) }
+}
+
+fn act_token(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    let mut sub = fmr_query(ctx, "sub")
+    let mut password = fmr_query(ctx, "password")
+    if sub == "" || password == "" {
+        let body = jbody_parse_str(fmr_body(ctx))
+        if body.ok == 1 {
+            let b2 = jbody_require_object(body)
+            if b2.ok == 1 {
+                if sub == "" {
+                    let f = jreq_str(b2.doc, b2.root, "sub")
+                    if f.ok == 0 {
+                        let em = jreq_str(b2.doc, b2.root, "email")
+                        if em.ok == 1 {
+                            sub = em.val
+                        }
+                    } else {
+                        sub = f.val
+                    }
+                }
+                if password == "" {
+                    let pw = jreq_str(b2.doc, b2.root, "password")
+                    if pw.ok == 1 {
+                        password = pw.val
+                    }
+                }
+            } else {
+                if fmr_body(ctx) != "" {
+                    return act_err(db, 400, b2.err)
+                }
+            }
+        } else {
+            if fmr_body(ctx) != "" {
+                return act_err(db, 400, body.err)
+            }
+        }
+    }
+    if sub == "" {
+        return fmr_out(fmr_422_field("sub", "email или sub е задължителен", "value_error.missing"), db)
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let c = user_count(db)?
+    if orm_ok_c(c) == 0 {
+        return act_err(orm_db_c(c), 500, orm_err_c(c))
+    }
+    if orm_count_n(c) < 1 {
+        if auth_is_default(sub, password) == 1 {
+            let p = auth_provision_superadmin(orm_db_c(c))?
+            return auth_issue(ctx, p.db, sub)
+        }
+        return auth_issue(ctx, orm_db_c(c), sub)
+    }
+    let uq = user_by_email(orm_db_c(c), sub)?
+    if orm_ok_q(uq) == 0 {
+        return act_err(orm_db_q(uq), 500, orm_err_q(uq))
+    }
+    if orm_nrows(uq) < 1 {
+        if auth_is_default(sub, password) == 1 {
+            let p = auth_provision_superadmin(orm_db_q(uq))?
+            return auth_issue(ctx, p.db, sub)
+        }
+        return act_err(orm_db_q(uq), 401, "грешен потребител или парола")
+    }
+    let actv = orm_cell_by(uq, 0, "is_active")
+    if actv == "0" {
+        return act_err(orm_db_q(uq), 403, "потребителят е неактивен")
+    }
+    if password == "" {
+        return act_err(orm_db_q(uq), 401, "грешен потребител или парола")
+    }
+    let email = orm_cell_by(uq, 0, "email")
+    let hash = orm_cell_by(uq, 0, "password_hash")
+    let want = user_hash_password(email, password)
+    if hash != want {
+        if auth_is_default(sub, password) == 1 {
+            let p = auth_provision_superadmin(orm_db_q(uq))?
+            return auth_issue(ctx, p.db, sub)
+        }
+        return act_err(orm_db_q(uq), 401, "грешен потребител или парола")
+    }
+    if orm_cell_by_i64(uq, 0, "totp_enabled") == 1 {
+        return auth_issue_mfa(ctx, orm_db_q(uq), email)
+    }
+    return auth_issue(ctx, orm_db_q(uq), email)
+}
+
+fn act_me(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "sub", auth.ctx.user_sub)
+    let uq = user_by_email(db, auth.ctx.user_sub)?
+    if orm_ok_q(uq) == 1 && orm_nrows(uq) > 0 {
+        o = jobj_i64(o, "id", orm_cell_by_i64(uq, 0, "id"))
+        o = jobj_str(o, "email", orm_cell_by(uq, 0, "email"))
+        o = jobj_str(o, "name", orm_cell_by(uq, 0, "name"))
+        o = jobj_i64(o, "is_super_admin", orm_cell_by_i64(uq, 0, "is_super_admin"))
+        o = jobj_i64(o, "role_id", orm_cell_by_i64(uq, 0, "role_id"))
+        o = jobj_i64(o, "totp_enabled", orm_cell_by_i64(uq, 0, "totp_enabled"))
+        let perms = acl_user_perms_json(orm_db_q(uq), auth.ctx.user_sub)?
+        o = jobj_raw(o, "permissions", perms)
+        return act_ok(orm_db_q(uq), o)
+    }
+    o = jobj_raw(o, "permissions", "[]")
+    return act_ok(orm_db_q(uq), o)
+}

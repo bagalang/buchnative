@@ -1,0 +1,134 @@
+// actions/bank_parse_types.baga — модели и общи помощници за парсване на
+// банкови извлечения. Сумите са десимални (bagadecimal) като стрингове —
+// никога f64. Чисти функции (без IO).
+import "bagadecimal/src/decimal.baga"
+import "std/str/str.baga"
+// ─── Модели на парснатите данни ───
+struct ParsedTx {
+    date: str,
+    amount: str,      // десимален стринг, може да е отрицателен
+    currency: str,
+    description: str,
+    contra_name: str,
+    contra_iban: str,
+    reference: str,
+    is_duplicate: i64
+}
+struct ParseResult {
+    format_name: str,
+    account_iban: str,
+    account_currency: str,
+    txs: Vec<ParsedTx>,
+    total_count: i64,
+    duplicate_count: i64,
+    new_count: i64
+}
+fn parsed_tx_new() -> ParsedTx {
+    return ParsedTx { date: "", amount: "", currency: "", description: "", contra_name: "", contra_iban: "", reference: "", is_duplicate: 0 }
+}
+fn parse_result_new(format_name: str) -> ParseResult {
+    return ParseResult { format_name: format_name, account_iban: "", account_currency: "", txs: vec_new(), total_count: 0, duplicate_count: 0, new_count: 0 }
+}
+// ─── Общи помощници ───
+fn bp_lower(s: str) -> str {
+    let mut out = ""
+    for i in 0..len(s) {
+        let c = char_at(s, i)
+        if c >= 65 && c <= 90 {
+            out = concat(out, chr(c + 32))
+        } else {
+            out = concat(out, chr(c))
+        }
+    }
+    return out
+}
+fn bp_is_digit(c: i64) -> i64 {
+    if c >= 48 && c <= 57 {
+        return 1
+    }
+    return 0
+}
+fn bp_is_alpha(c: i64) -> i64 {
+    if (c >= 65 && c <= 90) || (c >= 97 && c <= 122) {
+        return 1
+    }
+    return 0
+}
+// "DD/MM/YYYY" или "DD.MM.YYYY" → "YYYY-MM-DD".
+fn bp_date_dmy(s: str) -> str {
+    let parts = str_split(s, "/")
+    if vec_len(parts) == 3 && len(vec_get(parts, 2)) == 4 {
+        return concat(concat(concat(vec_get(parts, 2), "-"), vec_get(parts, 1)), concat("-", vec_get(parts, 0)))
+    }
+    let parts2 = str_split(s, ".")
+    if vec_len(parts2) == 3 && len(vec_get(parts2, 2)) == 4 {
+        return concat(concat(concat(vec_get(parts2, 2), "-"), vec_get(parts2, 1)), concat("-", vec_get(parts2, 0)))
+    }
+    return s
+}
+// Гъвкава дата → "YYYY-MM-DD"; "" при неуспех.
+fn bp_flex_date(s: str) -> str {
+    let t = str_trim(s)
+    if t == "" {
+        return ""
+    }
+    if len(t) == 10 && char_at(t, 4) == 45 {
+        return t
+    }
+    let parts = str_split(t, "/")
+    if vec_len(parts) == 3 && len(vec_get(parts, 2)) == 4 {
+        return concat(concat(concat(vec_get(parts, 2), "-"), vec_get(parts, 1)), concat("-", vec_get(parts, 0)))
+    }
+    let parts2 = str_split(t, ".")
+    if vec_len(parts2) == 3 && len(vec_get(parts2, 2)) == 4 {
+        return concat(concat(concat(vec_get(parts2, 2), "-"), vec_get(parts2, 1)), concat("-", vec_get(parts2, 0)))
+    }
+    let parts3 = str_split(t, "-")
+    if vec_len(parts3) == 3 && len(vec_get(parts3, 0)) == 2 && len(vec_get(parts3, 2)) == 4 {
+        return concat(concat(concat(vec_get(parts3, 2), "-"), vec_get(parts3, 1)), concat("-", vec_get(parts3, 0)))
+    }
+    return ""
+}
+// Оставя само цифри, точка, запетая и минус.
+fn bp_amt_clean(s: str) -> str {
+    let mut out = ""
+    for i in 0..len(s) {
+        let c = char_at(s, i)
+        if (c >= 48 && c <= 57) || c == 46 || c == 44 || c == 45 {
+            out = concat(out, chr(c))
+        }
+    }
+    return out
+}
+// Нормализира сумата към "1234.56" (запетая = десетична или хилядна).
+fn bp_amt_norm(s: str) -> str {
+    let c = bp_amt_clean(s)
+    if c == "" {
+        return ""
+    }
+    let has_comma = str_find(c, ",") >= 0
+    let has_dot = str_find(c, ".") >= 0
+    if has_comma != 0 && has_dot != 0 {
+        return str_replace(c, ",", "")
+    }
+    if has_comma != 0 {
+        return str_replace(c, ",", ".")
+    }
+    return c
+}
+// Сума → каноничен десимален стринг с 2 знака; "" при неуспех.
+fn bp_money(s: str) -> str {
+    let n = bp_amt_norm(s)
+    if n == "" {
+        return ""
+    }
+    let p = dec_parse(n)
+    if p.ok == 0 {
+        return ""
+    }
+    let r = dec_round_dp(p.value, 2)
+    if r.ok == 0 {
+        return ""
+    }
+    return dec_to_string(r.value)
+}

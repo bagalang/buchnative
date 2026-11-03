@@ -1,0 +1,308 @@
+// models/production.baga — рецепти (BOM) и производствени поръчки.
+// Суми и количества са NUMERIC като стринг.
+
+import "ormbaga/orm.baga"
+import "ormbaga/sql.baga"
+import "fmrbaga/jsonx.baga"
+import "pgbaga/pg.baga"
+import "std/str/str.baga"
+import "std/os/os.baga"
+
+fn mfg_backend_boila() -> i64 !IO {
+    let be = env("ORM_BACKEND")?
+    if be == "boila" || be == "boiladb" || be == "boilaDB" {
+        return 1
+    }
+    return 0
+}
+
+fn recipe_table() -> str { return "recipes" }
+fn rline_table() -> str { return "recipe_lines" }
+fn pord_table() -> str { return "production_orders" }
+fn pline_table() -> str { return "production_order_lines" }
+
+fn recipe_select_sql() -> str {
+    return "SELECT id, company_id, code, name, output_product_id, output_quantity, output_unit, notes, is_active, created_at FROM recipes"
+}
+
+fn rline_select_sql() -> str {
+    return "SELECT id, recipe_id, product_id, quantity, unit, wastage_percent, line_no FROM recipe_lines"
+}
+
+fn pord_select_sql() -> str {
+    return "SELECT id, company_id, number, recipe_id, output_product_id, quantity, location_id, order_date, status, notes, material_cost, journal_entry_id, created_at FROM production_orders"
+}
+
+fn pline_select_sql() -> str {
+    return "SELECT id, order_id, product_id, product_name, quantity, unit, unit_cost, amount FROM production_order_lines"
+}
+
+fn recipe_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_i64(o, "company_id", orm_cell_by_i64(q, row, "company_id"))
+    o = jobj_str(o, "code", orm_cell_by(q, row, "code"))
+    o = jobj_str(o, "name", orm_cell_by(q, row, "name"))
+    o = jobj_i64(o, "output_product_id", orm_cell_by_i64(q, row, "output_product_id"))
+    o = jobj_str(o, "output_quantity", orm_cell_by(q, row, "output_quantity"))
+    o = jobj_str(o, "output_unit", orm_cell_by(q, row, "output_unit"))
+    o = jobj_str(o, "notes", orm_cell_by(q, row, "notes"))
+    o = jobj_i64(o, "is_active", orm_cell_by_i64(q, row, "is_active"))
+    return o
+}
+
+fn rline_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_i64(o, "recipe_id", orm_cell_by_i64(q, row, "recipe_id"))
+    o = jobj_i64(o, "product_id", orm_cell_by_i64(q, row, "product_id"))
+    o = jobj_str(o, "quantity", orm_cell_by(q, row, "quantity"))
+    o = jobj_str(o, "unit", orm_cell_by(q, row, "unit"))
+    o = jobj_str(o, "wastage_percent", orm_cell_by(q, row, "wastage_percent"))
+    o = jobj_i64(o, "line_no", orm_cell_by_i64(q, row, "line_no"))
+    return o
+}
+
+fn pord_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_str(o, "number", orm_cell_by(q, row, "number"))
+    o = jobj_i64(o, "recipe_id", orm_cell_by_i64(q, row, "recipe_id"))
+    o = jobj_i64(o, "output_product_id", orm_cell_by_i64(q, row, "output_product_id"))
+    o = jobj_str(o, "quantity", orm_cell_by(q, row, "quantity"))
+    o = jobj_i64(o, "location_id", orm_cell_by_i64(q, row, "location_id"))
+    o = jobj_str(o, "order_date", orm_cell_by(q, row, "order_date"))
+    o = jobj_str(o, "status", orm_cell_by(q, row, "status"))
+    o = jobj_str(o, "notes", orm_cell_by(q, row, "notes"))
+    o = jobj_str(o, "material_cost", orm_cell_by(q, row, "material_cost"))
+    o = jobj_i64(o, "journal_entry_id", orm_cell_by_i64(q, row, "journal_entry_id"))
+    return o
+}
+
+fn pline_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_i64(o, "order_id", orm_cell_by_i64(q, row, "order_id"))
+    o = jobj_i64(o, "product_id", orm_cell_by_i64(q, row, "product_id"))
+    o = jobj_str(o, "product_name", orm_cell_by(q, row, "product_name"))
+    o = jobj_str(o, "quantity", orm_cell_by(q, row, "quantity"))
+    o = jobj_str(o, "unit", orm_cell_by(q, row, "unit"))
+    o = jobj_str(o, "unit_cost", orm_cell_by(q, row, "unit_cost"))
+    o = jobj_str(o, "amount", orm_cell_by(q, row, "amount"))
+    return o
+}
+
+fn mfg_find(db: OrmDb, sql0: str, id: i64) -> OrmQuery !IO !Net {
+    let sql = concat(sql0, " WHERE id = $1")
+    let vals = vec_new()
+    let nulls = vec_new()
+    pg_param_i64(vals, nulls, id)
+    return orm_query_params(db, sql, vals, nulls)?
+}
+
+fn mfg_by_company(db: OrmDb, sql0: str, company_id: i64, order: str) -> OrmQuery !IO !Net {
+    let sql = concat(concat(sql0, " WHERE company_id = $1 "), order)
+    let vals = vec_new()
+    let nulls = vec_new()
+    pg_param_i64(vals, nulls, company_id)
+    return orm_query_params(db, sql, vals, nulls)?
+}
+
+fn mfg_by_parent(db: OrmDb, sql0: str, col: str, pid: i64) -> OrmQuery !IO !Net {
+    let sql = concat(concat(sql0, concat(" WHERE ", col)), " = $1 ORDER BY id")
+    let vals = vec_new()
+    let nulls = vec_new()
+    pg_param_i64(vals, nulls, pid)
+    return orm_query_params(db, sql, vals, nulls)?
+}
+
+fn recipe_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net { return mfg_find(db, recipe_select_sql(), id)? }
+fn pord_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net { return mfg_find(db, pord_select_sql(), id)? }
+fn recipe_by_company(db: OrmDb, company_id: i64) -> OrmQuery !IO !Net {
+    return mfg_by_company(db, recipe_select_sql(), company_id, "ORDER BY name, id")?
+}
+fn pord_by_company(db: OrmDb, company_id: i64) -> OrmQuery !IO !Net {
+    return mfg_by_company(db, pord_select_sql(), company_id, "ORDER BY id DESC")?
+}
+fn rline_by_recipe(db: OrmDb, recipe_id: i64) -> OrmQuery !IO !Net {
+    return mfg_by_parent(db, rline_select_sql(), "recipe_id", recipe_id)?
+}
+fn pline_by_order(db: OrmDb, order_id: i64) -> OrmQuery !IO !Net {
+    return mfg_by_parent(db, pline_select_sql(), "order_id", order_id)?
+}
+
+fn mfg_next(db: OrmDb, table: str) -> OrmCount !IO !Net {
+    return orm_count_sql(db, concat("SELECT MAX(id) AS count FROM ", table))?
+}
+
+fn mfg_insert(db: OrmDb, table: str, cols: Vec<str>, vals: Vec<str>) -> OrmQuery !IO !Net {
+    let nulls = vec_new()
+    let mut i: i64 = 0
+    let n = vec_len(cols)
+    if mfg_backend_boila()? == 1 {
+        let c = mfg_next(db, table)?
+        if orm_ok_c(c) == 0 {
+            return OrmQErr(OrmQueryFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
+        }
+        let nid = orm_count_n(c) + 1
+        let mut d = orm_db_c(c)
+        let allc = vec_new()
+        vec_push(allc, "id")
+        i = 0
+        while i < n {
+            vec_push(allc, vec_get(cols, i))
+            i = i + 1
+        }
+        let allv = vec_new()
+        vec_push(allv, int_to_str(nid))
+        i = 0
+        while i < n {
+            vec_push(allv, vec_get(vals, i))
+            i = i + 1
+        }
+        i = 0
+        while i < n + 1 {
+            vec_push(nulls, 0)
+            i = i + 1
+        }
+        return orm_insert_returning_full(d, table, allc, allv, nulls)?
+    }
+    i = 0
+    while i < n {
+        vec_push(nulls, 0)
+        i = i + 1
+    }
+    return orm_insert_returning_full(db, table, cols, vals, nulls)?
+}
+
+fn recipe_create(db: OrmDb, company_id: i64, code: str, name: str, output_product_id: i64, output_quantity: str, output_unit: str, notes: str) -> OrmQuery !IO !Net {
+    let cols = vec_new()
+    vec_push(cols, "company_id")
+    vec_push(cols, "code")
+    vec_push(cols, "name")
+    vec_push(cols, "output_product_id")
+    vec_push(cols, "output_quantity")
+    vec_push(cols, "output_unit")
+    vec_push(cols, "notes")
+    vec_push(cols, "is_active")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(company_id))
+    vec_push(vals, code)
+    vec_push(vals, name)
+    vec_push(vals, int_to_str(output_product_id))
+    vec_push(vals, output_quantity)
+    vec_push(vals, output_unit)
+    vec_push(vals, notes)
+    vec_push(vals, "1")
+    return mfg_insert(db, recipe_table(), cols, vals)?
+}
+
+fn rline_create(db: OrmDb, recipe_id: i64, product_id: i64, quantity: str, unit: str, wastage: str, line_no: i64) -> OrmQuery !IO !Net {
+    let cols = vec_new()
+    vec_push(cols, "recipe_id")
+    vec_push(cols, "product_id")
+    vec_push(cols, "quantity")
+    vec_push(cols, "unit")
+    vec_push(cols, "wastage_percent")
+    vec_push(cols, "line_no")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(recipe_id))
+    vec_push(vals, int_to_str(product_id))
+    vec_push(vals, quantity)
+    vec_push(vals, unit)
+    vec_push(vals, wastage)
+    vec_push(vals, int_to_str(line_no))
+    return mfg_insert(db, rline_table(), cols, vals)?
+}
+
+fn pord_create(db: OrmDb, company_id: i64, number: str, recipe_id: i64, output_product_id: i64, quantity: str, location_id: i64, order_date: str, notes: str) -> OrmQuery !IO !Net {
+    let cols = vec_new()
+    vec_push(cols, "company_id")
+    vec_push(cols, "number")
+    vec_push(cols, "recipe_id")
+    vec_push(cols, "output_product_id")
+    vec_push(cols, "quantity")
+    vec_push(cols, "location_id")
+    vec_push(cols, "order_date")
+    vec_push(cols, "status")
+    vec_push(cols, "notes")
+    vec_push(cols, "material_cost")
+    vec_push(cols, "journal_entry_id")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(company_id))
+    vec_push(vals, number)
+    vec_push(vals, int_to_str(recipe_id))
+    vec_push(vals, int_to_str(output_product_id))
+    vec_push(vals, quantity)
+    vec_push(vals, int_to_str(location_id))
+    vec_push(vals, order_date)
+    vec_push(vals, "draft")
+    vec_push(vals, notes)
+    vec_push(vals, "0")
+    vec_push(vals, "0")
+    return mfg_insert(db, pord_table(), cols, vals)?
+}
+
+fn pline_create(db: OrmDb, order_id: i64, product_id: i64, product_name: str, quantity: str, unit: str) -> OrmQuery !IO !Net {
+    let cols = vec_new()
+    vec_push(cols, "order_id")
+    vec_push(cols, "product_id")
+    vec_push(cols, "product_name")
+    vec_push(cols, "quantity")
+    vec_push(cols, "unit")
+    vec_push(cols, "unit_cost")
+    vec_push(cols, "amount")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(order_id))
+    vec_push(vals, int_to_str(product_id))
+    vec_push(vals, product_name)
+    vec_push(vals, quantity)
+    vec_push(vals, unit)
+    vec_push(vals, "0")
+    vec_push(vals, "0")
+    return mfg_insert(db, pline_table(), cols, vals)?
+}
+
+fn rline_delete_by_recipe(db: OrmDb, recipe_id: i64) -> OrmExec !IO !Net {
+    let sql = "DELETE FROM recipe_lines WHERE recipe_id = $1"
+    let vals = vec_new()
+    let nulls = vec_new()
+    pg_param_i64(vals, nulls, recipe_id)
+    return orm_exec_params(db, sql, vals, nulls)?
+}
+
+fn pline_delete_by_order(db: OrmDb, order_id: i64) -> OrmExec !IO !Net {
+    let sql = "DELETE FROM production_order_lines WHERE order_id = $1"
+    let vals = vec_new()
+    let nulls = vec_new()
+    pg_param_i64(vals, nulls, order_id)
+    return orm_exec_params(db, sql, vals, nulls)?
+}
+
+fn recipe_delete(db: OrmDb, id: i64) -> OrmExec !IO !Net {
+    return orm_delete_by_id(db, recipe_table(), id)?
+}
+
+fn pord_delete(db: OrmDb, id: i64) -> OrmExec !IO !Net {
+    return orm_delete_by_id(db, pord_table(), id)?
+}
+
+fn rline_list_json(q: OrmQuery) -> JArr {
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        arr = jarr_obj(arr, rline_to_json(q, i))
+        i = i + 1
+    }
+    return arr
+}
+
+fn pline_list_json(q: OrmQuery) -> JArr {
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        arr = jarr_obj(arr, pline_to_json(q, i))
+        i = i + 1
+    }
+    return arr
+}

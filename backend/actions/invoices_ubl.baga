@@ -1,0 +1,523 @@
+// actions/invoices_ubl.baga — експорт на фактура като UBL 2.1 / Peppol BIS Billing 3.0 XML.
+// Основание за 0% ДДС: VATEX + UNCL5305. Валута ≠ EUR → TaxCurrencyCode EUR и курс (ЕЦБ).
+
+import "../models/invoice.baga"
+import "../models/counterpart.baga"
+import "../models/company.baga"
+import "../models/unit.baga"
+import "../models/vat_exemption.baga"
+import "acl.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "ormbaga/orm.baga"
+import "httpdbaga/http.baga"
+import "xmlbaga/xml.baga"
+import "std/str/str.baga"
+import "bagadecimal/src/decimal.baga"
+
+fn ubl_cbc(name: str, text: str) -> str {
+    if text == "" {
+        return ""
+    }
+    return xml_elem(concat("cbc:", name), xml_attrs_new(), text)
+}
+
+fn ubl_amt(name: str, currency: str, amount: str) -> str {
+    let a = xml_attrs_new()
+    map_set(a, "currencyID", currency)
+    let mut v = amount
+    if v == "" {
+        v = "0.00"
+    }
+    return xml_elem(concat("cbc:", name), a, v)
+}
+
+fn ubl_qty(name: str, unit: str, qty: str) -> str {
+    let a = xml_attrs_new()
+    map_set(a, "unitCode", unit)
+    let mut v = qty
+    if v == "" {
+        v = "0"
+    }
+    return xml_elem(concat("cbc:", name), a, v)
+}
+
+fn ubl_open(name: str) -> str {
+    return xml_open(concat("cac:", name), xml_attrs_new())
+}
+
+fn ubl_close(name: str) -> str {
+    return xml_close(concat("cac:", name))
+}
+
+fn ubl_doc_code(t: str) -> str {
+    if t == "proforma" { return "325" }
+    if t == "02" || t == "12" { return "383" }
+    if t == "03" || t == "13" || t == "23" { return "381" }
+    return "380"
+}
+
+fn ubl_is_credit(t: str) -> i64 {
+    if t == "03" || t == "13" || t == "23" {
+        return 1
+    }
+    return 0
+}
+
+fn ubl_pay_code(method: str) -> str {
+    if method == "в брой" { return "10" }
+    if method == "карта" { return "48" }
+    return "30"
+}
+
+fn ubl_unit(code: str) -> str {
+    if unit_known(code) == 1 {
+        return code
+    }
+    if code == "бр." || code == "бр" || code == "брой" { return "C62" }
+    if code == "кг" || code == "кг." { return "KGM" }
+    if code == "л" || code == "л." { return "LTR" }
+    if code == "м" || code == "м." { return "MTR" }
+    if code == "час" || code == "ч" { return "HUR" }
+    if code == "ден" || code == "дни" { return "DAY" }
+    if code == "пакет" || code == "опак." { return "PK" }
+    return "C62"
+}
+
+fn ubl_country(vat: str, fallback: str) -> str {
+    if len(vat) >= 2 {
+        let p = substr(vat, 0, 2)
+        if p == "EL" { return "GR" }
+        if p == "AT" || p == "BE" || p == "BG" || p == "CY" || p == "CZ" { return p }
+        if p == "DE" || p == "DK" || p == "EE" || p == "ES" || p == "FI" { return p }
+        if p == "FR" || p == "GR" || p == "HR" || p == "HU" || p == "IE" { return p }
+        if p == "IT" || p == "LT" || p == "LU" || p == "LV" || p == "MT" { return p }
+        if p == "NL" || p == "PL" || p == "PT" || p == "RO" || p == "SE" { return p }
+        if p == "SI" || p == "SK" { return p }
+    }
+    if fallback != "" { return fallback }
+    return "BG"
+}
+
+fn ubl_scheme(vat: str) -> str {
+    let c = ubl_country(vat, "BG")
+    if c == "BG" { return "9947" }
+    if c == "DE" { return "9930" }
+    if c == "AT" { return "9914" }
+    if c == "FR" { return "9957" }
+    if c == "IT" { return "9906" }
+    if c == "NL" { return "9944" }
+    if c == "PL" { return "9945" }
+    if c == "PT" { return "9946" }
+    if c == "RO" { return "9948" }
+    if c == "ES" { return "9920" }
+    if c == "SE" { return "9955" }
+    if c == "SK" { return "9929" }
+    if c == "SI" { return "9928" }
+    if c == "GR" { return "9933" }
+    if c == "HU" { return "9910" }
+    if c == "CZ" { return "9932" }
+    if c == "HR" { return "9934" }
+    if c == "DK" { return "9917" }
+    if c == "FI" { return "9935" }
+    if c == "IE" { return "9935" }
+    return "9947"
+}
+
+fn ubl_to_eur(amount: str, rate: str) -> str {
+    let a = dec_parse(amount)
+    let r = dec_parse(rate)
+    if a.ok == 0 || r.ok == 0 {
+        return amount
+    }
+    if dec_is_zero(r.value) == 1 {
+        return amount
+    }
+    let d = dec_div(a.value, r.value)
+    if d.ok == 0 {
+        return amount
+    }
+    let rnd = dec_round_dp(d.value, 2)
+    if rnd.ok == 0 {
+        return dec_to_string(d.value)
+    }
+    return dec_to_string(rnd.value)
+}
+
+fn ubl_inv_rate(rate: str) -> str {
+    let r = dec_parse(rate)
+    if r.ok == 0 || dec_is_zero(r.value) == 1 {
+        return "1"
+    }
+    let d = dec_div(dec_one(), r.value)
+    if d.ok == 0 {
+        return "1"
+    }
+    let rnd = dec_round_dp(d.value, 6)
+    if rnd.ok == 0 {
+        return dec_to_string(d.value)
+    }
+    return dec_to_string(rnd.value)
+}
+
+fn ubl_party(tag: str, name: str, eik: str, vat: str, address: str, city: str, post: str, country: str, email: str, phone: str) -> str {
+    let cc = ubl_country(vat, country)
+    let mut o = ubl_open(tag)
+    o = concat(o, ubl_open("Party"))
+    if vat != "" {
+        let a = xml_attrs_new()
+        map_set(a, "schemeID", ubl_scheme(vat))
+        o = concat(o, xml_elem("cbc:EndpointID", a, vat))
+    }
+    if eik != "" {
+        o = concat(o, ubl_open("PartyIdentification"))
+        let a = xml_attrs_new()
+        map_set(a, "schemeID", "0195")
+        o = concat(o, xml_elem("cbc:ID", a, eik))
+        o = concat(o, ubl_close("PartyIdentification"))
+    }
+    o = concat(o, ubl_open("PartyName"))
+    o = concat(o, ubl_cbc("Name", name))
+    o = concat(o, ubl_close("PartyName"))
+    o = concat(o, ubl_open("PostalAddress"))
+    o = concat(o, ubl_cbc("StreetName", address))
+    o = concat(o, ubl_cbc("CityName", city))
+    o = concat(o, ubl_cbc("PostalZone", post))
+    o = concat(o, ubl_open("Country"))
+    o = concat(o, ubl_cbc("IdentificationCode", cc))
+    o = concat(o, ubl_close("Country"))
+    o = concat(o, ubl_close("PostalAddress"))
+    if vat != "" {
+        o = concat(o, ubl_open("PartyTaxScheme"))
+        o = concat(o, ubl_cbc("CompanyID", vat))
+        o = concat(o, ubl_open("TaxScheme"))
+        o = concat(o, ubl_cbc("ID", "VAT"))
+        o = concat(o, ubl_close("TaxScheme"))
+        o = concat(o, ubl_close("PartyTaxScheme"))
+    }
+    o = concat(o, ubl_open("PartyLegalEntity"))
+    o = concat(o, ubl_cbc("RegistrationName", name))
+    if eik != "" {
+        let a = xml_attrs_new()
+        map_set(a, "schemeID", "0195")
+        o = concat(o, xml_elem("cbc:CompanyID", a, eik))
+    }
+    o = concat(o, ubl_close("PartyLegalEntity"))
+    if email != "" || phone != "" {
+        o = concat(o, ubl_open("Contact"))
+        o = concat(o, ubl_cbc("Telephone", phone))
+        o = concat(o, ubl_cbc("ElectronicMail", email))
+        o = concat(o, ubl_close("Contact"))
+    }
+    o = concat(o, ubl_close("Party"))
+    o = concat(o, ubl_close(tag))
+    return o
+}
+
+fn ubl_tax_category(rate: str, exemption: str) -> str {
+    let mut cat = "S"
+    let rp = dec_parse(rate)
+    if rp.ok == 1 && dec_cmp(rp.value, dec_zero()) == 0 {
+        cat = "Z"
+        if exemption != "" {
+            cat = vatex_category(exemption)
+        }
+    }
+    let mut o = ubl_open("TaxCategory")
+    o = concat(o, ubl_cbc("ID", cat))
+    o = concat(o, ubl_cbc("Percent", rate))
+    if cat != "S" && exemption != "" {
+        let uc = vatex_ubl_code(exemption)
+        if uc != "" {
+            o = concat(o, ubl_cbc("TaxExemptionReasonCode", uc))
+        }
+        o = concat(o, ubl_cbc("TaxExemptionReason", vatex_legal_en(exemption)))
+    }
+    o = concat(o, ubl_open("TaxScheme"))
+    o = concat(o, ubl_cbc("ID", "VAT"))
+    o = concat(o, ubl_close("TaxScheme"))
+    o = concat(o, ubl_close("TaxCategory"))
+    return o
+}
+
+fn ubl_tax_total(lq: OrmQuery, currency: str, vat_total: str, exemption: str) -> str {
+    let mut o = ubl_open("TaxTotal")
+    o = concat(o, ubl_amt("TaxAmount", currency, vat_total))
+    let rates: Vec<str> = vec_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(lq) {
+        let r = orm_cell_by(lq, i, "vat_rate")
+        let mut found: i64 = 0
+        let mut j: i64 = 0
+        while j < vec_len(rates) {
+            if vec_get(rates, j) == r { found = 1 }
+            j = j + 1
+        }
+        if found == 0 { vec_push(rates, r) }
+        i = i + 1
+    }
+    let mut k: i64 = 0
+    while k < vec_len(rates) {
+        let r = vec_get(rates, k)
+        let mut net = dec_zero()
+        let mut vat = dec_zero()
+        i = 0
+        while i < orm_nrows(lq) {
+            if orm_cell_by(lq, i, "vat_rate") == r {
+                let n = dec_parse(orm_cell_by(lq, i, "net_amount"))
+                let v = dec_parse(orm_cell_by(lq, i, "vat_amount"))
+                if n.ok == 1 {
+                    let a = dec_add(net, n.value)
+                    if a.ok == 1 { net = a.value }
+                }
+                if v.ok == 1 {
+                    let a = dec_add(vat, v.value)
+                    if a.ok == 1 { vat = a.value }
+                }
+            }
+            i = i + 1
+        }
+        o = concat(o, ubl_open("TaxSubtotal"))
+        o = concat(o, ubl_amt("TaxableAmount", currency, dec_to_string(net)))
+        o = concat(o, ubl_amt("TaxAmount", currency, dec_to_string(vat)))
+        o = concat(o, ubl_tax_category(r, exemption))
+        o = concat(o, ubl_close("TaxSubtotal"))
+        k = k + 1
+    }
+    o = concat(o, ubl_close("TaxTotal"))
+    return o
+}
+
+fn ubl_line(lq: OrmQuery, i: i64, currency: str, credit: i64, exemption: str) -> str {
+    let mut tag = "InvoiceLine"
+    let mut qtag = "InvoicedQuantity"
+    if credit == 1 {
+        tag = "CreditNoteLine"
+        qtag = "CreditedQuantity"
+    }
+    let mut o = ubl_open(tag)
+    o = concat(o, ubl_cbc("ID", int_to_str(i + 1)))
+    o = concat(o, ubl_qty(qtag, ubl_unit(orm_cell_by(lq, i, "unit")), orm_cell_by(lq, i, "quantity")))
+    o = concat(o, ubl_amt("LineExtensionAmount", currency, orm_cell_by(lq, i, "net_amount")))
+    o = concat(o, ubl_open("Item"))
+    o = concat(o, ubl_cbc("Name", orm_cell_by(lq, i, "description")))
+    o = concat(o, ubl_open("ClassifiedTaxCategory"))
+    let rate = orm_cell_by(lq, i, "vat_rate")
+    let mut cat = "S"
+    let rp = dec_parse(rate)
+    if rp.ok == 1 && dec_cmp(rp.value, dec_zero()) == 0 {
+        cat = "Z"
+        if exemption != "" { cat = vatex_category(exemption) }
+    }
+    o = concat(o, ubl_cbc("ID", cat))
+    o = concat(o, ubl_cbc("Percent", rate))
+    o = concat(o, ubl_open("TaxScheme"))
+    o = concat(o, ubl_cbc("ID", "VAT"))
+    o = concat(o, ubl_close("TaxScheme"))
+    o = concat(o, ubl_close("ClassifiedTaxCategory"))
+    o = concat(o, ubl_close("Item"))
+    o = concat(o, ubl_open("Price"))
+    o = concat(o, ubl_amt("PriceAmount", currency, orm_cell_by(lq, i, "unit_price")))
+    o = concat(o, ubl_close("Price"))
+    o = concat(o, ubl_close(tag))
+    return o
+}
+
+fn act_vat_exemptions_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "invoice:read")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    return act_ok(db, vatex_list_json(fmr_query(ctx, "search")))
+}
+
+fn act_invoices_ubl(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "invoice:read")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let q = invoice_find(db, id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "Invoice not found")
+    }
+    let number = orm_cell_by(q, 0, "number")
+    let document_type = orm_cell_by(q, 0, "document_type")
+    let issue_date = orm_cell_by(q, 0, "issue_date")
+    let due_date = orm_cell_by(q, 0, "due_date")
+    let tax_event_date = orm_cell_by(q, 0, "tax_event_date")
+    let currency = orm_cell_by(q, 0, "currency")
+    let currency_rate = orm_cell_by(q, 0, "currency_rate")
+    let net_amount = orm_cell_by(q, 0, "net_amount")
+    let vat_amount = orm_cell_by(q, 0, "vat_amount")
+    let total_amount = orm_cell_by(q, 0, "total_amount")
+    let payment_method = orm_cell_by(q, 0, "payment_method")
+    let notes = orm_cell_by(q, 0, "notes")
+    let exemption = orm_cell_by(q, 0, "vat_exemption_reason")
+    let cid = orm_cell_by_i64(q, 0, "counterpart_id")
+    let oid = orm_cell_by_i64(q, 0, "original_invoice_id")
+    let mut db2 = orm_db_q(q)
+    let cq = company_all(db2)?
+    if orm_ok_q(cq) == 0 || orm_nrows(cq) < 1 {
+        return act_err(orm_db_q(cq), 422, "няма фирма за UBL експорт")
+    }
+    db2 = orm_db_q(cq)
+    let co_name = orm_cell_by(cq, 0, "name")
+    let co_eik = orm_cell_by(cq, 0, "eik")
+    let co_vat = orm_cell_by(cq, 0, "vat_number")
+    let co_addr = orm_cell_by(cq, 0, "address")
+    let co_city = orm_cell_by(cq, 0, "city")
+    let co_post = orm_cell_by(cq, 0, "post_code")
+    let co_country = orm_cell_by(cq, 0, "country")
+    let co_email = orm_cell_by(cq, 0, "email")
+    let co_phone = orm_cell_by(cq, 0, "phone")
+    let co_iban = orm_cell_by(cq, 0, "iban")
+    let co_bic = orm_cell_by(cq, 0, "bic")
+    let mut cp_name = ""
+    let mut cp_eik = ""
+    let mut cp_vat = ""
+    let mut cp_addr = ""
+    let mut cp_city = ""
+    let mut cp_post = ""
+    let mut cp_country = "BG"
+    let mut cp_email = ""
+    let mut cp_phone = ""
+    if cid > 0 {
+        let kq = counterpart_find(db2, cid)?
+        if orm_ok_q(kq) == 0 {
+            return act_err(orm_db_q(kq), 500, orm_err_q(kq))
+        }
+        db2 = orm_db_q(kq)
+        if orm_nrows(kq) > 0 {
+            cp_name = orm_cell_by(kq, 0, "name")
+            cp_eik = orm_cell_by(kq, 0, "eik")
+            cp_vat = orm_cell_by(kq, 0, "vat_number")
+            cp_addr = orm_cell_by(kq, 0, "address")
+            cp_city = orm_cell_by(kq, 0, "city")
+            cp_post = orm_cell_by(kq, 0, "post_code")
+            cp_country = orm_cell_by(kq, 0, "country")
+            cp_email = orm_cell_by(kq, 0, "email")
+            cp_phone = orm_cell_by(kq, 0, "phone")
+        }
+    }
+    let mut orig_no = ""
+    let mut orig_date = ""
+    if oid > 0 {
+        let oq = invoice_find(db2, oid)?
+        if orm_ok_q(oq) == 0 {
+            return act_err(orm_db_q(oq), 500, orm_err_q(oq))
+        }
+        db2 = orm_db_q(oq)
+        if orm_nrows(oq) > 0 {
+            orig_no = orm_cell_by(oq, 0, "number")
+            orig_date = orm_cell_by(oq, 0, "issue_date")
+        }
+    }
+    let lq = invoice_lines_by_invoice(db2, id)?
+    if orm_ok_q(lq) == 0 {
+        return act_err(orm_db_q(lq), 500, orm_err_q(lq))
+    }
+    db2 = orm_db_q(lq)
+    let credit = ubl_is_credit(document_type)
+    let mut root = "Invoice"
+    let mut ns = "urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
+    if credit == 1 {
+        root = "CreditNote"
+        ns = "urn:oasis:names:specification:ubl:schema:xsd:CreditNote-2"
+    }
+    let attrs = xml_attrs_new()
+    map_set(attrs, "xmlns", ns)
+    map_set(attrs, "xmlns:cac", "urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2")
+    map_set(attrs, "xmlns:cbc", "urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2")
+    let mut out = xml_decl()
+    out = concat(out, xml_open(root, attrs))
+    out = concat(out, ubl_cbc("UBLVersionID", "2.1"))
+    out = concat(out, ubl_cbc("CustomizationID", "urn:cen.eu:en16931:2017#compliant#urn:fdc:peppol.eu:2017:poacc:billing:3.0"))
+    out = concat(out, ubl_cbc("ProfileID", "urn:fdc:peppol.eu:2017:poacc:billing:01:1.0"))
+    out = concat(out, ubl_cbc("ID", number))
+    out = concat(out, ubl_cbc("IssueDate", issue_date))
+    if credit == 0 {
+        out = concat(out, ubl_cbc("DueDate", due_date))
+        out = concat(out, ubl_cbc("InvoiceTypeCode", ubl_doc_code(document_type)))
+    } else {
+        out = concat(out, ubl_cbc("CreditNoteTypeCode", "381"))
+    }
+    out = concat(out, ubl_cbc("Note", notes))
+    out = concat(out, ubl_cbc("TaxPointDate", tax_event_date))
+    out = concat(out, ubl_cbc("DocumentCurrencyCode", currency))
+    let mut use_tax_cur: i64 = 0
+    if currency != "EUR" && currency != "" && currency_rate != "" && currency_rate != "1" && currency_rate != "1.00" {
+        use_tax_cur = 1
+        out = concat(out, ubl_cbc("TaxCurrencyCode", "EUR"))
+    }
+    out = concat(out, ubl_cbc("BuyerReference", number))
+    if orig_no != "" {
+        out = concat(out, ubl_open("BillingReference"))
+        out = concat(out, ubl_open("InvoiceDocumentReference"))
+        out = concat(out, ubl_cbc("ID", orig_no))
+        out = concat(out, ubl_cbc("IssueDate", orig_date))
+        out = concat(out, ubl_close("InvoiceDocumentReference"))
+        out = concat(out, ubl_close("BillingReference"))
+    }
+    out = concat(out, ubl_open("AdditionalDocumentReference"))
+    out = concat(out, ubl_cbc("ID", "Software"))
+    out = concat(out, ubl_cbc("DocumentDescription", "buchnative v1.0"))
+    out = concat(out, ubl_close("AdditionalDocumentReference"))
+    if use_tax_cur == 1 {
+        out = concat(out, ubl_open("TaxExchangeRate"))
+        out = concat(out, ubl_cbc("SourceCurrencyCode", currency))
+        out = concat(out, ubl_cbc("TargetCurrencyCode", "EUR"))
+        out = concat(out, ubl_cbc("CalculationRate", ubl_inv_rate(currency_rate)))
+        out = concat(out, ubl_close("TaxExchangeRate"))
+    }
+    out = concat(out, ubl_party("AccountingSupplierParty", co_name, co_eik, co_vat, co_addr, co_city, co_post, co_country, co_email, co_phone))
+    out = concat(out, ubl_party("AccountingCustomerParty", cp_name, cp_eik, cp_vat, cp_addr, cp_city, cp_post, cp_country, cp_email, cp_phone))
+    out = concat(out, ubl_open("PaymentMeans"))
+    out = concat(out, ubl_cbc("PaymentMeansCode", ubl_pay_code(payment_method)))
+    if co_iban != "" {
+        out = concat(out, ubl_open("PayeeFinancialAccount"))
+        out = concat(out, ubl_cbc("ID", co_iban))
+        if co_bic != "" {
+            out = concat(out, ubl_open("FinancialInstitutionBranch"))
+            out = concat(out, ubl_cbc("ID", co_bic))
+            out = concat(out, ubl_close("FinancialInstitutionBranch"))
+        }
+        out = concat(out, ubl_close("PayeeFinancialAccount"))
+    }
+    out = concat(out, ubl_close("PaymentMeans"))
+    out = concat(out, ubl_tax_total(lq, currency, vat_amount, exemption))
+    if use_tax_cur == 1 {
+        out = concat(out, ubl_open("TaxTotal"))
+        out = concat(out, ubl_amt("TaxAmount", "EUR", ubl_to_eur(vat_amount, currency_rate)))
+        out = concat(out, ubl_close("TaxTotal"))
+    }
+    out = concat(out, ubl_open("LegalMonetaryTotal"))
+    out = concat(out, ubl_amt("LineExtensionAmount", currency, net_amount))
+    out = concat(out, ubl_amt("TaxExclusiveAmount", currency, net_amount))
+    out = concat(out, ubl_amt("TaxInclusiveAmount", currency, total_amount))
+    out = concat(out, ubl_amt("PayableAmount", currency, total_amount))
+    out = concat(out, ubl_close("LegalMonetaryTotal"))
+    let mut i: i64 = 0
+    while i < orm_nrows(lq) {
+        out = concat(out, ubl_line(lq, i, currency, credit, exemption))
+        i = i + 1
+    }
+    out = concat(out, xml_close(root))
+    let mut kind = "invoice"
+    if credit == 1 { kind = "credit-note" }
+    let fname = concat(concat(concat("ubl-", kind), "-"), concat(number, ".xml"))
+    let mut resp = http_response(200, out)
+    resp = http_set_header(resp, "Content-Type", "application/xml; charset=utf-8")
+    resp = http_set_header(resp, "Content-Disposition", concat(concat("attachment; filename=\"", fname), "\""))
+    return fmr_out(resp, db2)
+}

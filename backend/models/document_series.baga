@@ -1,0 +1,167 @@
+// models/document_series.baga — кочани (номерации) за изходящи документи.
+// document_types е CSV от кодове по ППДДС (01,02,03). Две '=' в WHERE се избягват.
+
+import "company_related.baga"
+import "ormbaga/orm.baga"
+import "fmrbaga/jsonx.baga"
+import "std/str/str.baga"
+
+fn dser_table() -> str {
+    return "document_series"
+}
+
+fn dser_select_sql() -> str {
+    return "SELECT id, company_id, name, document_types, pad_width, start_number, is_active, created_at FROM document_series"
+}
+
+fn csv_has(csv: str, needle: str) -> i64 {
+    if needle == "" {
+        return 0
+    }
+    let parts = str_split(csv, ",")
+    let mut i: i64 = 0
+    while i < vec_len(parts) {
+        if str_trim(vec_get(parts, i)) == needle {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+fn csv_without(csv: str, needle: str) -> str {
+    let parts = str_split(csv, ",")
+    let mut out = ""
+    let mut i: i64 = 0
+    while i < vec_len(parts) {
+        let p = str_trim(vec_get(parts, i))
+        if p != "" && p != needle {
+            if out != "" {
+                out = concat(out, ",")
+            }
+            out = concat(out, p)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn invoice_pad(n: i64, width: i64) -> str {
+    let mut w = width
+    if w < 1 { w = 1 }
+    if w > 10 { w = 10 }
+    let s = int_to_str(n)
+    if len(s) >= w {
+        return s
+    }
+    let mut zeros = ""
+    let mut i = w - len(s)
+    while i > 0 {
+        zeros = concat(zeros, "0")
+        i = i - 1
+    }
+    return concat(zeros, s)
+}
+
+fn invoice_max_in_types(q: OrmQuery, types_csv: str, direction: str) -> i64 {
+    let mut maxn: i64 = 0
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        if orm_cell_by(q, i, "direction") == direction {
+            if csv_has(types_csv, orm_cell_by(q, i, "document_type")) == 1 {
+                let n = parse_int(orm_cell_by(q, i, "number"))
+                if n > maxn {
+                    maxn = n
+                }
+            }
+        }
+        i = i + 1
+    }
+    return maxn
+}
+
+fn invoice_next_in_series(q: OrmQuery, types_csv: str, start_number: i64, pad_width: i64) -> str {
+    let mut base = start_number - 1
+    if base < 0 {
+        base = 0
+    }
+    let mx = invoice_max_in_types(q, types_csv, "out")
+    if mx > base {
+        base = mx
+    }
+    return invoice_pad(base + 1, pad_width)
+}
+
+fn dser_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_i64(o, "company_id", orm_cell_by_i64(q, row, "company_id"))
+    o = jobj_str(o, "name", orm_cell_by(q, row, "name"))
+    o = jobj_str(o, "document_types", orm_cell_by(q, row, "document_types"))
+    let mut pad = orm_cell_by_i64(q, row, "pad_width")
+    if pad <= 0 { pad = 10 }
+    o = jobj_i64(o, "pad_width", pad)
+    let mut start = orm_cell_by_i64(q, row, "start_number")
+    if start <= 0 { start = 1 }
+    o = jobj_i64(o, "start_number", start)
+    o = jobj_i64(o, "is_active", orm_cell_by_i64(q, row, "is_active"))
+    return o
+}
+
+fn dser_active_list(q: OrmQuery, invq: OrmQuery) -> JArr {
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        if orm_cell_by_i64(q, i, "is_active") != 0 {
+            let mut o = dser_to_json(q, i)
+            let types = orm_cell_by(q, i, "document_types")
+            let mut pad = orm_cell_by_i64(q, i, "pad_width")
+            if pad <= 0 { pad = 10 }
+            let mut start = orm_cell_by_i64(q, i, "start_number")
+            if start <= 0 { start = 1 }
+            o = jobj_str(o, "next_number", invoice_next_in_series(invq, types, start, pad))
+            arr = jarr_obj(arr, o)
+        }
+        i = i + 1
+    }
+    return arr
+}
+
+fn dser_by_company(db: OrmDb, company_id: i64) -> OrmQuery !IO !Net {
+    return rel_by_company(db, dser_select_sql(), company_id)?
+}
+
+fn dser_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
+    return rel_find(db, dser_select_sql(), id)?
+}
+
+fn dser_create(db: OrmDb, company_id: i64, name: str, document_types: str, pad_width: i64, start_number: i64) -> OrmExec !IO !Net {
+    let cols = vec_new()
+    vec_push(cols, "company_id")
+    vec_push(cols, "name")
+    vec_push(cols, "document_types")
+    vec_push(cols, "pad_width")
+    vec_push(cols, "start_number")
+    vec_push(cols, "is_active")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(company_id))
+    vec_push(vals, name)
+    vec_push(vals, document_types)
+    vec_push(vals, int_to_str(pad_width))
+    vec_push(vals, int_to_str(start_number))
+    vec_push(vals, "1")
+    return rel_insert(db, dser_table(), cols, vals)?
+}
+
+fn dser_find_for_type(q: OrmQuery, document_type: str) -> i64 {
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        if orm_cell_by_i64(q, i, "is_active") != 0 {
+            if csv_has(orm_cell_by(q, i, "document_types"), document_type) == 1 {
+                return i
+            }
+        }
+        i = i + 1
+    }
+    return 0 - 1
+}

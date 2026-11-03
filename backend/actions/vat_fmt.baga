@@ -1,0 +1,254 @@
+// actions/vat_fmt.baga — ППДДС фиксирани полета: Windows-1251, подравняване, суми.
+// Спецификация: secret/barara/.../VAT/PPDDS_2025_.html; образец vat-2026/*.TXT.
+
+import "bagadecimal/src/decimal.baga"
+import "std/str/str.baga"
+
+fn vat_dadd(a: Decimal, b: Decimal) -> Decimal {
+    let r = dec_add(a, b)
+    if r.ok == 1 {
+        return r.value
+    }
+    return a
+}
+
+fn vat_dsub(a: Decimal, b: Decimal) -> Decimal {
+    let r = dec_sub(a, b)
+    if r.ok == 1 {
+        return r.value
+    }
+    return a
+}
+
+fn vat_money(d: Decimal) -> str {
+    let r = dec_round_dp(d, 2)
+    let mut v = d
+    if r.ok == 1 {
+        v = r.value
+    }
+    let s = dec_to_string(v)
+    let dot = str_find(s, ".")
+    if dot < 0 {
+        return concat(s, ".00")
+    }
+    let frac = len(s) - dot - 1
+    if frac == 0 {
+        return concat(s, "00")
+    }
+    if frac == 1 {
+        return concat(s, "0")
+    }
+    return s
+}
+
+fn vat_parse_amt(s: str) -> Decimal {
+    let p = dec_parse(s)
+    if p.ok == 1 {
+        return p.value
+    }
+    return dec_zero()
+}
+
+fn vat_rate_kind(s: str) -> str {
+    let p = dec_parse(s)
+    if p.ok == 0 {
+        return "20"
+    }
+    if dec_is_zero(p.value) == 1 {
+        return "0"
+    }
+    let n = dec_parse("9")
+    if n.ok == 1 {
+        if dec_cmp(p.value, n.value) == 0 {
+            return "9"
+        }
+    }
+    return "20"
+}
+
+fn vat_is_credit_doc(t: str) -> i64 {
+    if t == "03" || t == "13" || t == "23" || t == "29" {
+        return 1
+    }
+    return 0
+}
+
+fn vat_sales_excluded(t: str) -> i64 {
+    if t == "04" || t == "11" || t == "12" || t == "13" {
+        return 1
+    }
+    return 0
+}
+
+fn vat_purch_excluded(t: str) -> i64 {
+    if t == "05" || t == "11" || t == "12" || t == "13" || t == "94" {
+        return 1
+    }
+    return 0
+}
+
+fn vat_doc_type(t: str) -> str {
+    if t == "invoice" {
+        return "01"
+    }
+    if t == "debit_note" {
+        return "02"
+    }
+    if t == "credit_note" {
+        return "03"
+    }
+    if t == "proforma" {
+        return "01"
+    }
+    if len(t) == 1 {
+        return concat("0", t)
+    }
+    if len(t) >= 2 {
+        return substr(t, 0, 2)
+    }
+    return "01"
+}
+
+fn vat_nap_date(iso: str) -> str {
+    if len(iso) >= 10 {
+        return concat(concat(substr(iso, 8, 10), "/"), concat(substr(iso, 5, 7), concat("/", substr(iso, 0, 4))))
+    }
+    return "          "
+}
+
+fn vat_with_bg(v: str) -> str {
+    let t = str_trim(v)
+    if t == "" {
+        return ""
+    }
+    if str_starts_with(t, "BG") {
+        return t
+    }
+    if str_starts_with(t, "bg") {
+        return concat("BG", substr(t, 2, len(t)))
+    }
+    return concat("BG", t)
+}
+
+fn vat_cyr_1251(u: i64) -> i64 {
+    if u >= 1040 && u <= 1103 {
+        return u - 848
+    }
+    if u == 1025 {
+        return 168
+    }
+    if u == 1105 {
+        return 184
+    }
+    return 63
+}
+
+fn vat_cp1251(s: str) -> bytes {
+    let mut out = bytes_new(0)
+    let mut i: i64 = 0
+    let n = len(s)
+    while i < n {
+        let b = char_at(s, i)
+        if b < 128 {
+            out = bytes_push(out, b)
+            i = i + 1
+        } else {
+            if b == 208 && i + 1 < n {
+                let u = 1024 + (char_at(s, i + 1) - 128)
+                out = bytes_push(out, vat_cyr_1251(u))
+                i = i + 2
+            } else {
+                if b == 209 && i + 1 < n {
+                    let u = 1088 + (char_at(s, i + 1) - 128)
+                    out = bytes_push(out, vat_cyr_1251(u))
+                    i = i + 2
+                } else {
+                    if b == 226 && i + 2 < n {
+                        let b2 = char_at(s, i + 1)
+                        let b3 = char_at(s, i + 2)
+                        let mut c: i64 = 63
+                        if b2 == 128 && b3 == 156 { c = 147 }
+                        if b2 == 128 && b3 == 157 { c = 148 }
+                        if b2 == 128 && b3 == 158 { c = 132 }
+                        if b2 == 128 && b3 == 147 { c = 150 }
+                        if b2 == 128 && b3 == 148 { c = 151 }
+                        if b2 == 132 && b3 == 150 { c = 185 }
+                        out = bytes_push(out, c)
+                        i = i + 3
+                    } else {
+                        out = bytes_push(out, 63)
+                        i = i + 1
+                    }
+                }
+            }
+        }
+    }
+    return out
+}
+
+fn nap_pad_right(src: bytes, n: i64) -> bytes {
+    let out = bytes_new(n)
+    let l = bytes_len(src)
+    let mut m = l
+    if m > n {
+        m = n
+    }
+    let mut i: i64 = 0
+    while i < n {
+        bytes_set(out, i, 32)
+        i = i + 1
+    }
+    i = 0
+    while i < m {
+        bytes_set(out, i, bytes_at(src, i))
+        i = i + 1
+    }
+    return out
+}
+
+fn nap_pad_left(src: bytes, n: i64) -> bytes {
+    let out = bytes_new(n)
+    let l = bytes_len(src)
+    let mut i: i64 = 0
+    while i < n {
+        bytes_set(out, i, 32)
+        i = i + 1
+    }
+    let mut start = n - l
+    let mut si: i64 = 0
+    if l > n {
+        start = 0
+        si = l - n
+    }
+    let mut j = start
+    while j < n {
+        bytes_set(out, j, bytes_at(src, si))
+        j = j + 1
+        si = si + 1
+    }
+    return out
+}
+
+fn nap_sym(s: str, n: i64) -> bytes {
+    return nap_pad_right(vat_cp1251(s), n)
+}
+
+fn nap_num_str(s: str, n: i64) -> bytes {
+    return nap_pad_left(vat_cp1251(s), n)
+}
+
+fn nap_amt(d: Decimal) -> bytes {
+    return nap_num_str(vat_money(d), 15)
+}
+
+fn nap_i64(v: i64, n: i64) -> bytes {
+    return nap_num_str(int_to_str(v), n)
+}
+
+fn nap_crlf() -> bytes {
+    return bytes_push(bytes_push(bytes_new(0), 13), 10)
+}
+
+fn nap_cat(a: bytes, b: bytes) -> bytes {
+    return bytes_concat(a, b)
+}

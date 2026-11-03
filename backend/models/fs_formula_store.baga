@@ -1,0 +1,120 @@
+// models/fs_formula_store.baga — fs_line_formulas по фирма.
+
+import "ormbaga/orm.baga"
+import "ormbaga/sql.baga"
+import "fmrbaga/jsonx.baga"
+import "pgbaga/pg.baga"
+import "std/str/str.baga"
+import "std/os/os.baga"
+
+fn fsf_table() -> str {
+    return "fs_line_formulas"
+}
+
+fn fsf_backend_boila() -> i64 !IO {
+    let be = env("ORM_BACKEND")?
+    if be == "boila" || be == "boiladb" || be == "boilaDB" {
+        return 1
+    }
+    return 0
+}
+
+fn fsf_select_sql() -> str {
+    return "SELECT id, company_id, statement, line_code, formula FROM fs_line_formulas"
+}
+
+fn fsf_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_i64(o, "company_id", orm_cell_by_i64(q, row, "company_id"))
+    o = jobj_str(o, "statement", orm_cell_by(q, row, "statement"))
+    o = jobj_str(o, "line_code", orm_cell_by(q, row, "line_code"))
+    o = jobj_str(o, "formula", orm_cell_by(q, row, "formula"))
+    return o
+}
+
+fn fsf_by_company(db: OrmDb, company_id: i64) -> OrmQuery !IO !Net {
+    let sql = concat(fsf_select_sql(), " WHERE company_id = $1 ORDER BY id")
+    let vals = vec_new()
+    let nulls = vec_new()
+    pg_param_i64(vals, nulls, company_id)
+    return orm_query_params(db, sql, vals, nulls)?
+}
+
+fn fsf_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
+    let sql = concat(fsf_select_sql(), " WHERE id = $1")
+    let vals = vec_new()
+    let nulls = vec_new()
+    pg_param_i64(vals, nulls, id)
+    return orm_query_params(db, sql, vals, nulls)?
+}
+
+fn fsf_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return orm_count_sql(db, "SELECT MAX(id) AS count FROM fs_line_formulas")?
+}
+
+fn fsf_insert(db: OrmDb, cols: Vec<str>, vals: Vec<str>) -> OrmQuery !IO !Net {
+    let nulls = vec_new()
+    let mut i: i64 = 0
+    let n = vec_len(cols)
+    if fsf_backend_boila()? == 1 {
+        let c = fsf_next_id(db)?
+        if orm_ok_c(c) == 0 {
+            return OrmQErr(OrmQueryFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
+        }
+        let nid = orm_count_n(c) + 1
+        let d = orm_db_c(c)
+        let allc = vec_new()
+        vec_push(allc, "id")
+        i = 0
+        while i < n {
+            vec_push(allc, vec_get(cols, i))
+            i = i + 1
+        }
+        let allv = vec_new()
+        vec_push(allv, int_to_str(nid))
+        i = 0
+        while i < n {
+            vec_push(allv, vec_get(vals, i))
+            i = i + 1
+        }
+        i = 0
+        while i < n + 1 {
+            vec_push(nulls, 0)
+            i = i + 1
+        }
+        return orm_insert_returning_full(d, fsf_table(), allc, allv, nulls)?
+    }
+    i = 0
+    while i < n {
+        vec_push(nulls, 0)
+        i = i + 1
+    }
+    return orm_insert_returning_full(db, fsf_table(), cols, vals, nulls)?
+}
+
+fn fsf_create(db: OrmDb, company_id: i64, statement: str, line_code: str, formula: str) -> OrmQuery !IO !Net {
+    let cols = vec_new()
+    vec_push(cols, "company_id")
+    vec_push(cols, "statement")
+    vec_push(cols, "line_code")
+    vec_push(cols, "formula")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(company_id))
+    vec_push(vals, statement)
+    vec_push(vals, line_code)
+    vec_push(vals, formula)
+    return fsf_insert(db, cols, vals)?
+}
+
+fn fsf_update_formula(db: OrmDb, id: i64, formula: str) -> OrmExec !IO !Net {
+    let cols = vec_new()
+    vec_push(cols, "formula")
+    let vals = vec_new()
+    vec_push(vals, formula)
+    return orm_update_by_id(db, fsf_table(), id, cols, vals)?
+}
+
+fn fsf_delete(db: OrmDb, id: i64) -> OrmExec !IO !Net {
+    return orm_delete_by_id(db, fsf_table(), id)?
+}

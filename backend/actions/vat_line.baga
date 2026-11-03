@@ -1,0 +1,435 @@
+// actions/vat_line.baga — ред в ДДС дневник + клетки на ППДДС от фактура/запис.
+// Ставки: 20 / 9 / 0. Нулевата ставка се разпределя по основанието (VATEX).
+
+import "../models/invoice.baga"
+import "../models/vat_exemption.baga"
+import "vat_fmt.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "bagadecimal/src/decimal.baga"
+import "std/str/str.baga"
+
+struct VatLine {
+    kind: str
+    doc_type: str
+    doc_no: str
+    doc_date: str
+    cp_vat: str
+    cp_name: str
+    goods: str
+    delivery: str
+    p_no: Decimal
+    p_fb: Decimal
+    p_fv: Decimal
+    p_pb: Decimal
+    p_pv: Decimal
+    p_adj: Decimal
+    p_vop: Decimal
+    s_tb: Decimal
+    s_tv: Decimal
+    s_b20: Decimal
+    s_v20: Decimal
+    s_vopb: Decimal
+    s_82: Decimal
+    s_vopv: Decimal
+    s_pers: Decimal
+    s_b9: Decimal
+    s_v9: Decimal
+    s_ch3: Decimal
+    s_vod: Decimal
+    s_art: Decimal
+    s_svc: Decimal
+    s_69: Decimal
+    s_ex: Decimal
+    s_tri: Decimal
+}
+
+struct VatCells {
+    s01: Decimal
+    s20: Decimal
+    s11: Decimal
+    s21: Decimal
+    s12: Decimal
+    s22: Decimal
+    s23: Decimal
+    s13: Decimal
+    s24: Decimal
+    s14: Decimal
+    s15: Decimal
+    s16: Decimal
+    s17: Decimal
+    s18: Decimal
+    s19: Decimal
+    p30: Decimal
+    p31: Decimal
+    p41: Decimal
+    p32: Decimal
+    p42: Decimal
+    p43: Decimal
+    r40: Decimal
+    r50: Decimal
+    r60: Decimal
+    sales_n: i64
+    purch_n: i64
+}
+
+struct VatFill {
+    ok: i64
+    err: str
+    db: OrmDb
+    line: VatLine
+}
+
+fn vat_z() -> Decimal {
+    return dec_zero()
+}
+
+fn vat_line_empty(kind: str) -> VatLine {
+    let z = vat_z()
+    return VatLine {
+        kind: kind, doc_type: "01", doc_no: "", doc_date: "",
+        cp_vat: "", cp_name: "", goods: "", delivery: "",
+        p_no: z, p_fb: z, p_fv: z, p_pb: z, p_pv: z, p_adj: z, p_vop: z,
+        s_tb: z, s_tv: z, s_b20: z, s_v20: z, s_vopb: z, s_82: z,
+        s_vopv: z, s_pers: z, s_b9: z, s_v9: z, s_ch3: z, s_vod: z,
+        s_art: z, s_svc: z, s_69: z, s_ex: z, s_tri: z
+    }
+}
+
+fn vat_cells_empty() -> VatCells {
+    let z = vat_z()
+    return VatCells {
+        s01: z, s20: z, s11: z, s21: z, s12: z, s22: z, s23: z,
+        s13: z, s24: z, s14: z, s15: z, s16: z, s17: z, s18: z, s19: z,
+        p30: z, p31: z, p41: z, p32: z, p42: z, p43: z,
+        r40: z, r50: z, r60: z, sales_n: 0, purch_n: 0
+    }
+}
+
+fn vat_zero_bucket(code: str) -> str {
+    if code == "" {
+        return "ex"
+    }
+    if code == "VATEX-EU-IC" {
+        return "vod"
+    }
+    if code == "VATEX-EU-Z-173" {
+        return "art"
+    }
+    if code == "VATEX-EU-S-21" {
+        return "svc"
+    }
+    let cat = vatex_category(code)
+    if cat == "K" {
+        return "vod"
+    }
+    if cat == "G" || cat == "Z" {
+        return "ch3"
+    }
+    if cat == "O" {
+        return "svc"
+    }
+    return "ex"
+}
+
+fn vat_put_zero_sales(ln: VatLine, base: Decimal, bucket: str) -> VatLine {
+    let mut o = ln
+    o.s_tb = vat_dadd(o.s_tb, base)
+    if bucket == "vod" {
+        o.s_vod = vat_dadd(o.s_vod, base)
+    } else {
+        if bucket == "ch3" {
+            o.s_ch3 = vat_dadd(o.s_ch3, base)
+        } else {
+            if bucket == "art" {
+                o.s_art = vat_dadd(o.s_art, base)
+            } else {
+                if bucket == "svc" {
+                    o.s_svc = vat_dadd(o.s_svc, base)
+                } else {
+                    o.s_ex = vat_dadd(o.s_ex, base)
+                }
+            }
+        }
+    }
+    return o
+}
+
+fn vat_add_sale(ln: VatLine, base: Decimal, vat: Decimal, rate: str, ex: str) -> VatLine {
+    let mut o = ln
+    if rate == "9" {
+        o.s_tb = vat_dadd(o.s_tb, base)
+        o.s_tv = vat_dadd(o.s_tv, vat)
+        o.s_b9 = vat_dadd(o.s_b9, base)
+        o.s_v9 = vat_dadd(o.s_v9, vat)
+        return o
+    }
+    if rate == "0" {
+        return vat_put_zero_sales(o, base, vat_zero_bucket(ex))
+    }
+    o.s_tb = vat_dadd(o.s_tb, base)
+    o.s_tv = vat_dadd(o.s_tv, vat)
+    o.s_b20 = vat_dadd(o.s_b20, base)
+    o.s_v20 = vat_dadd(o.s_v20, vat)
+    return o
+}
+
+fn vat_add_purch(ln: VatLine, base: Decimal, vat: Decimal) -> VatLine {
+    let mut o = ln
+    if dec_is_zero(vat) == 1 {
+        o.p_no = vat_dadd(o.p_no, base)
+        return o
+    }
+    o.p_fb = vat_dadd(o.p_fb, base)
+    o.p_fv = vat_dadd(o.p_fv, vat)
+    return o
+}
+
+fn vat_neg_line(ln: VatLine) -> VatLine {
+    let mut o = ln
+    o.p_no = dec_neg(o.p_no)
+    o.p_fb = dec_neg(o.p_fb)
+    o.p_fv = dec_neg(o.p_fv)
+    o.p_pb = dec_neg(o.p_pb)
+    o.p_pv = dec_neg(o.p_pv)
+    o.p_adj = dec_neg(o.p_adj)
+    o.p_vop = dec_neg(o.p_vop)
+    o.s_tb = dec_neg(o.s_tb)
+    o.s_tv = dec_neg(o.s_tv)
+    o.s_b20 = dec_neg(o.s_b20)
+    o.s_v20 = dec_neg(o.s_v20)
+    o.s_vopb = dec_neg(o.s_vopb)
+    o.s_82 = dec_neg(o.s_82)
+    o.s_vopv = dec_neg(o.s_vopv)
+    o.s_pers = dec_neg(o.s_pers)
+    o.s_b9 = dec_neg(o.s_b9)
+    o.s_v9 = dec_neg(o.s_v9)
+    o.s_ch3 = dec_neg(o.s_ch3)
+    o.s_vod = dec_neg(o.s_vod)
+    o.s_art = dec_neg(o.s_art)
+    o.s_svc = dec_neg(o.s_svc)
+    o.s_69 = dec_neg(o.s_69)
+    o.s_ex = dec_neg(o.s_ex)
+    o.s_tri = dec_neg(o.s_tri)
+    return o
+}
+
+fn vat_apply_credit(ln: VatLine) -> VatLine {
+    if vat_is_credit_doc(ln.doc_type) == 0 {
+        return ln
+    }
+    if dec_is_negative(ln.s_tb) == 1 {
+        return ln
+    }
+    if dec_is_negative(ln.p_fb) == 1 {
+        return ln
+    }
+    if dec_is_negative(ln.p_no) == 1 {
+        return ln
+    }
+    return vat_neg_line(ln)
+}
+
+fn vat_from_totals(kind: str, base: Decimal, vat: Decimal, ex: str) -> VatLine {
+    let ln = vat_line_empty(kind)
+    if kind == "sales" {
+        let mut rate = "20"
+        if dec_is_zero(vat) == 1 {
+            rate = "0"
+        }
+        return vat_add_sale(ln, base, vat, rate, ex)
+    }
+    return vat_add_purch(ln, base, vat)
+}
+
+fn vat_fill_ok(db: OrmDb, ln: VatLine) -> VatFill {
+    return VatFill { ok: 1, err: "", db: db, line: ln }
+}
+
+fn vat_fill_err(db: OrmDb, err: str, ln: VatLine) -> VatFill {
+    return VatFill { ok: 0, err: err, db: db, line: ln }
+}
+
+fn vat_from_invoice(db: OrmDb, ln0: VatLine, inv_id: i64) -> VatFill !IO !Net {
+    let iq = invoice_find(db, inv_id)?
+    if orm_ok_q(iq) == 0 {
+        return vat_fill_err(orm_db_q(iq), orm_err_q(iq), ln0)
+    }
+    if orm_nrows(iq) < 1 {
+        return vat_fill_ok(orm_db_q(iq), ln0)
+    }
+    let ex = orm_cell_by(iq, 0, "vat_exemption_reason")
+    let issue = orm_cell_by(iq, 0, "issue_date")
+    let mut ln = ln0
+    if issue != "" {
+        ln.doc_date = issue
+    }
+    let lq = invoice_lines_by_invoice(orm_db_q(iq), inv_id)?
+    if orm_ok_q(lq) == 0 {
+        return vat_fill_err(orm_db_q(lq), orm_err_q(lq), ln)
+    }
+    let n = orm_nrows(lq)
+    if n < 1 {
+        return vat_fill_ok(orm_db_q(lq), ln)
+    }
+    ln.p_no = vat_z()
+    ln.p_fb = vat_z()
+    ln.p_fv = vat_z()
+    ln.s_tb = vat_z()
+    ln.s_tv = vat_z()
+    ln.s_b20 = vat_z()
+    ln.s_v20 = vat_z()
+    ln.s_b9 = vat_z()
+    ln.s_v9 = vat_z()
+    ln.s_ch3 = vat_z()
+    ln.s_vod = vat_z()
+    ln.s_art = vat_z()
+    ln.s_svc = vat_z()
+    ln.s_ex = vat_z()
+    let mut i: i64 = 0
+    while i < n {
+        if i == 0 {
+            let g = orm_cell_by(lq, i, "description")
+            if g != "" {
+                ln.goods = g
+            }
+        }
+        let base = vat_parse_amt(orm_cell_by(lq, i, "net_amount"))
+        let vat = vat_parse_amt(orm_cell_by(lq, i, "vat_amount"))
+        let rate = vat_rate_kind(orm_cell_by(lq, i, "vat_rate"))
+        if ln.kind == "sales" {
+            ln = vat_add_sale(ln, base, vat, rate, ex)
+        } else {
+            ln = vat_add_purch(ln, base, vat)
+        }
+        i = i + 1
+    }
+    return vat_fill_ok(orm_db_q(lq), ln)
+}
+
+fn vat_cells_add(c: VatCells, ln: VatLine) -> VatCells {
+    let mut o = c
+    if ln.kind == "sales" {
+        o.sales_n = o.sales_n + 1
+        if vat_sales_excluded(ln.doc_type) == 1 {
+            return o
+        }
+        o.s01 = vat_dadd(o.s01, ln.s_tb)
+        o.s20 = vat_dadd(o.s20, ln.s_tv)
+        o.s11 = vat_dadd(o.s11, ln.s_b20)
+        o.s21 = vat_dadd(o.s21, ln.s_v20)
+        o.s12 = vat_dadd(o.s12, vat_dadd(ln.s_vopb, ln.s_82))
+        o.s22 = vat_dadd(o.s22, ln.s_vopv)
+        o.s23 = vat_dadd(o.s23, ln.s_pers)
+        o.s13 = vat_dadd(o.s13, ln.s_b9)
+        o.s24 = vat_dadd(o.s24, ln.s_v9)
+        o.s14 = vat_dadd(o.s14, ln.s_ch3)
+        o.s15 = vat_dadd(o.s15, ln.s_vod)
+        o.s16 = vat_dadd(o.s16, ln.s_art)
+        o.s17 = vat_dadd(o.s17, ln.s_svc)
+        o.s18 = vat_dadd(o.s18, vat_dadd(ln.s_69, ln.s_tri))
+        o.s19 = vat_dadd(o.s19, ln.s_ex)
+        return o
+    }
+    o.purch_n = o.purch_n + 1
+    if vat_purch_excluded(ln.doc_type) == 1 {
+        return o
+    }
+    o.p30 = vat_dadd(o.p30, vat_dadd(ln.p_no, ln.p_vop))
+    o.p31 = vat_dadd(o.p31, ln.p_fb)
+    o.p41 = vat_dadd(o.p41, ln.p_fv)
+    o.p32 = vat_dadd(o.p32, ln.p_pb)
+    o.p42 = vat_dadd(o.p42, ln.p_pv)
+    o.p43 = vat_dadd(o.p43, ln.p_adj)
+    return o
+}
+
+fn vat_cells_finish(c: VatCells) -> VatCells {
+    let mut o = c
+    o.r40 = vat_dadd(o.p41, o.p43)
+    let diff = vat_dsub(o.s20, o.r40)
+    if dec_is_negative(diff) == 1 {
+        o.r50 = vat_z()
+        o.r60 = dec_neg(diff)
+    } else {
+        o.r50 = diff
+        o.r60 = vat_z()
+    }
+    return o
+}
+
+fn vat_line_json(ln: VatLine, id: i64, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", id)
+    o = jobj_i64(o, "row", row)
+    o = jobj_str(o, "document_type", ln.doc_type)
+    o = jobj_str(o, "document_number", ln.doc_no)
+    o = jobj_str(o, "document_date", ln.doc_date)
+    o = jobj_str(o, "counterpart_name", ln.cp_name)
+    o = jobj_str(o, "counterpart_vat_number", ln.cp_vat)
+    o = jobj_str(o, "goods", ln.goods)
+    o = jobj_str(o, "delivery_code", ln.delivery)
+    o = jobj_str(o, "base_no_credit", vat_money(ln.p_no))
+    o = jobj_str(o, "base_full_credit", vat_money(ln.p_fb))
+    o = jobj_str(o, "vat_full_credit", vat_money(ln.p_fv))
+    o = jobj_str(o, "base_partial", vat_money(ln.p_pb))
+    o = jobj_str(o, "vat_partial", vat_money(ln.p_pv))
+    o = jobj_str(o, "annual_adj", vat_money(ln.p_adj))
+    o = jobj_str(o, "vop_base", vat_money(ln.p_vop))
+    o = jobj_str(o, "total_base", vat_money(ln.s_tb))
+    o = jobj_str(o, "total_vat", vat_money(ln.s_tv))
+    o = jobj_str(o, "base_20", vat_money(ln.s_b20))
+    o = jobj_str(o, "vat_20", vat_money(ln.s_v20))
+    o = jobj_str(o, "base_9", vat_money(ln.s_b9))
+    o = jobj_str(o, "vat_9", vat_money(ln.s_v9))
+    o = jobj_str(o, "base_0", vat_money(ln.s_ch3))
+    o = jobj_str(o, "base_vod", vat_money(ln.s_vod))
+    o = jobj_str(o, "base_art", vat_money(ln.s_art))
+    o = jobj_str(o, "base_services", vat_money(ln.s_svc))
+    o = jobj_str(o, "base_exempt", vat_money(ln.s_ex))
+    let mut base = ln.s_tb
+    let mut vat = ln.s_tv
+    if ln.kind == "purchase" {
+        base = vat_dadd(ln.p_no, vat_dadd(ln.p_fb, ln.p_pb))
+        vat = vat_dadd(ln.p_fv, ln.p_pv)
+    }
+    o = jobj_str(o, "base_amount", vat_money(base))
+    o = jobj_str(o, "vat_amount", vat_money(vat))
+    return o
+}
+
+fn vat_cells_json(c: VatCells) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_str(o, "01-01", vat_money(c.s01))
+    o = jobj_str(o, "01-20", vat_money(c.s20))
+    o = jobj_str(o, "01-11", vat_money(c.s11))
+    o = jobj_str(o, "01-21", vat_money(c.s21))
+    o = jobj_str(o, "01-12", vat_money(c.s12))
+    o = jobj_str(o, "01-22", vat_money(c.s22))
+    o = jobj_str(o, "01-23", vat_money(c.s23))
+    o = jobj_str(o, "01-13", vat_money(c.s13))
+    o = jobj_str(o, "01-24", vat_money(c.s24))
+    o = jobj_str(o, "01-14", vat_money(c.s14))
+    o = jobj_str(o, "01-15", vat_money(c.s15))
+    o = jobj_str(o, "01-16", vat_money(c.s16))
+    o = jobj_str(o, "01-17", vat_money(c.s17))
+    o = jobj_str(o, "01-18", vat_money(c.s18))
+    o = jobj_str(o, "01-19", vat_money(c.s19))
+    o = jobj_str(o, "01-30", vat_money(c.p30))
+    o = jobj_str(o, "01-31", vat_money(c.p31))
+    o = jobj_str(o, "01-41", vat_money(c.p41))
+    o = jobj_str(o, "01-32", vat_money(c.p32))
+    o = jobj_str(o, "01-42", vat_money(c.p42))
+    o = jobj_str(o, "01-43", vat_money(c.p43))
+    o = jobj_str(o, "01-33", "0.00")
+    o = jobj_str(o, "01-40", vat_money(c.r40))
+    o = jobj_str(o, "01-50", vat_money(c.r50))
+    o = jobj_str(o, "01-60", vat_money(c.r60))
+    o = jobj_str(o, "01-70", "0.00")
+    o = jobj_str(o, "01-71", "0.00")
+    o = jobj_str(o, "01-80", "0.00")
+    o = jobj_str(o, "01-81", "0.00")
+    o = jobj_str(o, "01-82", "0.00")
+    return o
+}
+

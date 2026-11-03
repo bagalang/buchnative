@@ -1,0 +1,329 @@
+// actions/reports_util.baga — общи помощници за счетоводни справки.
+// Експортът е същият път като фактурите: XHTML таблица → reportbaga.
+
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "xmlbaga/xml.baga"
+import "bagadecimal/src/decimal.baga"
+import "reportbaga/html_table.baga"
+import "std/str/str.baga"
+
+struct RptBuilt {
+    body: JObj,
+    html: str,
+    title: str,
+    slug: str
+}
+
+fn rpt_h(s: str) -> str {
+    return xml_escape_text(s)
+}
+
+fn rpt_cell(tag: str, s: str) -> str {
+    return concat(concat(concat("<", concat(tag, ">")), rpt_h(s)), concat("</", concat(tag, ">")))
+}
+
+fn rpt_firm_line(name: str, eik: str) -> str {
+    if name == "" && eik == "" {
+        return ""
+    }
+    if eik == "" {
+        return name
+    }
+    if name == "" {
+        return concat("ЕИК ", eik)
+    }
+    return concat(concat(name, " — ЕИК "), eik)
+}
+
+fn rpt_html_open(title: str, period: str, firm: str) -> str {
+    let mut h = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+    h = concat(h, "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><meta charset=\"utf-8\"/><title>")
+    let mut head = title
+    if firm != "" {
+        head = firm
+    }
+    h = concat(h, rpt_h(head))
+    h = concat(h, "</title></head><body>")
+    h = concat(h, concat("<h1>", concat(rpt_h(head), "</h1>")))
+    if firm != "" {
+        h = concat(h, concat("<p>", concat(rpt_h(title), "</p>")))
+    }
+    h = concat(h, concat("<p>", concat(rpt_h(period), "</p>")))
+    h = concat(h, "<table>")
+    return h
+}
+
+fn rpt_html_firm_row(html: str, firm: str) -> str {
+    if firm == "" {
+        return html
+    }
+    return str_replace(html, "<table>", concat("<table><tr><th>", concat(rpt_h(firm), "</th></tr>")))
+}
+
+fn rpt_html_close(h: str) -> str {
+    return concat(h, "</table></body></html>")
+}
+
+fn rpt_day(s: str) -> str {
+    if len(s) >= 10 {
+        return substr(s, 0, 10)
+    }
+    return s
+}
+
+fn rpt_date_ok(s: str) -> i64 {
+    let d = rpt_day(s)
+    if len(d) != 10 {
+        return 0
+    }
+    if char_at(d, 4) != 45 {
+        return 0
+    }
+    if char_at(d, 7) != 45 {
+        return 0
+    }
+    return 1
+}
+
+fn rpt_in_range(d: str, from: str, to: str, exclusive: i64) -> i64 {
+    let day = rpt_day(d)
+    if xml_str_lt(day, from) == 1 {
+        return 0
+    }
+    if exclusive == 1 {
+        return xml_str_lt(day, to)
+    }
+    if xml_str_lt(to, day) == 1 {
+        return 0
+    }
+    return 1
+}
+
+fn rpt_from_after_to(from: str, to: str) -> i64 {
+    return xml_str_lt(to, from)
+}
+
+fn rpt_starts(s: str, p: str) -> i64 {
+    if len(p) == 0 {
+        return 1
+    }
+    if len(s) < len(p) {
+        return 0
+    }
+    if substr(s, 0, len(p)) == p {
+        return 1
+    }
+    return 0
+}
+
+fn rpt_zero(s: str) -> i64 {
+    if s == "" || s == "0" || s == "0.0" || s == "0.00" {
+        return 1
+    }
+    let p = dec_parse(s)
+    if p.ok == 0 {
+        return 1
+    }
+    if dec_is_zero(p.value) == 1 {
+        return 1
+    }
+    return 0
+}
+
+fn rpt_add(m: Map<str, str>, key: str, amt: str) -> Map<str, str> {
+    if rpt_zero(amt) == 1 {
+        return m
+    }
+    let mut cur = "0"
+    if map_has(m, key) == 1 {
+        cur = map_get(m, key)
+    }
+    let a = dec_parse(cur)
+    let b = dec_parse(amt)
+    if a.ok == 0 || b.ok == 0 {
+        return m
+    }
+    let s = dec_add(a.value, b.value)
+    if s.ok == 0 {
+        return m
+    }
+    map_set(m, key, dec_to_string(s.value))
+    return m
+}
+
+fn rpt_sum(a: str, b: str) -> str {
+    let pa = dec_parse(a)
+    let pb = dec_parse(b)
+    if pa.ok == 0 {
+        return b
+    }
+    if pb.ok == 0 {
+        return a
+    }
+    let s = dec_add(pa.value, pb.value)
+    if s.ok == 0 {
+        return a
+    }
+    return dec_to_string(s.value)
+}
+
+fn rpt_sub(a: str, b: str) -> str {
+    let pa = dec_parse(a)
+    let pb = dec_parse(b)
+    if pa.ok == 0 || pb.ok == 0 {
+        return a
+    }
+    let s = dec_sub(pa.value, pb.value)
+    if s.ok == 0 {
+        return a
+    }
+    return dec_to_string(s.value)
+}
+
+fn rpt_min(a: str, b: str) -> str {
+    let pa = dec_parse(a)
+    let pb = dec_parse(b)
+    if pa.ok == 0 {
+        return "0"
+    }
+    if pb.ok == 0 {
+        return "0"
+    }
+    if dec_cmp(pa.value, pb.value) <= 0 {
+        return a
+    }
+    return b
+}
+
+fn rpt_title(kind: str) -> str {
+    if kind == "trial_balance" {
+        return "Оборотна ведомост"
+    }
+    if kind == "general_ledger" {
+        return "Главна книга"
+    }
+    if kind == "chronological" {
+        return "Хронологичен журнал"
+    }
+    if kind == "counterpart_trial" {
+        return "Оборотна ведомост по контрагент"
+    }
+    if kind == "counterpart_chrono" {
+        return "Хронологичен журнал по контрагент"
+    }
+    if kind == "correspondence_ledger" {
+        return "Главна книга по кореспонденции"
+    }
+    if kind == "balance_sheet" {
+        return "Счетоводен баланс"
+    }
+    if kind == "income_statement" {
+        return "Отчет за приходите и разходите"
+    }
+    if kind == "cash_flow" {
+        return "Отчет за паричните потоци"
+    }
+    if kind == "equity" {
+        return "Отчет за собствения капитал"
+    }
+    return "Справка"
+}
+
+fn rpt_slug(kind: str) -> str {
+    if kind == "trial_balance" {
+        return "oborotna"
+    }
+    if kind == "general_ledger" {
+        return "glavna-kniga"
+    }
+    if kind == "chronological" {
+        return "hronologichen"
+    }
+    if kind == "counterpart_trial" {
+        return "oborotna-kontragent"
+    }
+    if kind == "counterpart_chrono" {
+        return "hronologichen-kontragent"
+    }
+    if kind == "correspondence_ledger" {
+        return "glavna-kniga-korespondencii"
+    }
+    if kind == "balance_sheet" {
+        return "balans"
+    }
+    if kind == "income_statement" {
+        return "opr"
+    }
+    if kind == "cash_flow" {
+        return "parichen-potok"
+    }
+    if kind == "equity" {
+        return "sobstven-kapital"
+    }
+    return "spravka"
+}
+
+fn rpt_kind_ok(kind: str) -> i64 {
+    if kind == "trial_balance" {
+        return 1
+    }
+    if kind == "general_ledger" {
+        return 1
+    }
+    if kind == "chronological" {
+        return 1
+    }
+    if kind == "counterpart_trial" {
+        return 1
+    }
+    if kind == "counterpart_chrono" {
+        return 1
+    }
+    if kind == "correspondence_ledger" {
+        return 1
+    }
+    if kind == "balance_sheet" || kind == "income_statement" || kind == "cash_flow" || kind == "equity" {
+        return 1
+    }
+    return 0
+}
+
+fn rpt_mime(format: str) -> str {
+    if format == "pdf" {
+        return "application/pdf"
+    }
+    if format == "xlsx" {
+        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    }
+    if format == "ods" {
+        return "application/vnd.oasis.opendocument.spreadsheet"
+    }
+    return "application/octet-stream"
+}
+
+fn rpt_format_ok(format: str) -> i64 {
+    if format == "pdf" {
+        return 1
+    }
+    if format == "xlsx" {
+        return 1
+    }
+    if format == "ods" {
+        return 1
+    }
+    return 0
+}
+
+fn rpt_period(from: str, to: str) -> str {
+    return concat(from, concat(" — ", to))
+}
+
+// R4 (reportbaga, 2026-10-31): пълен BGN формат — 2 десетични, nbsp за хиляди,
+// запетая. Числови низове само; останалото минава непроменено.
+fn rpt_bg_num(s: str) -> str {
+    if report_is_number(s) == 1 {
+        return report_fmt_bgn(s)
+    }
+    return str_replace(s, ".", ",")
+}

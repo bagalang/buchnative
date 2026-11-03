@@ -1,0 +1,274 @@
+// actions/fs_formulas.baga — настройки на формули за финансови отчети.
+
+import "../models/fs_nom.baga"
+import "../models/fs_formula.baga"
+import "../models/fs_formula_defaults.baga"
+import "../models/fs_formula_store.baga"
+import "acl.baga"
+import "active_company.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+fn act_fs_lines(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:read")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let st = str_trim(fmr_query(ctx, "statement"))
+    if st == "" {
+        return act_ok(db, fs_nom_statements_json())
+    }
+    if fs_nom_known(st) == 0 {
+        return act_err(db, 400, "statement трябва да е balance/pl/cashflow/equity")
+    }
+    return act_ok(db, fs_nom_list_json(st))
+}
+
+fn act_fs_formulas_get(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:read")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let st = str_trim(fmr_query(ctx, "statement"))
+    if fs_nom_known(st) == 0 {
+        return act_err(db, 400, "statement трябва да е balance/pl/cashflow/equity")
+    }
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let q = fsf_by_company(ac.db, ac.id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        if orm_cell_by(q, i, "statement") == st {
+            arr = jarr_obj(arr, fsf_to_json(q, i))
+        }
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "statement", st)
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", vec_len(arr.items))
+    return act_ok(orm_db_q(q), o)
+}
+
+fn act_fs_formulas_put(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:write")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let st_f = jreq_str(b.doc, b.root, "statement")
+    if st_f.ok == 0 {
+        return act_422_field(db, "statement", st_f)
+    }
+    let st = str_trim(st_f.val)
+    if fs_nom_known(st) == 0 {
+        return act_err(db, 422, "statement трябва да е balance/pl/cashflow/equity")
+    }
+    let code_f = jreq_str(b.doc, b.root, "line_code")
+    if code_f.ok == 0 {
+        return act_422_field(db, "line_code", code_f)
+    }
+    let code = str_trim(code_f.val)
+    if fs_nom_has_code(st, code) == 0 {
+        return act_err(db, 422, "непозната статия")
+    }
+    let form_f = jreq_str(b.doc, b.root, "formula")
+    if form_f.ok == 0 {
+        return act_422_field(db, "formula", form_f)
+    }
+    let formula = str_trim(form_f.val)
+    let perr = fs_formula_ok(formula)
+    if perr != "" {
+        return act_err(db, 422, perr)
+    }
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let q = fsf_by_company(ac.db, ac.id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let mut found: i64 = 0
+    let mut fid: i64 = 0
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        if orm_cell_by(q, i, "statement") == st {
+            if orm_cell_by(q, i, "line_code") == code {
+                found = 1
+                fid = orm_cell_by_i64(q, i, "id")
+            }
+        }
+        i = i + 1
+    }
+    if found == 1 {
+        let up = fsf_update_formula(orm_db_q(q), fid, formula)?
+        if orm_ok(up) == 0 {
+            return act_err(orm_db_exec(up), 500, orm_err_exec(up))
+        }
+        let nq = fsf_find(orm_db_exec(up), fid)?
+        return act_ok(orm_db_q(nq), fsf_to_json(nq, 0))
+    }
+    let ins = fsf_create(orm_db_q(q), ac.id, st, code, formula)?
+    if orm_ok_q(ins) == 0 || orm_nrows(ins) < 1 {
+        return act_err(orm_db_q(ins), 500, orm_err_q(ins))
+    }
+    return act_ok(orm_db_q(ins), fsf_to_json(ins, 0))
+}
+
+fn act_fs_formulas_validate(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:read")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let form_f = jreq_str(b.doc, b.root, "formula")
+    if form_f.ok == 0 {
+        return act_422_field(db, "formula", form_f)
+    }
+    let p = fs_formula_parse(form_f.val)
+    let mut o = jobj_new()
+    o = jobj_i64(o, "ok", p.ok)
+    o = jobj_str(o, "error", p.err)
+    o = jobj_i64(o, "tokens", vec_len(p.tokens))
+    return act_ok(db, o)
+}
+
+fn act_fs_formulas_defaults(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:write")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let st_f = jreq_str(b.doc, b.root, "statement")
+    if st_f.ok == 0 {
+        return act_422_field(db, "statement", st_f)
+    }
+    let st = str_trim(st_f.val)
+    if fs_nom_known(st) == 0 {
+        return act_err(db, 422, "statement трябва да е balance/pl/cashflow/equity")
+    }
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let q = fsf_by_company(ac.db, ac.id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let mut nexist: i64 = 0
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        if orm_cell_by(q, i, "statement") == st {
+            nexist = nexist + 1
+        }
+        i = i + 1
+    }
+    if nexist > 0 {
+        return act_err(orm_db_q(q), 422, "вече има формули за този отчет. Изтрийте ги първо.")
+    }
+    let rows = fs_defaults_rows(st)
+    let mut db2 = orm_db_q(q)
+    let mut n: i64 = 0
+    i = 0
+    while i < vec_len(rows) {
+        let p = str_split(vec_get(rows, i), "|")
+        if vec_len(p) >= 2 {
+            let ins = fsf_create(db2, ac.id, st, vec_get(p, 0), vec_get(p, 1))?
+            if orm_ok_q(ins) == 0 {
+                return act_err(orm_db_q(ins), 500, orm_err_q(ins))
+            }
+            db2 = orm_db_q(ins)
+            n = n + 1
+        }
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "statement", st)
+    o = jobj_i64(o, "count", n)
+    return act_ok(db2, o)
+}
+
+fn act_fs_formulas_clear(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:write")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let st_f = jreq_str(b.doc, b.root, "statement")
+    if st_f.ok == 0 {
+        return act_422_field(db, "statement", st_f)
+    }
+    let st = str_trim(st_f.val)
+    if fs_nom_known(st) == 0 {
+        return act_err(db, 422, "statement трябва да е balance/pl/cashflow/equity")
+    }
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let q = fsf_by_company(ac.db, ac.id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let ids = vec_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        if orm_cell_by(q, i, "statement") == st {
+            vec_push(ids, int_to_str(orm_cell_by_i64(q, i, "id")))
+        }
+        i = i + 1
+    }
+    let mut db2 = orm_db_q(q)
+    i = 0
+    while i < vec_len(ids) {
+        let del = fsf_delete(db2, parse_int(vec_get(ids, i)))?
+        if orm_ok(del) == 0 {
+            return act_err(orm_db_exec(del), 500, orm_err_exec(del))
+        }
+        db2 = orm_db_exec(del)
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "statement", st)
+    o = jobj_i64(o, "count", vec_len(ids))
+    return act_ok(db2, o)
+}

@@ -1,0 +1,104 @@
+# VPS / локално: от корена на baga монорепото
+#   docker compose -f app-product/buchnative/deploy/docker-compose.yml --env-file app-product/buchnative/deploy/.env up --build -d
+#
+# Задължително в .env: FMR_JWT_SECRET (дълъг случаен низ). Не ползвай dev-secret.
+#
+# boiladb държи данните в rocksbaga (LSM: WAL + SST) под /data.
+# network_mode: host — портовете са директно на машината (3000 / 8080 / 6575 / 5050).
+
+name: buchnative
+
+services:
+  boiladb:
+    container_name: buchnative-boiladb
+    build:
+      context: ../../..
+      dockerfile: app-product/buchnative/deploy/Dockerfile.baga
+      args:
+        BAGA_ENTRY: app-product/boilaDB/tools/serve_pg.baga
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      BOILA_PGPORT: "6575"
+      BOILA_WORKERS: "8"
+      BOILA_PATH: /data
+    volumes:
+      - boila-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/127.0.0.1/6575'"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+      start_period: 40s
+
+  backend:
+    container_name: buchnative-backend
+    build:
+      context: ../../..
+      dockerfile: app-product/buchnative/deploy/Dockerfile.baga
+      args:
+        BAGA_ENTRY: app-product/buchnative/backend/start.baga
+        INSTALL_FONTS: "1"
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      boiladb:
+        condition: service_healthy
+    environment:
+      PORT: "8080"
+      ORM_BACKEND: boila
+      BOILA_PGHOST: "127.0.0.1"
+      BOILA_PGPORT: "6575"
+      BOILA_PGUSER: boila
+      BOILA_PGDATABASE: boila
+      FMR_WORKERS: "8"
+      FMR_LOG: "1"
+      FMR_CORS: ${FMR_CORS:-}
+      FMR_JWT_SECRET: ${FMR_JWT_SECRET:?set FMR_JWT_SECRET in deploy/.env}
+      FMR_JWT_TTL_SEC: ${FMR_JWT_TTL_SEC:-604800}
+      FMR_TITLE: buchnative
+      FMR_VERSION: "0.8.9"
+      BUCHNATIVE_SIDECAR: http://127.0.0.1:5050
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/127.0.0.1/8080'"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+
+  sidecar:
+    container_name: buchnative-sidecar
+    image: python:3.12-slim-trixie
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      boiladb:
+        condition: service_healthy
+    working_dir: /app
+    volumes:
+      - ../scripts/py:/app:ro
+    environment:
+      BUCHNATIVE_SIDECAR_PORT: "5050"
+      BOILA_PGHOST: "127.0.0.1"
+      BOILA_PGPORT: "6575"
+      BOILA_PGUSER: boila
+      BOILA_PGDATABASE: boila
+    command: ["sh", "-c", "pip install -q -r requirements.txt && python sidecar.py"]
+
+  frontend:
+    container_name: buchnative-frontend
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.frontend
+      args:
+        BUCHNATIVE_API_PROXY: http://127.0.0.1:8080
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      BUCHNATIVE_API_PROXY: http://127.0.0.1:8080
+
+volumes:
+  boila-data:

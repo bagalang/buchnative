@@ -1,0 +1,366 @@
+// actions/mistral_ocr.baga — PDF/снимка → текст (OCR 4.1) → JSON на фактура.
+// Резултатът е header + редове, не запис по сметки. Ключът е по фирма.
+
+import "mistral.baga"
+import "fmrbaga/jsonx.baga"
+import "std/json/json.baga"
+import "std/net/http_client.baga"
+import "std/str/str.baga"
+
+struct ScanResult {
+    ok: i64,
+    err: str,
+    invoice_number: str,
+    issue_date: str,
+    due_date: str,
+    document_type: str,
+    counterpart_name: str,
+    counterpart_eik: str,
+    counterpart_vat_number: str,
+    currency: str,
+    total_net_amount: str,
+    total_vat_amount: str,
+    total_amount: str,
+    ocr_text: str,
+    lines: JArr
+}
+
+fn scan_result_err(err: str) -> ScanResult {
+    return ScanResult {
+        ok: 0,
+        err: err,
+        invoice_number: "",
+        issue_date: "",
+        due_date: "",
+        document_type: "01",
+        counterpart_name: "",
+        counterpart_eik: "",
+        counterpart_vat_number: "",
+        currency: "EUR",
+        total_net_amount: "0",
+        total_vat_amount: "0",
+        total_amount: "0",
+        ocr_text: "",
+        lines: jarr_new()
+    }
+}
+
+fn mistral_ocr_url() -> str {
+    return "https://api.mistral.ai/v1/ocr"
+}
+
+fn mistral_ocr_model() -> str {
+    return "mistral-ocr-latest"
+}
+
+fn mistral_extract_model() -> str {
+    return "mistral-small-2603"
+}
+
+fn jflex_str(d: JsonDoc, obj: i64, key: str, default_val: str) -> str {
+    let n = json_get(d, obj, key)
+    if n < 0 {
+        return default_val
+    }
+    let t = json_tag(d, n)
+    if t == 0 {
+        return default_val
+    }
+    if t == 4 || t == 3 {
+        return str_trim(json_str(d, n))
+    }
+    return default_val
+}
+
+// Клиентът праща гол base64 (без data:...;base64,). Ако все пак има data:
+// префикс, той е в първите ~64 байта — не обхождай целия (голям) низ.
+fn scan_strip_b64(s: str) -> str {
+    let n = len(s)
+    let mut hn = n
+    if hn > 64 {
+        hn = 64
+    }
+    let head = substr(s, 0, hn)
+    let c = str_find(head, ",")
+    if c >= 0 {
+        if str_find(head, "base64") >= 0 {
+            return substr(s, c + 1, n)
+        }
+    }
+    return s
+}
+
+fn scan_is_pdf(name: str, mime: str) -> i64 {
+    if mime == "application/pdf" {
+        return 1
+    }
+    if str_ends_with(name, ".pdf") || str_ends_with(name, ".PDF") {
+        return 1
+    }
+    return 0
+}
+
+fn scan_mime(name: str, mime: str) -> str {
+    if mime != "" {
+        return mime
+    }
+    if scan_is_pdf(name, "") == 1 {
+        return "application/pdf"
+    }
+    if str_ends_with(name, ".png") || str_ends_with(name, ".PNG") {
+        return "image/png"
+    }
+    return "image/jpeg"
+}
+
+fn vat_rate_norm(s: str) -> str {
+    if s == "20" || s == "20.0" || s == "20.00" {
+        return "20"
+    }
+    if s == "9" || s == "9.0" || s == "9.00" {
+        return "9"
+    }
+    if s == "0" || s == "0.0" || s == "0.00" {
+        return "0"
+    }
+    return s
+}
+
+fn unit_norm(s: str) -> str {
+    let t = str_trim(s)
+    if t == "" || t == "бр" || t == "бр." || t == "броя" || t == "pcs" || t == "PCS" {
+        return "C62"
+    }
+    if t == "кг" || t == "kg" || t == "KG" || t == "кг." {
+        return "KGM"
+    }
+    if t == "л" || t == "l" || t == "L" || t == "ltr" {
+        return "LTR"
+    }
+    if t == "м" || t == "m" || t == "M" {
+        return "MTR"
+    }
+    if len(t) == 3 {
+        return t
+    }
+    return "C62"
+}
+
+fn http_err_note(prefix: str, resp: HttpResponse) -> str {
+    let mut s = concat(prefix, " HTTP ")
+    s = concat(s, int_to_str(resp.status))
+    let mut b = resp.body
+    if len(b) > 360 {
+        b = substr(b, 0, 360)
+    }
+    return concat(concat(s, ": "), b)
+}
+
+fn mistral_auth_headers(api_key: str) -> Map<str, str> {
+    let headers: Map<str, str> = map_new()
+    map_set(headers, "authorization", concat("Bearer ", api_key))
+    map_set(headers, "content-type", "application/json")
+    map_set(headers, "user-agent", "buchnative/0.1")
+    return headers
+}
+
+fn ocr_pages_markdown(body: str) -> str {
+    let parsed = jbody_parse_str(body)
+    if parsed.ok == 0 {
+        return ""
+    }
+    let pages = json_get(parsed.doc, parsed.root, "pages")
+    if pages < 0 || json_tag(parsed.doc, pages) != 5 {
+        return ""
+    }
+    let mut out = ""
+    let n = json_count(parsed.doc, pages)
+    let mut i: i64 = 0
+    while i < n {
+        let p = json_at(parsed.doc, pages, i)
+        if json_tag(parsed.doc, p) == 6 {
+            let md = jflex_str(parsed.doc, p, "markdown", "")
+            if md != "" {
+                if out != "" {
+                    out = concat(out, "\n\n")
+                }
+                out = concat(out, md)
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn scan_prompt(direction: str) -> str {
+    let mut s = "Extract a Bulgarian invoice as JSON only. Keys: invoice_number, issue_date (YYYY-MM-DD), due_date, document_type (01 invoice, 02 debit note, 03 credit note), counterpart_name, counterpart_eik (digits only), counterpart_vat_number (with country prefix e.g. BG), currency, total_net_amount, total_vat_amount, total_amount, lines (array of description, quantity, unit, unit_price, vat_rate, net_amount, vat_amount, total). Amounts as strings with 2 decimals. unit_price is net without VAT. unit is UN/CEFACT (C62 pcs, KGM kg, LTR litre, MTR metre) else C62. vat_rate is 20, 9 or 0. Empty string if unknown. "
+    if direction == "in" {
+        s = concat(s, "This is a PURCHASE: counterpart is the supplier (issuer of the invoice).")
+    } else {
+        s = concat(s, "This is a SALE: counterpart is the customer (recipient), not our company.")
+    }
+    return s
+}
+
+fn scan_line_obj(d: JsonDoc, elem: i64) -> JObj {
+    let desc = jflex_str(d, elem, "description", "")
+    let qty = jflex_str(d, elem, "quantity", "1")
+    let unit = unit_norm(jflex_str(d, elem, "unit", "C62"))
+    let price = jflex_str(d, elem, "unit_price", "0")
+    let vat = vat_rate_norm(jflex_str(d, elem, "vat_rate", "20"))
+    let mut total = jflex_str(d, elem, "total_amount", "")
+    if total == "" {
+        total = jflex_str(d, elem, "total", "0")
+    }
+    let net = jflex_str(d, elem, "net_amount", "")
+    let vat_amt = jflex_str(d, elem, "vat_amount", "")
+    let mut o = jobj_new()
+    o = jobj_str(o, "description", desc)
+    o = jobj_str(o, "quantity", qty)
+    o = jobj_str(o, "unit", unit)
+    o = jobj_str(o, "unit_price", price)
+    o = jobj_str(o, "vat_rate", vat)
+    o = jobj_str(o, "net_amount", net)
+    o = jobj_str(o, "vat_amount", vat_amt)
+    o = jobj_str(o, "total_amount", total)
+    return o
+}
+
+fn scan_parse_invoice(content: str) -> ScanResult {
+    let slice = json_object_slice(content)
+    if slice == "" {
+        return scan_result_err("Mistral не върна JSON на фактурата")
+    }
+    let parsed = jbody_parse_str(slice)
+    if parsed.ok == 0 {
+        return scan_result_err("невалиден JSON от Mistral")
+    }
+    let d = parsed.doc
+    let root = parsed.root
+    let mut dt = jflex_str(d, root, "document_type", "01")
+    if dt == "" {
+        dt = "01"
+    }
+    let mut cur = jflex_str(d, root, "currency", "EUR")
+    if cur == "" {
+        cur = "EUR"
+    }
+    let mut arr = jarr_new()
+    let lines_n = json_get(d, root, "lines")
+    if lines_n >= 0 && json_tag(d, lines_n) == 5 {
+        let n = json_count(d, lines_n)
+        let mut i: i64 = 0
+        while i < n {
+            let elem = json_at(d, lines_n, i)
+            if json_tag(d, elem) == 6 {
+                arr = jarr_obj(arr, scan_line_obj(d, elem))
+            }
+            i = i + 1
+        }
+    }
+    return ScanResult {
+        ok: 1,
+        err: "",
+        invoice_number: jflex_str(d, root, "invoice_number", ""),
+        issue_date: jflex_str(d, root, "issue_date", ""),
+        due_date: jflex_str(d, root, "due_date", ""),
+        document_type: dt,
+        counterpart_name: jflex_str(d, root, "counterpart_name", ""),
+        counterpart_eik: jflex_str(d, root, "counterpart_eik", ""),
+        counterpart_vat_number: jflex_str(d, root, "counterpart_vat_number", ""),
+        currency: cur,
+        total_net_amount: jflex_str(d, root, "total_net_amount", "0"),
+        total_vat_amount: jflex_str(d, root, "total_vat_amount", "0"),
+        total_amount: jflex_str(d, root, "total_amount", "0"),
+        ocr_text: "",
+        lines: arr
+    }
+}
+
+fn mistral_ocr_text(api_key: str, filename: str, mime: str, b64: str) -> ScanResult !IO !Net !Random {
+    let raw = scan_strip_b64(b64)
+    if raw == "" {
+        return scan_result_err("празен файл")
+    }
+    let mt = scan_mime(filename, mime)
+    let data_url = concat(concat("data:", mt), concat(";base64,", raw))
+    let mut doc = jobj_new()
+    if scan_is_pdf(filename, mt) == 1 {
+        doc = jobj_str(doc, "type", "document_url")
+        doc = jobj_str(doc, "document_url", data_url)
+    } else {
+        doc = jobj_str(doc, "type", "image_url")
+        doc = jobj_str(doc, "image_url", data_url)
+    }
+    let mut req = jobj_new()
+    req = jobj_str(req, "model", mistral_ocr_model())
+    req = jobj_obj(req, "document", doc)
+    req = jobj_bool(req, "include_image_base64", 0)
+    let headers = mistral_auth_headers(api_key)
+    let anchor = mistral_anchor_der()?
+    let resp = http_request_anchor("POST", mistral_ocr_url(), headers, jobj_encode(req), 120, anchor)?
+    if resp.ok == 0 {
+        return scan_result_err("Mistral OCR: връзката към api.mistral.ai се скъса (TLS/таймаут). Опитай по-малък файл.")
+    }
+    if resp.status != 200 {
+        return scan_result_err(http_err_note("Mistral OCR", resp))
+    }
+    let text = ocr_pages_markdown(resp.body)
+    if text == "" {
+        return scan_result_err("OCR не върна текст от документа")
+    }
+    return ScanResult {
+        ok: 1,
+        err: "",
+        invoice_number: "",
+        issue_date: "",
+        due_date: "",
+        document_type: "01",
+        counterpart_name: "",
+        counterpart_eik: "",
+        counterpart_vat_number: "",
+        currency: "EUR",
+        total_net_amount: "0",
+        total_vat_amount: "0",
+        total_amount: "0",
+        ocr_text: text,
+        lines: jarr_new()
+    }
+}
+
+fn mistral_extract_invoice(api_key: str, filename: str, mime: str, b64: str, direction: str) -> ScanResult !IO !Net !Random {
+    let ocr = mistral_ocr_text(api_key, filename, mime, b64)?
+    if ocr.ok == 0 {
+        return ocr
+    }
+    let text = ocr.ocr_text
+    let mut sys = jobj_new()
+    sys = jobj_str(sys, "role", "system")
+    sys = jobj_str(sys, "content", "You extract Bulgarian invoices. Return only JSON.")
+    let mut user = jobj_new()
+    user = jobj_str(user, "role", "user")
+    user = jobj_str(user, "content", concat(concat(scan_prompt(direction), "\n\nOCR text:\n"), text))
+    let mut msgs = jarr_new()
+    msgs = jarr_obj(msgs, sys)
+    msgs = jarr_obj(msgs, user)
+    let mut req = jobj_new()
+    req = jobj_str(req, "model", mistral_extract_model())
+    req = jobj_arr(req, "messages", msgs)
+    req = jobj_raw(req, "temperature", "0.1")
+    req = jobj_i64(req, "max_tokens", 4096)
+    req = jobj_raw(req, "response_format", "{\"type\":\"json_object\"}")
+    let headers = mistral_auth_headers(api_key)
+    let anchor = mistral_anchor_der()?
+    let resp = http_request_anchor("POST", mistral_chat_url(), headers, jobj_encode(req), 60, anchor)?
+    if resp.ok == 0 {
+        return scan_result_err("Mistral chat е недостъпен (мрежова грешка)")
+    }
+    if resp.status != 200 {
+        return scan_result_err(http_err_note("Mistral chat", resp))
+    }
+    let content = mistral_chat_content(resp.body)
+    if content == "" {
+        return scan_result_err("Mistral chat не върна съдържание")
+    }
+    return scan_parse_invoice(content)
+}

@@ -1,0 +1,132 @@
+// models/saft_nom_docs.baga — SAF-T BG: фактури, плащания, запаси, области, ДДС режими.
+// Кодове от Structure_Definition_V_1.0.1 (НАП). Задължителни при подаване.
+
+// Видове фактури/документи (InvoiceType, ППДДС).
+// Ред: code|name_bg|name_en
+
+fn saft_invoice_type_push(rows: Vec<str>, line: str) -> Vec<str> {
+    vec_push(rows, line)
+    return rows
+}
+
+fn saft_invoice_type_rows() -> Vec<str> {
+    let mut r = vec_new()
+    r = saft_invoice_type_push(r, "01|Фактура|Invoice")
+    r = saft_invoice_type_push(r, "02|Дебитно известие|Debit note")
+    r = saft_invoice_type_push(r, "03|Кредитно известие|Credit note")
+    r = saft_invoice_type_push(r, "04|Регистър на стоки под режим складиране на стоки до поискване, изпратени или транспортирани от територията на страната до територията на друга държава членка|Call-off stock register — goods sent to another Member State")
+    r = saft_invoice_type_push(r, "05|Регистър на стоки под режим складиране на стоки до поискване, получени на територията на страната|Call-off stock register — goods received in Bulgaria")
+    r = saft_invoice_type_push(r, "07|Митническа декларация|Customs declaration")
+    r = saft_invoice_type_push(r, "09|Протокол или друг документ|Protocol or other document")
+    r = saft_invoice_type_push(r, "11|Фактура - касова отчетност|Invoice — cash accounting")
+    r = saft_invoice_type_push(r, "12|Дебитно известие – касова отчетност|Debit note — cash accounting")
+    r = saft_invoice_type_push(r, "13|Кредитно известие – касова отчетност|Credit note — cash accounting")
+    r = saft_invoice_type_push(r, "23|Кредитно известие по чл. 126б, ал. 1 от ЗДДС|Credit note under Art. 126b(1) VAT Act")
+    r = saft_invoice_type_push(r, "29|Протокол по чл. 126б, ал. 2 и 7 от ЗДДС|Protocol under Art. 126b(2) and (7) VAT Act")
+    r = saft_invoice_type_push(r, "81|Отчет за извършените продажби|Sales report")
+    r = saft_invoice_type_push(r, "82|Отчет за извършените продажби при специален ред на облагане|Sales report — special scheme")
+    r = saft_invoice_type_push(r, "91|Протокол за изискуемия данък по чл. 151в, ал. 3 от закона|Protocol for tax due under Art. 151c(3)")
+    r = saft_invoice_type_push(r, "92|Протокол за данъчния кредит по чл. 151г, ал. 8 от закона или отчет по чл. 104ж, ал. 14|Protocol for input tax under Art. 151d(8) or report under Art. 104zh(14)")
+    r = saft_invoice_type_push(r, "93|Протокол за изискуемия данък по чл. 151в, ал. 7 от закона с получател по доставката лице, което не прилага специалния режим|Protocol Art. 151c(7) — recipient not under special scheme")
+    r = saft_invoice_type_push(r, "94|Протокол за изискуемия данък по чл. 151в, ал. 7 от закона с получател по доставката лице, което прилага специалния режим|Protocol Art. 151c(7) — recipient under special scheme")
+    r = saft_invoice_type_push(r, "95|Протокол за безвъзмездно предоставяне на хранителни стоки, за което е приложим чл. 6, ал. 4, т. 4 ЗДДС|Protocol for free supply of food under Art. 6(4)(4) VAT Act")
+    return r
+}
+
+// Начини и механизми на плащане (PaymentMethod / PaymentMechanism).
+// Ред: method_code|mechanism_code|name_bg|name_en
+
+fn saft_payment_method_push(rows: Vec<str>, line: str) -> Vec<str> {
+    vec_push(rows, line)
+    return rows
+}
+
+fn saft_payment_method_rows() -> Vec<str> {
+    let mut r = vec_new()
+    r = saft_payment_method_push(r, "01|10|Пари в брой|Cash")
+    r = saft_payment_method_push(r, "02|97|Прихващане между контрагенти|Offset between counterparts")
+    r = saft_payment_method_push(r, "02|98|Бартер|Barter")
+    r = saft_payment_method_push(r, "02|99|Подотчетни лица|Accountable persons")
+    r = saft_payment_method_push(r, "03|20|С чек|Cheque")
+    r = saft_payment_method_push(r, "03|42|Плащане по банкова сметка|Bank transfer")
+    r = saft_payment_method_push(r, "03|48|Банкова карта|Bank card")
+    r = saft_payment_method_push(r, "03|68|Услуги за онлайн плащане|Online payment")
+    r = saft_payment_method_push(r, "03|30|Ваучер|Voucher")
+    return r
+}
+
+// Вид на материалния запас (ProductType).
+// Ред: code|name_bg|name_en
+
+fn saft_product_type_push(rows: Vec<str>, line: str) -> Vec<str> {
+    vec_push(rows, line)
+    return rows
+}
+
+fn saft_product_type_rows() -> Vec<str> {
+    let mut r = vec_new()
+    r = saft_product_type_push(r, "10|Материали|Materials")
+    r = saft_product_type_push(r, "20|Продукция|Finished goods")
+    r = saft_product_type_push(r, "30|Стоки|Merchandise")
+    r = saft_product_type_push(r, "40|Незавършено производство|Work in progress")
+    r = saft_product_type_push(r, "50|Инвестиция в материален запас|Investment in inventories")
+    return r
+}
+
+// Области ISO 3166-2:BG (AuditFileRegion / Address.Region).
+// Ред: code|name
+
+fn saft_region_push(rows: Vec<str>, line: str) -> Vec<str> {
+    vec_push(rows, line)
+    return rows
+}
+
+fn saft_region_rows() -> Vec<str> {
+    let mut r = vec_new()
+    r = saft_region_push(r, "BG-01|Благоевград")
+    r = saft_region_push(r, "BG-02|Бургас")
+    r = saft_region_push(r, "BG-03|Варна")
+    r = saft_region_push(r, "BG-04|Велико Търново")
+    r = saft_region_push(r, "BG-05|Видин")
+    r = saft_region_push(r, "BG-06|Враца")
+    r = saft_region_push(r, "BG-07|Габрово")
+    r = saft_region_push(r, "BG-08|Добрич")
+    r = saft_region_push(r, "BG-09|Кърджали")
+    r = saft_region_push(r, "BG-10|Кюстендил")
+    r = saft_region_push(r, "BG-11|Ловеч")
+    r = saft_region_push(r, "BG-12|Монтана")
+    r = saft_region_push(r, "BG-13|Пазарджик")
+    r = saft_region_push(r, "BG-14|Перник")
+    r = saft_region_push(r, "BG-15|Плевен")
+    r = saft_region_push(r, "BG-16|Пловдив")
+    r = saft_region_push(r, "BG-17|Разград")
+    r = saft_region_push(r, "BG-18|Русе")
+    r = saft_region_push(r, "BG-19|Силистра")
+    r = saft_region_push(r, "BG-20|Сливен")
+    r = saft_region_push(r, "BG-21|Смолян")
+    r = saft_region_push(r, "BG-22|София")
+    r = saft_region_push(r, "BG-23|Софийска област")
+    r = saft_region_push(r, "BG-24|Стара Загора")
+    r = saft_region_push(r, "BG-25|Търговище")
+    r = saft_region_push(r, "BG-26|Хасково")
+    r = saft_region_push(r, "BG-27|Шумен")
+    r = saft_region_push(r, "BG-28|Ямбол")
+    return r
+}
+
+// Данъчни режими по ДДС (TaxType в TaxIDStructure).
+// Ред: code|name_bg|name_en
+
+fn saft_tax_regime_push(rows: Vec<str>, line: str) -> Vec<str> {
+    vec_push(rows, line)
+    return rows
+}
+
+fn saft_tax_regime_rows() -> Vec<str> {
+    let mut r = vec_new()
+    r = saft_tax_regime_push(r, "100010|Данъчно задължено лице, регистрирано за целите на ДДС|Taxable person registered for VAT")
+    r = saft_tax_regime_push(r, "100020|Всяко друго данъчно задължено лице|Any other taxable person")
+    r = saft_tax_regime_push(r, "100030|Данъчно незадължено лице|Non-taxable person")
+    return r
+}
+

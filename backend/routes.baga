@@ -1,0 +1,445 @@
+// routes.baga — route table + fmr_dispatch за buchnative.
+// Фаза 2 (пълна): system + auth + companies + accounts + counterparts +
+// products + invoices (+post) + journal.
+
+import "actions/system.baga"
+import "actions/auth.baga"
+import "actions/auth_register.baga"
+import "actions/auth_reset.baga"
+import "actions/auth_totp.baga"
+import "actions/companies.baga"
+import "actions/company_settings.baga"
+import "actions/document_series.baga"
+import "actions/accounts.baga"
+import "actions/accounts_seed.baga"
+import "actions/counterparts.baga"
+import "actions/products.baga"
+import "actions/invoices.baga"
+import "actions/invoices_update.baga"
+import "actions/invoices_bulk.baga"
+import "actions/dashboard.baga"
+import "actions/invoices_print.baga"
+import "actions/invoices_ubl.baga"
+import "actions/invoices_post.baga"
+import "actions/journal.baga"
+import "actions/vat.baga"
+import "actions/saft.baga"
+import "actions/saft_noms.baga"
+import "actions/saft_mappings.baga"
+import "actions/fs_formulas.baga"
+import "actions/fixed_assets.baga"
+import "actions/internal_docs.baga"
+import "actions/internal_docs_confirm.baga"
+import "actions/periods.baga"
+import "actions/opening_balances.baga"
+import "actions/active_company.baga"
+import "actions/exchange_rates.baga"
+import "actions/bank_accounts.baga"
+import "actions/bank_transactions.baga"
+import "actions/bank_transactions_ops.baga"
+import "actions/dividends.baga"
+import "actions/dividends_ops.baga"
+import "actions/recipes.baga"
+import "actions/production.baga"
+import "actions/production_confirm.baga"
+import "actions/scans.baga"
+import "actions/addresses.baga"
+import "actions/ubl_import.baga"
+import "actions/admin_settings.baga"
+import "actions/users.baga"
+import "actions/roles.baga"
+import "actions/reports.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/deps.baga"
+import "fmrbaga/respond.baga"
+import "fmrbaga/config.baga"
+import "ormbaga/orm.baga"
+import "jwtbaga/jwt.baga"
+import "std/time/time.baga"
+
+import "routes_rid.baga"
+
+
+fn fmr_build_app() -> FmrApp !IO {
+    let cfg = fmr_config_load()?
+    let mut app = fmr_app_new(cfg.title, cfg.version)
+    app = fmr_app_with_config(app, cfg)
+    app = fmr_route_meta(app, "GET", "/health", RID_HEALTH(), "", "system", 1, "", "Status", "200", "")
+    app = fmr_route_meta(app, "GET", "/ready", RID_READY(), "", "system", 1, "", "Ready", "200", "")
+    app = fmr_route_meta(app, "GET", "/readyz", RID_READY(), "", "system", 1, "", "Ready", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/meta", RID_META(), "", "system", 1, "", "Status", "200", "")
+    app = fmr_route_meta(app, "GET", "/openapi.json", RID_OPENAPI(), "", "system", 1, "", "-", "200", "")
+    app = fmr_route_meta(app, "GET", "/metrics", RID_METRICS(), "", "system", 0, "", "-", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/auth/token", RID_TOKEN(), "", "auth", 1, "TokenRequest?", "TokenResponse", "200", "sub:s")
+    app = fmr_route_meta(app, "GET", "/v1/me", RID_ME(), "", "auth", 0, "", "Me", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/auth/registration-status", RID_REG_STATUS(), "", "auth", 1, "", "RegStatus", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/auth/register", RID_REGISTER(), "", "auth", 1, "RegisterRequest", "RegisterResult", "201", "")
+    app = fmr_route_meta(app, "POST", "/v1/auth/forgot-password", RID_FORGOT(), "", "auth", 1, "ForgotPassword", "Message", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/auth/reset-password", RID_RESET(), "", "auth", 1, "ResetPassword", "Message", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/auth/mfa", RID_MFA(), "", "auth", 1, "MfaRequest", "TokenResponse", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/me/totp/start", RID_TOTP_START(), "", "auth", 0, "", "TotpStart", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/me/totp/confirm", RID_TOTP_CONFIRM(), "", "auth", 0, "TotpConfirm", "Message", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/me/totp/disable", RID_TOTP_DISABLE(), "", "auth", 0, "TotpDisable", "Message", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/companies", RID_COMPANIES_INDEX(), "", "companies", 0, "", "CompanyList", "200", "limit,offset")
+    app = fmr_route_meta(app, "POST", "/v1/companies", RID_COMPANIES_CREATE(), "", "companies", 0, "CompanyCreate", "Company", "201", "")
+    app = fmr_route_meta(app, "GET", "/v1/companies/{id}", RID_COMPANIES_SHOW(), "", "companies", 0, "", "Company", "200", "")
+    app = fmr_route_meta(app, "PATCH", "/v1/companies/{id}", RID_COMPANIES_UPDATE(), "", "companies", 0, "CompanyUpdate", "Company", "200", "")
+    app = fmr_route_meta(app, "DELETE", "/v1/companies/{id}", RID_COMPANIES_DELETE(), "", "companies", 0, "", "-", "204", "")
+    app = fmr_route_meta(app, "GET", "/v1/companies/{id}/settings", RID_COMPANY_SETTINGS(), "", "companies", 0, "", "CompanySettings", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/companies/{id}/locations", RID_CLOC_CREATE(), "", "companies", 0, "LocationCreate", "Location", "201", "")
+    app = fmr_route_meta(app, "PATCH", "/v1/company-locations/{id}", RID_CLOC_UPDATE(), "", "companies", 0, "LocationUpdate", "Location", "200", "")
+    app = fmr_route_meta(app, "DELETE", "/v1/company-locations/{id}", RID_CLOC_DELETE(), "", "companies", 0, "", "-", "204", "")
+    app = fmr_route_meta(app, "POST", "/v1/companies/{id}/beneficial-owners", RID_BOWN_CREATE(), "", "companies", 0, "OwnerCreate", "Owner", "201", "")
+    app = fmr_route_meta(app, "PATCH", "/v1/beneficial-owners/{id}", RID_BOWN_UPDATE(), "", "companies", 0, "OwnerUpdate", "Owner", "200", "")
+    app = fmr_route_meta(app, "DELETE", "/v1/beneficial-owners/{id}", RID_BOWN_DELETE(), "", "companies", 0, "", "-", "204", "")
+    app = fmr_route_meta(app, "POST", "/v1/companies/{id}/ultimate-parents", RID_UPAR_CREATE(), "", "companies", 0, "ParentCreate", "Parent", "201", "")
+    app = fmr_route_meta(app, "PATCH", "/v1/ultimate-parents/{id}", RID_UPAR_UPDATE(), "", "companies", 0, "ParentUpdate", "Parent", "200", "")
+    app = fmr_route_meta(app, "DELETE", "/v1/ultimate-parents/{id}", RID_UPAR_DELETE(), "", "companies", 0, "", "-", "204", "")
+    app = fmr_route_meta(app, "POST", "/v1/companies/{id}/document-series", RID_DSER_CREATE(), "", "companies", 0, "SeriesCreate", "Series", "201", "")
+    app = fmr_route_meta(app, "PATCH", "/v1/document-series/{id}", RID_DSER_UPDATE(), "", "companies", 0, "SeriesUpdate", "Series", "200", "")
+    app = fmr_route_meta(app, "DELETE", "/v1/document-series/{id}", RID_DSER_DELETE(), "", "companies", 0, "", "-", "204", "")
+    app = fmr_route_meta(app, "GET", "/v1/accounts", RID_ACCOUNTS_INDEX(), "", "accounts", 0, "", "AccountList", "200", "limit,offset")
+    app = fmr_route_meta(app, "POST", "/v1/accounts", RID_ACCOUNTS_CREATE(), "", "accounts", 0, "AccountCreate", "Account", "201", "")
+    app = fmr_route_meta(app, "POST", "/v1/accounts/seed-saft", RID_ACCOUNTS_SEED_SAFT(), "", "accounts", 0, "", "AccountSeed", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/accounts/{id}", RID_ACCOUNTS_SHOW(), "", "accounts", 0, "", "Account", "200", "")
+    app = fmr_route_meta(app, "PATCH", "/v1/accounts/{id}", RID_ACCOUNTS_UPDATE(), "", "accounts", 0, "AccountUpdate", "Account", "200", "")
+    app = fmr_route_meta(app, "DELETE", "/v1/accounts/{id}", RID_ACCOUNTS_DELETE(), "", "accounts", 0, "", "-", "204", "")
+    app = fmr_route_meta(app, "GET", "/v1/counterparts", RID_COUNTERPARTS_INDEX(), "", "counterparts", 0, "", "CounterpartList", "200", "limit,offset")
+    app = fmr_route_meta(app, "POST", "/v1/counterparts", RID_COUNTERPARTS_CREATE(), "", "counterparts", 0, "CounterpartCreate", "Counterpart", "201", "")
+    app = fmr_route_meta(app, "GET", "/v1/counterparts/vies-lookup", RID_COUNTERPARTS_VIES_LOOKUP(), "", "counterparts", 0, "", "ViesLookup", "200", "vat:s")
+    app = fmr_route_meta(app, "POST", "/v1/counterparts/vies", RID_COUNTERPARTS_VIES_CREATE(), "", "counterparts", 0, "CounterpartViesCreate", "Counterpart", "201", "")
+    app = fmr_route_meta(app, "GET", "/v1/counterparts/{id}", RID_COUNTERPARTS_SHOW(), "", "counterparts", 0, "", "Counterpart", "200", "")
+    app = fmr_route_meta(app, "PATCH", "/v1/counterparts/{id}", RID_COUNTERPARTS_UPDATE(), "", "counterparts", 0, "CounterpartUpdate", "Counterpart", "200", "")
+    app = fmr_route_meta(app, "DELETE", "/v1/counterparts/{id}", RID_COUNTERPARTS_DELETE(), "", "counterparts", 0, "", "-", "204", "")
+    app = fmr_route_meta(app, "GET", "/v1/products", RID_PRODUCTS_INDEX(), "", "products", 0, "", "ProductList", "200", "limit,offset")
+    app = fmr_route_meta(app, "POST", "/v1/products", RID_PRODUCTS_CREATE(), "", "products", 0, "ProductCreate", "Product", "201", "")
+    app = fmr_route_meta(app, "GET", "/v1/products/{id}", RID_PRODUCTS_SHOW(), "", "products", 0, "", "Product", "200", "")
+    app = fmr_route_meta(app, "PATCH", "/v1/products/{id}", RID_PRODUCTS_UPDATE(), "", "products", 0, "ProductUpdate", "Product", "200", "")
+    app = fmr_route_meta(app, "DELETE", "/v1/products/{id}", RID_PRODUCTS_DELETE(), "", "products", 0, "", "-", "204", "")
+    app = fmr_route_meta(app, "GET", "/v1/units", RID_UNITS_INDEX(), "", "products", 0, "", "UnitList", "200", "search:s")
+    app = fmr_route_meta(app, "GET", "/v1/vat-exemptions", RID_VAT_EXEMPTIONS(), "", "invoices", 0, "", "VatExemptionList", "200", "search:s")
+    app = fmr_route_meta(app, "GET", "/v1/dashboard", RID_DASHBOARD(), "", "dashboard", 0, "", "Dashboard", "200", "year")
+    app = fmr_route_meta(app, "GET", "/v1/invoices", RID_INVOICES_INDEX(), "", "invoices", 0, "", "InvoiceList", "200", "limit,offset")
+    app = fmr_route_meta(app, "POST", "/v1/invoices", RID_INVOICES_CREATE(), "", "invoices", 0, "InvoiceCreate", "Invoice", "201", "")
+    app = fmr_route_meta(app, "GET", "/v1/invoices/next-number", RID_INVOICES_NEXT_NUMBER(), "", "invoices", 0, "", "InvoiceNumber", "200", "document_type:s,direction:s")
+    app = fmr_route_meta(app, "GET", "/v1/invoices/{id}", RID_INVOICES_SHOW(), "", "invoices", 0, "", "Invoice", "200", "")
+    app = fmr_route_meta(app, "PATCH", "/v1/invoices/{id}", RID_INVOICES_UPDATE(), "", "invoices", 0, "InvoiceUpdate", "Invoice", "200", "")
+    app = fmr_route_meta(app, "DELETE", "/v1/invoices/{id}", RID_INVOICES_DELETE(), "", "invoices", 0, "", "-", "204", "")
+    app = fmr_route_meta(app, "POST", "/v1/invoices/bulk/post", RID_INVOICES_BULK_POST(), "", "invoices", 0, "InvoiceBulkIds", "InvoiceBulkResult", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/invoices/bulk/unpost", RID_INVOICES_BULK_UNPOST(), "", "invoices", 0, "InvoiceBulkIds", "InvoiceBulkResult", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/invoices/bulk/delete", RID_INVOICES_BULK_DELETE(), "", "invoices", 0, "InvoiceBulkIds", "InvoiceBulkResult", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/invoices/{id}/post", RID_INVOICES_POST(), "", "invoices", 0, "", "JournalEntry", "201", "")
+    app = fmr_route_meta(app, "GET", "/v1/invoices/{id}/print", RID_INVOICES_PRINT(), "", "invoices", 0, "", "-", "200", "format:s,copy:s")
+    app = fmr_route_meta(app, "GET", "/v1/invoices/{id}/ubl", RID_INVOICES_UBL(), "", "invoices", 0, "", "-", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/journal", RID_JOURNAL_INDEX(), "", "journal", 0, "", "JournalList", "200", "limit,offset")
+    app = fmr_route_meta(app, "POST", "/v1/journal", RID_JOURNAL_CREATE(), "", "journal", 0, "JournalCreate", "JournalEntry", "201", "")
+    app = fmr_route_meta(app, "GET", "/v1/journal/{id}", RID_JOURNAL_SHOW(), "", "journal", 0, "", "JournalEntry", "200", "")
+    app = fmr_route_meta(app, "PUT", "/v1/journal/{id}", RID_JOURNAL_UPDATE(), "", "journal", 0, "JournalUpdate", "JournalEntry", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/vat/registers", RID_VAT_REGISTERS(), "", "vat", 0, "", "VatRegisters", "200", "period")
+    app = fmr_route_meta(app, "GET", "/v1/vat/return", RID_VAT_RETURN(), "", "vat", 0, "", "VatReturn", "200", "period")
+    app = fmr_route_meta(app, "GET", "/v1/vat/export", RID_VAT_EXPORT(), "", "vat", 0, "", "-", "200", "period,type:s")
+    app = fmr_route_meta(app, "GET", "/v1/saft/export", RID_SAFT_EXPORT(), "", "saft", 0, "", "-", "200", "period,mode")
+    app = fmr_route_meta(app, "GET", "/v1/saft/nomenclatures", RID_SAFT_NOMS(), "", "saft", 0, "", "SaftNomenclatureList", "200", "kind:s,search:s")
+    app = fmr_route_meta(app, "GET", "/v1/fixed-asset-categories", RID_FA_CATEGORIES_INDEX(), "", "fixed-assets", 0, "", "FacList", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/fixed-asset-categories", RID_FA_CATEGORIES_CREATE(), "", "fixed-assets", 0, "FacCreate", "Fac", "201", "")
+    app = fmr_route_meta(app, "PATCH", "/v1/fixed-asset-categories/{id}", RID_FA_CATEGORIES_UPDATE(), "", "fixed-assets", 0, "FacUpdate", "Fac", "200", "")
+    app = fmr_route_meta(app, "DELETE", "/v1/fixed-asset-categories/{id}", RID_FA_CATEGORIES_DELETE(), "", "fixed-assets", 0, "", "-", "204", "")
+    app = fmr_route_meta(app, "GET", "/v1/fixed-assets", RID_FA_INDEX(), "", "fixed-assets", 0, "", "FaList", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/fixed-assets", RID_FA_CREATE(), "", "fixed-assets", 0, "FaCreate", "Fa", "201", "")
+    app = fmr_route_meta(app, "GET", "/v1/fixed-assets/{id}", RID_FA_SHOW(), "", "fixed-assets", 0, "", "Fa", "200", "")
+    app = fmr_route_meta(app, "PATCH", "/v1/fixed-assets/{id}", RID_FA_UPDATE(), "", "fixed-assets", 0, "FaUpdate", "Fa", "200", "")
+    app = fmr_route_meta(app, "DELETE", "/v1/fixed-assets/{id}", RID_FA_DELETE(), "", "fixed-assets", 0, "", "-", "204", "")
+    app = fmr_route_meta(app, "POST", "/v1/fixed-assets/depreciation/preview", RID_FA_DEP_PREVIEW(), "", "fixed-assets", 0, "", "DepPreview", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/fixed-assets/depreciation/post", RID_FA_DEP_POST(), "", "fixed-assets", 0, "DepPost", "JournalEntry", "201", "")
+    app = fmr_route_meta(app, "POST", "/v1/fixed-assets/{id}/revalue", RID_FA_REVALUE(), "", "fixed-assets", 0, "FaRevalue", "Fa", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/fixed-assets/{id}/move", RID_FA_MOVE(), "", "fixed-assets", 0, "FaMove", "Fa", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/fixed-assets/{id}/conserve", RID_FA_CONSERVE(), "", "fixed-assets", 0, "FaConserve", "Fa", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/fixed-assets/{id}/end-conserve", RID_FA_END_CONSERVE(), "", "fixed-assets", 0, "FaEndConserve", "Fa", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/fixed-assets/{id}/dispose", RID_FA_DISPOSE(), "", "fixed-assets", 0, "FaDispose", "Fa", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/fixed-assets/{id}/events", RID_FA_EVENTS(), "", "fixed-assets", 0, "", "FaEvents", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/active-company", RID_ACTIVE_COMPANY_GET(), "", "active-company", 0, "", "Company", "200", "")
+    app = fmr_route_meta(app, "PUT", "/v1/active-company", RID_ACTIVE_COMPANY_SET(), "", "active-company", 0, "ActiveCompanySet", "Company", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/exchange-rates", RID_EXCHANGE_RATES_INDEX(), "", "exchange-rates", 0, "", "ExchangeRateList", "200", "date")
+    app = fmr_route_meta(app, "GET", "/v1/exchange-rates/rate", RID_EXCHANGE_RATES_RATE(), "", "exchange-rates", 0, "", "ExchangeRate", "200", "currency:s,date:s")
+    app = fmr_route_meta(app, "POST", "/v1/exchange-rates/import", RID_EXCHANGE_RATES_IMPORT(), "", "exchange-rates", 0, "ExchangeRateImport", "ExchangeRateImportResult", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/internal-docs", RID_IDOC_INDEX(), "", "internal-docs", 0, "", "InternalDocList", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/internal-docs", RID_IDOC_CREATE(), "", "internal-docs", 0, "InternalDocCreate", "InternalDoc", "201", "")
+    app = fmr_route_meta(app, "GET", "/v1/internal-docs/next-number", RID_IDOC_NEXT(), "", "internal-docs", 0, "", "InternalDocNumber", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/internal-docs/{id}", RID_IDOC_SHOW(), "", "internal-docs", 0, "", "InternalDoc", "200", "")
+    app = fmr_route_meta(app, "PATCH", "/v1/internal-docs/{id}", RID_IDOC_UPDATE(), "", "internal-docs", 0, "InternalDocUpdate", "InternalDoc", "200", "")
+    app = fmr_route_meta(app, "DELETE", "/v1/internal-docs/{id}", RID_IDOC_DELETE(), "", "internal-docs", 0, "", "-", "204", "")
+    app = fmr_route_meta(app, "POST", "/v1/internal-docs/{id}/confirm", RID_IDOC_CONFIRM(), "", "internal-docs", 0, "", "InternalDoc", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/internal-docs/{id}/print", RID_IDOC_PRINT(), "", "internal-docs", 0, "", "-", "200", "format:s")
+    app = fmr_route_meta(app, "GET", "/v1/inventory/at-location", RID_INV_AT_LOC(), "", "inventory", 0, "", "StockAtLocation", "200", "location_id")
+    app = fmr_route_meta(app, "GET", "/v1/accounting-periods", RID_PERIODS_INDEX(), "", "periods", 0, "", "PeriodList", "200", "year")
+    app = fmr_route_meta(app, "POST", "/v1/accounting-periods/close", RID_PERIOD_CLOSE(), "", "periods", 0, "PeriodClose", "PeriodList", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/accounting-periods/reopen", RID_PERIOD_REOPEN(), "", "periods", 0, "PeriodReopen", "PeriodList", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/opening-balances", RID_OB_INDEX(), "", "opening-balances", 0, "", "OpeningBalanceList", "200", "year")
+    app = fmr_route_meta(app, "POST", "/v1/opening-balances", RID_OB_CREATE(), "", "opening-balances", 0, "OpeningBalanceCreate", "OpeningBalance", "201", "")
+    app = fmr_route_meta(app, "PATCH", "/v1/opening-balances/{id}", RID_OB_UPDATE(), "", "opening-balances", 0, "OpeningBalanceUpdate", "OpeningBalance", "200", "")
+    app = fmr_route_meta(app, "DELETE", "/v1/opening-balances/{id}", RID_OB_DELETE(), "", "opening-balances", 0, "", "-", "204", "")
+    app = fmr_route_meta(app, "POST", "/v1/scans/extract", RID_SCANS_EXTRACT(), "", "scans", 0, "ScanExtract", "ScanResult", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/scans/ubl", RID_SCANS_UBL(), "", "scans", 0, "UblImport", "ScanResult", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/addresses/parse", RID_ADDRESS_PARSE(), "", "counterparts", 0, "AddressParse", "AddressParts", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/product-name-mappings", RID_PNMAP_INDEX(), "", "scans", 0, "", "MappingList", "200", "counterpart_id")
+    app = fmr_route_meta(app, "POST", "/v1/product-name-mappings", RID_PNMAP_SAVE(), "", "scans", 0, "MappingSave", "MappingList", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/system-settings", RID_SYSSET_GET(), "", "admin", 0, "", "SettingList", "200", "")
+    app = fmr_route_meta(app, "PUT", "/v1/system-settings", RID_SYSSET_PUT(), "", "admin", 0, "SettingBatch", "SettingList", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/system-settings/smtp-test", RID_SMTP_TEST(), "", "admin", 0, "SmtpTest", "SidecarResult", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/system-settings/s3-test", RID_S3_TEST(), "", "admin", 0, "", "SidecarResult", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/system-settings/s3-backup", RID_S3_BACKUP(), "", "admin", 0, "", "SidecarResult", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/system-settings/s3-backups", RID_S3_LIST(), "", "admin", 0, "", "BackupList", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/system-settings/s3-delete", RID_S3_DELETE(), "", "admin", 0, "S3Delete", "SidecarResult", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/users", RID_USERS_INDEX(), "", "users", 0, "", "UserList", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/users", RID_USERS_CREATE(), "", "users", 0, "UserCreate", "User", "201", "")
+    app = fmr_route_meta(app, "PATCH", "/v1/users/{id}", RID_USERS_UPDATE(), "", "users", 0, "UserUpdate", "User", "200", "")
+    app = fmr_route_meta(app, "DELETE", "/v1/users/{id}", RID_USERS_DELETE(), "", "users", 0, "", "-", "204", "")
+    app = fmr_route_meta(app, "GET", "/v1/roles", RID_ROLES_INDEX(), "", "roles", 0, "", "RoleList", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/roles", RID_ROLES_CREATE(), "", "roles", 0, "RoleCreate", "Role", "201", "")
+    app = fmr_route_meta(app, "PATCH", "/v1/roles/{id}", RID_ROLES_UPDATE(), "", "roles", 0, "RoleUpdate", "Role", "200", "")
+    app = fmr_route_meta(app, "DELETE", "/v1/roles/{id}", RID_ROLES_DELETE(), "", "roles", 0, "", "-", "204", "")
+    app = fmr_route_meta(app, "GET", "/v1/reports", RID_REPORTS(), "", "reports", 0, "", "Report", "200", "kind:s,from:s,to:s,account:s,counterpart_id")
+    app = fmr_route_meta(app, "GET", "/v1/reports/export", RID_REPORTS_EXPORT(), "", "reports", 0, "", "-", "200", "kind:s,from:s,to:s,account:s,counterpart_id,format:s")
+    app = fmr_route_meta(app, "GET", "/v1/bank-accounts", RID_BANK_ACCOUNTS_INDEX(), "", "bank-accounts", 0, "", "BankAccountList", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/bank-accounts", RID_BANK_ACCOUNTS_CREATE(), "", "bank-accounts", 0, "BankAccountCreate", "BankAccount", "201", "")
+    app = fmr_route_meta(app, "GET", "/v1/bank-accounts/{id}", RID_BANK_ACCOUNTS_SHOW(), "", "bank-accounts", 0, "", "BankAccount", "200", "")
+    app = fmr_route_meta(app, "PATCH", "/v1/bank-accounts/{id}", RID_BANK_ACCOUNTS_UPDATE(), "", "bank-accounts", 0, "BankAccountUpdate", "BankAccount", "200", "")
+    app = fmr_route_meta(app, "DELETE", "/v1/bank-accounts/{id}", RID_BANK_ACCOUNTS_DELETE(), "", "bank-accounts", 0, "", "-", "204", "")
+    app = fmr_route_meta(app, "GET", "/v1/bank-transactions", RID_BANK_TRANSACTIONS_INDEX(), "", "bank-transactions", 0, "", "BankTransactionList", "200", "bank_account_id,status")
+    app = fmr_route_meta(app, "POST", "/v1/bank-transactions/preview", RID_BANK_TRANSACTIONS_PREVIEW(), "", "bank-transactions", 0, "BankPreviewRequest", "BankPreview", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/bank-transactions/import", RID_BANK_TRANSACTIONS_IMPORT(), "", "bank-transactions", 0, "BankImportRequest", "BankImportResult", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/bank-transactions/{id}/book", RID_BANK_TRANSACTIONS_BOOK(), "", "bank-transactions", 0, "BankBookRequest", "BankBookResult", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/bank-transactions/{id}/reallocate", RID_BANK_TRANSACTIONS_REALLOCATE(), "", "bank-transactions", 0, "BankReallocateRequest", "BankReallocateResult", "200", "")
+    app = fmr_route_meta(app, "DELETE", "/v1/bank-transactions/{id}", RID_BANK_TRANSACTIONS_DELETE(), "", "bank-transactions", 0, "", "-", "204", "")
+    app = fmr_route_meta(app, "GET", "/v1/dividend-distributions", RID_DDIST_INDEX(), "", "dividends", 0, "", "DividendDistList", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/dividend-distributions", RID_DDIST_CREATE(), "", "dividends", 0, "DividendDistCreate", "DividendDist", "201", "")
+    app = fmr_route_meta(app, "GET", "/v1/dividend-distributions/{id}", RID_DDIST_SHOW(), "", "dividends", 0, "", "DividendDist", "200", "")
+    app = fmr_route_meta(app, "PATCH", "/v1/dividend-distributions/{id}", RID_DDIST_UPDATE(), "", "dividends", 0, "DividendDistUpdate", "DividendDist", "200", "")
+    app = fmr_route_meta(app, "DELETE", "/v1/dividend-distributions/{id}", RID_DDIST_DELETE(), "", "dividends", 0, "", "-", "204", "")
+    app = fmr_route_meta(app, "POST", "/v1/dividends/{id}/pay", RID_DIV_PAY(), "", "dividends", 0, "DividendPay", "Dividend", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/recipes", RID_RECIPES_INDEX(), "", "production", 0, "", "RecipeList", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/recipes", RID_RECIPES_CREATE(), "", "production", 0, "RecipeCreate", "Recipe", "201", "")
+    app = fmr_route_meta(app, "GET", "/v1/recipes/{id}", RID_RECIPES_SHOW(), "", "production", 0, "", "Recipe", "200", "")
+    app = fmr_route_meta(app, "PATCH", "/v1/recipes/{id}", RID_RECIPES_UPDATE(), "", "production", 0, "RecipeUpdate", "Recipe", "200", "")
+    app = fmr_route_meta(app, "DELETE", "/v1/recipes/{id}", RID_RECIPES_DELETE(), "", "production", 0, "", "-", "204", "")
+    app = fmr_route_meta(app, "GET", "/v1/production-orders", RID_PORD_INDEX(), "", "production", 0, "", "PordList", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/production-orders", RID_PORD_CREATE(), "", "production", 0, "PordCreate", "Pord", "201", "")
+    app = fmr_route_meta(app, "GET", "/v1/production-orders/{id}", RID_PORD_SHOW(), "", "production", 0, "", "Pord", "200", "")
+    app = fmr_route_meta(app, "DELETE", "/v1/production-orders/{id}", RID_PORD_DELETE(), "", "production", 0, "", "-", "204", "")
+    app = fmr_route_meta(app, "POST", "/v1/production-orders/{id}/confirm", RID_PORD_CONFIRM(), "", "production", 0, "", "Pord", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/saft/movement-mappings", RID_SMAP_INDEX(), "", "saft", 0, "", "SaftMappingList", "200", "kind:s")
+    app = fmr_route_meta(app, "POST", "/v1/saft/movement-mappings", RID_SMAP_CREATE(), "", "saft", 0, "SaftMappingCreate", "SaftMapping", "201", "")
+    app = fmr_route_meta(app, "POST", "/v1/saft/movement-mappings/defaults", RID_SMAP_DEFAULTS(), "", "saft", 0, "SaftMappingDefaults", "SaftMappingSeed", "200", "")
+    app = fmr_route_meta(app, "PATCH", "/v1/saft/movement-mappings/{id}", RID_SMAP_UPDATE(), "", "saft", 0, "SaftMappingUpdate", "SaftMapping", "200", "")
+    app = fmr_route_meta(app, "DELETE", "/v1/saft/movement-mappings/{id}", RID_SMAP_DELETE(), "", "saft", 0, "", "-", "204", "")
+    app = fmr_route_meta(app, "GET", "/v1/fs/lines", RID_FS_LINES(), "", "fs", 0, "", "FsLineList", "200", "statement:s")
+    app = fmr_route_meta(app, "GET", "/v1/fs/formulas", RID_FS_FORMULAS(), "", "fs", 0, "", "FsFormulaList", "200", "statement:s")
+    app = fmr_route_meta(app, "PUT", "/v1/fs/formulas", RID_FS_FORMULAS_PUT(), "", "fs", 0, "FsFormulaPut", "FsFormula", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/fs/formulas/defaults", RID_FS_FORMULAS_DEFAULTS(), "", "fs", 0, "FsFormulaDefaults", "FsFormulaSeed", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/fs/formulas/validate", RID_FS_FORMULAS_VALIDATE(), "", "fs", 0, "FsFormulaValidate", "FsFormulaCheck", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/fs/formulas/clear", RID_FS_FORMULAS_CLEAR(), "", "fs", 0, "FsFormulaClear", "FsFormulaSeed", "200", "")
+    return app
+}
+
+fn fmr_before(ctx: FmrCtx) -> DepResult !Time {
+    let token = fmr_bearer(ctx)
+    if token == "" {
+        return dep_ok(ctx)
+    }
+    let now = time_now_ms()? / 1000
+    if jwt_accept_hs256(ctx.jwt_secret, token, now, "", "") == 0 {
+        return dep_fail(ctx, fmr_401("Invalid or expired token"))
+    }
+    if jwt_claim_int(token, "mfa") == 1 && ctx.route_id != RID_MFA() {
+        return dep_fail(ctx, fmr_401("изисква се 2FA код"))
+    }
+    return dep_ok(ctx)
+}
+
+// buchnative няма gRPC повърхност — dual hook връща празен UNIMPLEMENTED.
+fn fmr_grpc_handle(path: str, body: bytes, db: OrmDb) -> FmrOut !IO !Net {
+    let mut r = http_response_bytes(200, bytes_new(0))
+    r = http_set_header(r, "Content-Type", "application/grpc")
+    r = http_set_header(r, "grpc-status", "12")
+    r = http_set_header(r, "grpc-message", "UNIMPLEMENTED")
+    return fmr_out(r, db)
+}
+
+fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
+    let id = ctx.route_id
+    if id == RID_HEALTH() { return act_health(ctx, db) }
+    if id == RID_READY() { return act_ready(ctx, db)? }
+    if id == RID_META() { return act_meta(ctx, db) }
+    if id == RID_OPENAPI() { return act_openapi(ctx, db) }
+    if id == RID_METRICS() { return act_metrics(ctx, db)? }
+    if id == RID_TOKEN() { return act_token(ctx, db)? }
+    if id == RID_ME() { return act_me(ctx, db) }
+    if id == RID_REG_STATUS() { return act_reg_status(ctx, db)? }
+    if id == RID_REGISTER() { return act_register(ctx, db)? }
+    if id == RID_FORGOT() { return act_forgot_password(ctx, db)? }
+    if id == RID_RESET() { return act_reset_password(ctx, db)? }
+    if id == RID_MFA() { return act_mfa(ctx, db)? }
+    if id == RID_TOTP_START() { return act_totp_start(ctx, db)? }
+    if id == RID_TOTP_CONFIRM() { return act_totp_confirm(ctx, db)? }
+    if id == RID_TOTP_DISABLE() { return act_totp_disable(ctx, db)? }
+    if id == RID_COMPANIES_INDEX() { return act_companies_index(ctx, db)? }
+    if id == RID_COMPANIES_CREATE() { return act_companies_create(ctx, db)? }
+    if id == RID_COMPANIES_SHOW() { return act_companies_show(ctx, db)? }
+    if id == RID_COMPANIES_UPDATE() { return act_companies_update(ctx, db)? }
+    if id == RID_COMPANIES_DELETE() { return act_companies_delete(ctx, db)? }
+    if id == RID_COMPANY_SETTINGS() { return act_company_settings_get(ctx, db)? }
+    if id == RID_CLOC_CREATE() { return act_cloc_create(ctx, db)? }
+    if id == RID_CLOC_UPDATE() { return act_cloc_update(ctx, db)? }
+    if id == RID_CLOC_DELETE() { return act_cloc_delete(ctx, db)? }
+    if id == RID_BOWN_CREATE() { return act_bown_create(ctx, db)? }
+    if id == RID_BOWN_UPDATE() { return act_bown_update(ctx, db)? }
+    if id == RID_BOWN_DELETE() { return act_bown_delete(ctx, db)? }
+    if id == RID_UPAR_CREATE() { return act_upar_create(ctx, db)? }
+    if id == RID_UPAR_UPDATE() { return act_upar_update(ctx, db)? }
+    if id == RID_UPAR_DELETE() { return act_upar_delete(ctx, db)? }
+    if id == RID_DSER_CREATE() { return act_dser_create(ctx, db)? }
+    if id == RID_DSER_UPDATE() { return act_dser_update(ctx, db)? }
+    if id == RID_DSER_DELETE() { return act_dser_delete(ctx, db)? }
+    if id == RID_ACCOUNTS_INDEX() { return act_accounts_index(ctx, db)? }
+    if id == RID_ACCOUNTS_CREATE() { return act_accounts_create(ctx, db)? }
+    if id == RID_ACCOUNTS_SEED_SAFT() { return act_accounts_seed_saft(ctx, db)? }
+    if id == RID_ACCOUNTS_SHOW() { return act_accounts_show(ctx, db)? }
+    if id == RID_ACCOUNTS_UPDATE() { return act_accounts_update(ctx, db)? }
+    if id == RID_ACCOUNTS_DELETE() { return act_accounts_delete(ctx, db)? }
+    if id == RID_COUNTERPARTS_INDEX() { return act_counterparts_index(ctx, db)? }
+    if id == RID_COUNTERPARTS_CREATE() { return act_counterparts_create(ctx, db)? }
+    if id == RID_COUNTERPARTS_SHOW() { return act_counterparts_show(ctx, db)? }
+    if id == RID_COUNTERPARTS_UPDATE() { return act_counterparts_update(ctx, db)? }
+    if id == RID_COUNTERPARTS_DELETE() { return act_counterparts_delete(ctx, db)? }
+    if id == RID_COUNTERPARTS_VIES_LOOKUP() { return act_counterparts_vies_lookup(ctx, db)? }
+    if id == RID_COUNTERPARTS_VIES_CREATE() { return act_counterparts_vies_create(ctx, db)? }
+    if id == RID_PRODUCTS_INDEX() { return act_products_index(ctx, db)? }
+    if id == RID_PRODUCTS_CREATE() { return act_products_create(ctx, db)? }
+    if id == RID_PRODUCTS_SHOW() { return act_products_show(ctx, db)? }
+    if id == RID_PRODUCTS_UPDATE() { return act_products_update(ctx, db)? }
+    if id == RID_PRODUCTS_DELETE() { return act_products_delete(ctx, db)? }
+    if id == RID_UNITS_INDEX() { return act_units_index(ctx, db)? }
+    if id == RID_VAT_EXEMPTIONS() { return act_vat_exemptions_index(ctx, db)? }
+    if id == RID_INVOICES_INDEX() { return act_invoices_index(ctx, db)? }
+    if id == RID_INVOICES_CREATE() { return act_invoices_create(ctx, db)? }
+    if id == RID_INVOICES_SHOW() { return act_invoices_show(ctx, db)? }
+    if id == RID_INVOICES_UPDATE() { return act_invoices_update(ctx, db)? }
+    if id == RID_INVOICES_DELETE() { return act_invoices_delete(ctx, db)? }
+    if id == RID_INVOICES_BULK_POST() { return act_invoices_bulk_post(ctx, db)? }
+    if id == RID_INVOICES_BULK_UNPOST() { return act_invoices_bulk_unpost(ctx, db)? }
+    if id == RID_INVOICES_BULK_DELETE() { return act_invoices_bulk_delete(ctx, db)? }
+    if id == RID_DASHBOARD() { return act_dashboard(ctx, db)? }
+    if id == RID_INVOICES_POST() { return act_invoices_post(ctx, db)? }
+    if id == RID_INVOICES_NEXT_NUMBER() { return act_invoices_next_number(ctx, db)? }
+    if id == RID_INVOICES_PRINT() { return act_invoices_print(ctx, db)? }
+    if id == RID_INVOICES_UBL() { return act_invoices_ubl(ctx, db)? }
+    if id == RID_JOURNAL_INDEX() { return act_journal_index(ctx, db)? }
+    if id == RID_JOURNAL_SHOW() { return act_journal_show(ctx, db)? }
+    if id == RID_JOURNAL_CREATE() { return act_journal_create(ctx, db)? }
+    if id == RID_JOURNAL_UPDATE() { return act_journal_update(ctx, db)? }
+    if id == RID_VAT_REGISTERS() { return act_vat_registers(ctx, db)? }
+    if id == RID_VAT_RETURN() { return act_vat_return(ctx, db)? }
+    if id == RID_VAT_EXPORT() { return act_vat_export(ctx, db)? }
+    if id == RID_SAFT_EXPORT() { return act_saft_export(ctx, db)? }
+    if id == RID_SAFT_NOMS() { return act_saft_nomenclatures(ctx, db)? }
+    if id == RID_FA_CATEGORIES_INDEX() { return act_fa_categories_index(ctx, db)? }
+    if id == RID_FA_CATEGORIES_CREATE() { return act_fa_categories_create(ctx, db)? }
+    if id == RID_FA_CATEGORIES_UPDATE() { return act_fa_categories_update(ctx, db)? }
+    if id == RID_FA_CATEGORIES_DELETE() { return act_fa_categories_delete(ctx, db)? }
+    if id == RID_FA_INDEX() { return act_fa_index(ctx, db)? }
+    if id == RID_FA_CREATE() { return act_fa_create(ctx, db)? }
+    if id == RID_FA_SHOW() { return act_fa_show(ctx, db)? }
+    if id == RID_FA_UPDATE() { return act_fa_update(ctx, db)? }
+    if id == RID_FA_DELETE() { return act_fa_delete(ctx, db)? }
+    if id == RID_FA_DEP_PREVIEW() { return act_fa_depreciation_preview(ctx, db)? }
+    if id == RID_FA_DEP_POST() { return act_fa_depreciation_post(ctx, db)? }
+    if id == RID_FA_REVALUE() { return act_fa_revalue(ctx, db)? }
+    if id == RID_FA_MOVE() { return act_fa_move(ctx, db)? }
+    if id == RID_FA_CONSERVE() { return act_fa_conserve(ctx, db)? }
+    if id == RID_FA_END_CONSERVE() { return act_fa_end_conserve(ctx, db)? }
+    if id == RID_FA_DISPOSE() { return act_fa_dispose(ctx, db)? }
+    if id == RID_FA_EVENTS() { return act_fa_events(ctx, db)? }
+    if id == RID_ACTIVE_COMPANY_GET() { return act_active_company_get(ctx, db)? }
+    if id == RID_ACTIVE_COMPANY_SET() { return act_active_company_set(ctx, db)? }
+    if id == RID_EXCHANGE_RATES_INDEX() { return act_exchange_rates_index(ctx, db)? }
+    if id == RID_EXCHANGE_RATES_RATE() { return act_exchange_rates_rate(ctx, db)? }
+    if id == RID_EXCHANGE_RATES_IMPORT() { return act_exchange_rates_import(ctx, db)? }
+    if id == RID_IDOC_INDEX() { return act_idoc_index(ctx, db)? }
+    if id == RID_IDOC_CREATE() { return act_idoc_create(ctx, db)? }
+    if id == RID_IDOC_SHOW() { return act_idoc_show(ctx, db)? }
+    if id == RID_IDOC_UPDATE() { return act_idoc_update(ctx, db)? }
+    if id == RID_IDOC_DELETE() { return act_idoc_delete(ctx, db)? }
+    if id == RID_IDOC_CONFIRM() { return act_idoc_confirm(ctx, db)? }
+    if id == RID_IDOC_PRINT() { return act_idoc_print(ctx, db)? }
+    if id == RID_IDOC_NEXT() { return act_idoc_next_number(ctx, db)? }
+    if id == RID_INV_AT_LOC() { return act_inventory_at_location(ctx, db)? }
+    if id == RID_PERIODS_INDEX() { return act_periods_index(ctx, db)? }
+    if id == RID_PERIOD_CLOSE() { return act_period_close(ctx, db)? }
+    if id == RID_PERIOD_REOPEN() { return act_period_reopen(ctx, db)? }
+    if id == RID_OB_INDEX() { return act_ob_index(ctx, db)? }
+    if id == RID_OB_CREATE() { return act_ob_create(ctx, db)? }
+    if id == RID_OB_UPDATE() { return act_ob_update(ctx, db)? }
+    if id == RID_OB_DELETE() { return act_ob_delete(ctx, db)? }
+    if id == RID_SCANS_EXTRACT() { return act_scans_extract(ctx, db)? }
+    if id == RID_SCANS_UBL() { return act_scans_ubl(ctx, db)? }
+    if id == RID_ADDRESS_PARSE() { return act_address_parse(ctx, db)? }
+    if id == RID_PNMAP_INDEX() { return act_pnmap_index(ctx, db)? }
+    if id == RID_PNMAP_SAVE() { return act_pnmap_save(ctx, db)? }
+    if id == RID_SYSSET_GET() { return act_system_settings_get(ctx, db)? }
+    if id == RID_SYSSET_PUT() { return act_system_settings_put(ctx, db)? }
+    if id == RID_SMTP_TEST() { return act_smtp_test(ctx, db)? }
+    if id == RID_S3_TEST() { return act_s3_test(ctx, db)? }
+    if id == RID_S3_BACKUP() { return act_s3_backup(ctx, db)? }
+    if id == RID_S3_LIST() { return act_s3_list(ctx, db)? }
+    if id == RID_S3_DELETE() { return act_s3_delete(ctx, db)? }
+    if id == RID_USERS_INDEX() { return act_users_index(ctx, db)? }
+    if id == RID_USERS_CREATE() { return act_users_create(ctx, db)? }
+    if id == RID_USERS_UPDATE() { return act_users_update(ctx, db)? }
+    if id == RID_USERS_DELETE() { return act_users_delete(ctx, db)? }
+    if id == RID_ROLES_INDEX() { return act_roles_index(ctx, db)? }
+    if id == RID_ROLES_CREATE() { return act_roles_create(ctx, db)? }
+    if id == RID_ROLES_UPDATE() { return act_roles_update(ctx, db)? }
+    if id == RID_ROLES_DELETE() { return act_roles_delete(ctx, db)? }
+    if id == RID_REPORTS() { return act_reports(ctx, db)? }
+    if id == RID_REPORTS_EXPORT() { return act_reports_export(ctx, db)? }
+    if id == RID_BANK_ACCOUNTS_INDEX() { return act_bank_accounts_index(ctx, db)? }
+    if id == RID_BANK_ACCOUNTS_CREATE() { return act_bank_accounts_create(ctx, db)? }
+    if id == RID_BANK_ACCOUNTS_SHOW() { return act_bank_accounts_show(ctx, db)? }
+    if id == RID_BANK_ACCOUNTS_UPDATE() { return act_bank_accounts_update(ctx, db)? }
+    if id == RID_BANK_ACCOUNTS_DELETE() { return act_bank_accounts_delete(ctx, db)? }
+    if id == RID_BANK_TRANSACTIONS_INDEX() { return act_bank_transactions_index(ctx, db)? }
+    if id == RID_BANK_TRANSACTIONS_PREVIEW() { return act_bank_transactions_preview(ctx, db)? }
+    if id == RID_BANK_TRANSACTIONS_IMPORT() { return act_bank_transactions_import(ctx, db)? }
+    if id == RID_BANK_TRANSACTIONS_BOOK() { return act_bank_transactions_book(ctx, db)? }
+    if id == RID_BANK_TRANSACTIONS_REALLOCATE() { return act_bank_transactions_reallocate(ctx, db)? }
+    if id == RID_BANK_TRANSACTIONS_DELETE() { return act_bank_transactions_delete(ctx, db)? }
+    if id == RID_DDIST_INDEX() { return act_ddist_index(ctx, db)? }
+    if id == RID_DDIST_CREATE() { return act_ddist_create(ctx, db)? }
+    if id == RID_DDIST_SHOW() { return act_ddist_show(ctx, db)? }
+    if id == RID_DDIST_UPDATE() { return act_ddist_update(ctx, db)? }
+    if id == RID_DDIST_DELETE() { return act_ddist_delete(ctx, db)? }
+    if id == RID_DIV_PAY() { return act_div_pay(ctx, db)? }
+    if id == RID_RECIPES_INDEX() { return act_recipes_index(ctx, db)? }
+    if id == RID_RECIPES_CREATE() { return act_recipes_create(ctx, db)? }
+    if id == RID_RECIPES_SHOW() { return act_recipes_show(ctx, db)? }
+    if id == RID_RECIPES_UPDATE() { return act_recipes_update(ctx, db)? }
+    if id == RID_RECIPES_DELETE() { return act_recipes_delete(ctx, db)? }
+    if id == RID_PORD_INDEX() { return act_pord_index(ctx, db)? }
+    if id == RID_PORD_CREATE() { return act_pord_create(ctx, db)? }
+    if id == RID_PORD_SHOW() { return act_pord_show(ctx, db)? }
+    if id == RID_PORD_DELETE() { return act_pord_delete(ctx, db)? }
+    if id == RID_PORD_CONFIRM() { return act_pord_confirm(ctx, db)? }
+    if id == RID_SMAP_INDEX() { return act_smap_index(ctx, db)? }
+    if id == RID_SMAP_CREATE() { return act_smap_create(ctx, db)? }
+    if id == RID_SMAP_DEFAULTS() { return act_smap_defaults(ctx, db)? }
+    if id == RID_SMAP_UPDATE() { return act_smap_update(ctx, db)? }
+    if id == RID_SMAP_DELETE() { return act_smap_delete(ctx, db)? }
+    if id == RID_FS_LINES() { return act_fs_lines(ctx, db)? }
+    if id == RID_FS_FORMULAS() { return act_fs_formulas_get(ctx, db)? }
+    if id == RID_FS_FORMULAS_PUT() { return act_fs_formulas_put(ctx, db)? }
+    if id == RID_FS_FORMULAS_DEFAULTS() { return act_fs_formulas_defaults(ctx, db)? }
+    if id == RID_FS_FORMULAS_VALIDATE() { return act_fs_formulas_validate(ctx, db)? }
+    if id == RID_FS_FORMULAS_CLEAR() { return act_fs_formulas_clear(ctx, db)? }
+    return fmr_out(fmr_500("unhandled route"), db)
+}

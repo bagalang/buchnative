@@ -1,0 +1,153 @@
+// actions/bank_parse_csv.baga — CSV банково извлечение (преамбула с IBAN и
+// валута + заглавен ред + редове с данни). Порт на su-doxis
+// bank_transactions.rs. Чисти функции.
+import "bank_parse_types.baga"
+import "std/str/str.baga"
+// ─── CSV ───
+fn bp_parse_csv(content: str) -> ParseResult {
+    let mut result = parse_result_new("CSV")
+    let lines = str_split(content, "\n")
+    let mut delim: i64 = 44
+    if str_find(content, ";") >= 0 {
+        delim = 59
+    }
+    // Преамбула: IBAN и валута.
+    let mut i: i64 = 0
+    while i < vec_len(lines) {
+        let line = vec_get(lines, i)
+        if str_find(line, "IBAN:") >= 0 || str_find(line, "IBAN;") >= 0 || str_find(line, "IBAN,") >= 0 {
+            let parts = str_split(line, ":")
+            let mut k: i64 = 0
+            while k < vec_len(parts) {
+                let t = str_trim(vec_get(parts, k))
+                if str_starts_with(t, "BG") || str_starts_with(t, "LT") {
+                    result.account_iban = t
+                }
+                k = k + 1
+            }
+        }
+        if str_find(line, "Валута:") >= 0 || str_find(line, "Currency:") >= 0 {
+            let parts = str_split(line, ":")
+            let mut k: i64 = 0
+            while k < vec_len(parts) {
+                let t = str_trim(vec_get(parts, k))
+                if len(t) == 3 {
+                    result.account_currency = t
+                }
+                k = k + 1
+            }
+        }
+        i = i + 1
+    }
+    // Заглавен ред.
+    let mut header_idx: i64 = -1
+    i = 0
+    while i < vec_len(lines) {
+        let lower = bp_lower(vec_get(lines, i))
+        let has_date = str_find(lower, "дата") >= 0 || str_find(lower, "date") >= 0
+        let has_amt = str_find(lower, "дебит") >= 0 || str_find(lower, "кредит") >= 0 || str_find(lower, "сума") >= 0 || str_find(lower, "amount") >= 0
+        if has_date != 0 && has_amt != 0 {
+            header_idx = i
+            i = vec_len(lines)
+        } else {
+            i = i + 1
+        }
+    }
+    if header_idx < 0 {
+        return result
+    }
+    let header_cells = str_split(vec_get(lines, header_idx), chr(delim))
+    let mut date_col: i64 = 0
+    let mut debit_col: i64 = -1
+    let mut credit_col: i64 = -1
+    let mut amount_col: i64 = -1
+    let mut desc_col: i64 = -1
+    let mut ref_col: i64 = -1
+    let mut c: i64 = 0
+    while c < vec_len(header_cells) {
+        let h = bp_lower(str_trim(vec_get(header_cells, c)))
+        if date_col == 0 && (str_find(h, "дата") >= 0 || str_find(h, "date") >= 0) {
+            date_col = c
+        }
+        if str_find(h, "дебит") >= 0 || str_find(h, "debit") >= 0 {
+            debit_col = c
+        }
+        if str_find(h, "кредит") >= 0 || str_find(h, "credit") >= 0 {
+            credit_col = c
+        }
+        if str_find(h, "сума") >= 0 || str_find(h, "amount") >= 0 {
+            amount_col = c
+        }
+        if str_find(h, "описание") >= 0 || str_find(h, "description") >= 0 || str_find(h, "основание") >= 0 || len(h) > 15 {
+            if desc_col < 0 {
+                desc_col = c
+            }
+        }
+        if str_find(h, "референ") >= 0 || str_find(h, "reference") >= 0 || str_find(h, "id") >= 0 {
+            if ref_col < 0 {
+                ref_col = c
+            }
+        }
+        c = c + 1
+    }
+    if desc_col < 0 && vec_len(header_cells) > 0 {
+        desc_col = vec_len(header_cells) - 1
+    }
+    // Редове с данни.
+    i = header_idx + 1
+    while i < vec_len(lines) {
+        let line = str_trim(vec_get(lines, i))
+        if line != "" {
+            let cols = str_split(line, chr(delim))
+            if vec_len(cols) > date_col {
+                let date = bp_flex_date(vec_get(cols, date_col))
+                if date != "" {
+                    let mut amount = ""
+                    if debit_col >= 0 && credit_col >= 0 {
+                        let mut debit = ""
+                        let mut credit = ""
+                        if debit_col < vec_len(cols) {
+                            debit = bp_money(vec_get(cols, debit_col))
+                        }
+                        if credit_col < vec_len(cols) {
+                            credit = bp_money(vec_get(cols, credit_col))
+                        }
+                        if credit != "" && credit != "0" && credit != "0.00" {
+                            amount = credit
+                        } else {
+                            if debit != "" && debit != "0" && debit != "0.00" {
+                                amount = concat("-", debit)
+                            }
+                        }
+                    } else {
+                        if amount_col >= 0 && amount_col < vec_len(cols) {
+                            amount = bp_money(vec_get(cols, amount_col))
+                        }
+                    }
+                    if amount != "" && amount != "0" && amount != "0.00" {
+                        let mut description = ""
+                        if desc_col >= 0 && desc_col < vec_len(cols) {
+                            description = vec_get(cols, desc_col)
+                        }
+                        let mut reference = ""
+                        if ref_col >= 0 && ref_col < vec_len(cols) {
+                            reference = vec_get(cols, ref_col)
+                        }
+                        let mut tx = parsed_tx_new()
+                        tx.date = date
+                        tx.amount = amount
+                        tx.currency = result.account_currency
+                        tx.description = description
+                        tx.reference = reference
+                        vec_push(result.txs, tx)
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    if result.account_currency == "" {
+        result.account_currency = "EUR"
+    }
+    return result
+}

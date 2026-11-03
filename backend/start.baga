@@ -1,0 +1,58 @@
+// start.baga — buchnative backend entrypoint: migrate → fmr_run.
+// Схемата и routes принадлежат на buchnative; fmrbaga/ormbaga остават универсални.
+
+import "routes.baga"
+import "schema.baga"
+import "fmrbaga/app.baga"
+import "ormbaga/orm.baga"
+import "ormbaga/migrate.baga"
+import "drockb/drockb.baga"
+import "std/str/str.baga"
+import "std/os/os.baga"
+
+fn boot_migrate() -> i64 !Net !IO !Random {
+    let app = fmr_build_app()?
+    let db = fmr_open_db(app)?
+    if orm_ok_db(db) == 0 {
+        print(concat("migrate: db connect failed: ", orm_err_db(db)))
+        return 1
+    }
+    // KV backend-ът е безсхематичен: редовете са JSON, колоните се появяват
+    // при първия запис. Няма DDL, значи няма и миграции — само проверка, че
+    // rocksbaga отговаря.
+    if orm_is_drock(db) == 1 {
+        let p = drock_ping(db.kv)?
+        if p.ok == 0 {
+            print(concat("migrate: rocksbaga не отговаря: ", p.err))
+            orm_close(db)?
+            return 1
+        }
+        print("migrate: ORM_BACKEND=drock — KV backend, без SQL миграции")
+        orm_close(db)?
+        return 0
+    }
+    // buchnative_migrations_auto: Postgres набор или историческия boila набор
+    // (ORM_BACKEND=). Нови boila миграции ползват текущия BoilaSQL (P20–P29).
+    let set = buchnative_migrations_auto()?
+    let up = migrate_up(db, set)?
+    if migrate_is_ok(up) == 0 {
+        print(concat("migrate failed: ", migrate_err_str(up)))
+        orm_close(migrate_db(up))?
+        return 1
+    }
+    print(concat("migrate applied=", int_to_str(migrate_applied_n(up))))
+    orm_close(migrate_db(up))?
+    return 0
+}
+
+fn main() -> i64 !Net !IO !Par !Random !Time {
+    let secret = env("FMR_JWT_SECRET")?
+    if secret == "" || secret == "dev-secret" || secret == "baga-secret" {
+        print("WARNING: FMR_JWT_SECRET is empty or a known default. Set a long random secret before VPS.")
+    }
+    let rc = boot_migrate()?
+    if rc != 0 {
+        return rc
+    }
+    return fmr_run()?
+}

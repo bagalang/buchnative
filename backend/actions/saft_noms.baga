@@ -1,0 +1,25 @@
+// actions/saft_noms.baga — GET /v1/saft/nomenclatures?kind=&search=
+// Официални кодове на НАП (SAF-T BG V1.0.1). Без CRUD — каталогът е стандарт.
+
+import "../models/saft_nom.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+fn act_saft_nomenclatures(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let kind = str_trim(fmr_query(ctx, "kind"))
+    if kind == "" {
+        return act_ok(db, saft_nom_kinds_json())
+    }
+    if saft_nom_known(kind) == 0 {
+        return act_err(db, 400, "непозната номенклатура (kind)")
+    }
+    let search = fmr_query(ctx, "search")
+    return act_ok(db, saft_nom_list_json(kind, search))
+}

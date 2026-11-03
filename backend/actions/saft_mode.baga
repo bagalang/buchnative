@@ -1,0 +1,330 @@
+// actions/saft_mode.baga — годишен SAF-T (активи) и при поискване (стоки).
+// Годишният файл няма дневник и фактури. При поискване няма сметкоплан.
+// Движения на стоки още нямат дневник: бройките са 0, без измислен ред.
+
+import "../models/fixed_asset.baga"
+import "../models/product.baga"
+import "../models/saft_nom_movements.baga"
+import "vat_fmt.baga"
+import "bagadecimal/src/decimal.baga"
+import "xmlbaga/xml.baga"
+import "std/str/str.baga"
+
+struct SftMode {
+    ok: i64,
+    err: str,
+    db: OrmDb,
+    xml: str
+}
+
+fn sftm_open(name: str) -> str {
+    return xml_open(name, xml_attrs_new())
+}
+
+fn sftm_text(name: str, text: str) -> str {
+    return xml_elem(name, xml_attrs_new(), text)
+}
+
+fn sftm_clip(s: str, n: i64) -> str {
+    let t = str_trim(s)
+    if t == "" || n <= 0 {
+        return ""
+    }
+    if len(t) <= n {
+        return t
+    }
+    return substr(t, 0, n)
+}
+
+fn sftm_money(name: str, amount: str) -> str {
+    return sftm_text(name, vat_money(vat_parse_amt(amount)))
+}
+
+fn sftm_book(cost: str, accumulated: str) -> str {
+    let r = dec_sub(vat_parse_amt(cost), vat_parse_amt(accumulated))
+    if r.ok == 1 {
+        return vat_money(r.value)
+    }
+    return vat_money(vat_parse_amt(cost))
+}
+
+fn sftm_or(value: str, fallback: str) -> str {
+    if str_trim(value) == "" {
+        return fallback
+    }
+    return str_trim(value)
+}
+
+fn sftm_co(row_co: i64, cid: i64) -> i64 {
+    if cid <= 0 {
+        return 1
+    }
+    if row_co == 0 || row_co == cid {
+        return 1
+    }
+    return 0
+}
+
+fn sftm_addr() -> str {
+    let mut out = ""
+    out = concat(out, sftm_open("nsSAFT:PostalAddress"))
+    out = concat(out, sftm_text("nsSAFT:City", ""))
+    out = concat(out, sftm_text("nsSAFT:Country", "BG"))
+    out = concat(out, xml_close("nsSAFT:PostalAddress"))
+    return out
+}
+
+fn sftm_valuation(cost: str, accumulated: str, life: str, method: str, rate: str) -> str {
+    let book = sftm_book(cost, accumulated)
+    let mut out = ""
+    out = concat(out, sftm_open("nsSAFT:ValuationSAP"))
+    out = concat(out, sftm_text("nsSAFT:ValuationClass", "Счетоводен"))
+    out = concat(out, sftm_money("nsSAFT:AcquisitionAndProductionCostsBegin", cost))
+    out = concat(out, sftm_money("nsSAFT:AcquisitionAndProductionCostsEnd", cost))
+    out = concat(out, sftm_money("nsSAFT:InvestmentSupport", "0"))
+    out = concat(out, sftm_text("nsSAFT:AssetLifeMonth", sftm_or(life, "0")))
+    out = concat(out, sftm_money("nsSAFT:AssetAddition", "0"))
+    out = concat(out, sftm_money("nsSAFT:Transfers", "0"))
+    out = concat(out, sftm_money("nsSAFT:AssetDisposal", "0"))
+    out = concat(out, sftm_money("nsSAFT:BookValueBegin", book))
+    out = concat(out, sftm_text("nsSAFT:DepreciationMethod", sftm_clip(sftm_or(method, "linear"), 35)))
+    out = concat(out, sftm_text("nsSAFT:DepreciationPercentage", sftm_or(rate, "0")))
+    out = concat(out, sftm_money("nsSAFT:DepreciationForPeriod", "0"))
+    out = concat(out, sftm_money("nsSAFT:AppreciationForPeriod", "0"))
+    out = concat(out, sftm_open("nsSAFT:ExtraordinaryDepreciationsForPeriod"))
+    out = concat(out, sftm_open("nsSAFT:ExtraordinaryDepreciationForPeriod"))
+    out = concat(out, sftm_text("nsSAFT:ExtraordinaryDepreciationMethod", "0"))
+    out = concat(out, sftm_money("nsSAFT:ExtraordinaryDepreciationAmountForPeriod", "0"))
+    out = concat(out, xml_close("nsSAFT:ExtraordinaryDepreciationForPeriod"))
+    out = concat(out, xml_close("nsSAFT:ExtraordinaryDepreciationsForPeriod"))
+    out = concat(out, sftm_money("nsSAFT:AccumulatedDepreciation", accumulated))
+    out = concat(out, sftm_money("nsSAFT:BookValueEnd", book))
+    out = concat(out, xml_close("nsSAFT:ValuationSAP"))
+    return out
+}
+
+fn sftm_dap(category: str, cost: str, tax_acc: str, tax_rate: str) -> str {
+    let tax_value = sftm_book(cost, tax_acc)
+    let mut out = ""
+    out = concat(out, sftm_open("nsSAFT:ValuationDAP"))
+    out = concat(out, sftm_text("nsSAFT:ValuationClass", "Данъчен"))
+    out = concat(out, sftm_text("nsSAFT:CategoryTaxDepreciable", sftm_clip(sftm_or(category, "0"), 35)))
+    out = concat(out, sftm_money("nsSAFT:TaxDepreciableValue", cost))
+    out = concat(out, sftm_money("nsSAFT:AccruedTaxDepreciation", tax_acc))
+    out = concat(out, sftm_money("nsSAFT:TaxValueAsset", tax_value))
+    out = concat(out, sftm_text("nsSAFT:AnnualTaxDepreciationRate", sftm_or(tax_rate, "0")))
+    out = concat(out, sftm_text("nsSAFT:MonthChangeAssetValue", "0"))
+    out = concat(out, sftm_text("nsSAFT:MonthSuspensionResumptionAccrual", "0"))
+    out = concat(out, sftm_text("nsSAFT:MonthWriteOffAccounting", "0"))
+    out = concat(out, sftm_text("nsSAFT:MonthWriteOffTax", "0"))
+    out = concat(out, sftm_text("nsSAFT:NumberMonthsDepreciationDuring", "0"))
+    out = concat(out, sftm_money("nsSAFT:DepreciationForPeriod", "0"))
+    out = concat(out, sftm_money("nsSAFT:AccumulatedDepreciation", tax_acc))
+    out = concat(out, sftm_money("nsSAFT:TaxValueEndPeriod", tax_value))
+    out = concat(out, xml_close("nsSAFT:ValuationDAP"))
+    return out
+}
+
+fn sft_annual(db: OrmDb, year: i64) -> SftMode !IO !Net {
+    let q = fa_all(db)?
+    if orm_ok_q(q) == 0 {
+        return SftMode { ok: 0, err: orm_err_q(q), db: orm_db_q(q), xml: "" }
+    }
+    let y = int_to_str(year)
+    let mut assets = ""
+    let mut tx = ""
+    let mut n: i64 = 0
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        let raw = orm_cell_by(q, i, "acquisition_date")
+        if len(raw) >= 10 {
+            let day = substr(raw, 0, 10)
+            let mut start = orm_cell_by(q, i, "put_into_service_date")
+            if len(start) < 10 {
+                start = day
+            } else {
+                start = substr(start, 0, 10)
+            }
+            let mut asset_id = sftm_clip(orm_cell_by(q, i, "inventory_number"), 35)
+            if asset_id == "" {
+                asset_id = concat("FA-", int_to_str(orm_cell_by_i64(q, i, "id")))
+            }
+            let cost = orm_cell_by(q, i, "cost")
+            let acc = orm_cell_by(q, i, "accumulated_depreciation")
+            let mut desc = sftm_clip(orm_cell_by(q, i, "name"), 256)
+            if desc == "" {
+                desc = asset_id
+            }
+            assets = concat(assets, sftm_open("nsSAFT:Asset"))
+            assets = concat(assets, sftm_text("nsSAFT:AssetID", asset_id))
+            assets = concat(assets, sftm_text("nsSAFT:AccountID", "204"))
+            assets = concat(assets, sftm_text("nsSAFT:Description", desc))
+            assets = concat(assets, sftm_open("nsSAFT:AssetSupplier"))
+            assets = concat(assets, sftm_text("nsSAFT:SupplierName", "Неизвестен"))
+            assets = concat(assets, sftm_text("nsSAFT:SupplierID", "0"))
+            assets = concat(assets, sftm_addr())
+            assets = concat(assets, xml_close("nsSAFT:AssetSupplier"))
+            assets = concat(assets, sftm_text("nsSAFT:DateOfAcquisition", day))
+            assets = concat(assets, sftm_text("nsSAFT:StartUpDate", start))
+            assets = concat(assets, sftm_open("nsSAFT:Valuations"))
+            assets = concat(assets, sftm_valuation(cost, acc, orm_cell_by(q, i, "useful_life_months"), orm_cell_by(q, i, "depreciation_method"), orm_cell_by(q, i, "accounting_depreciation_rate")))
+            assets = concat(assets, sftm_dap(int_to_str(orm_cell_by_i64(q, i, "category_id")), cost, orm_cell_by(q, i, "tax_accumulated_depreciation"), orm_cell_by(q, i, "tax_depreciation_rate")))
+            assets = concat(assets, xml_close("nsSAFT:Valuations"))
+            assets = concat(assets, xml_close("nsSAFT:Asset"))
+            if substr(day, 0, 4) == y {
+                n = n + 1
+                tx = concat(tx, sftm_open("nsSAFT:AssetTransaction"))
+                tx = concat(tx, sftm_text("nsSAFT:AssetTransactionID", sftm_clip(concat("ACQ-", asset_id), 70)))
+                tx = concat(tx, sftm_text("nsSAFT:AssetID", asset_id))
+                tx = concat(tx, sftm_text("nsSAFT:AssetTransactionType", "10"))
+                tx = concat(tx, sftm_text("nsSAFT:Description", "Придобиване"))
+                tx = concat(tx, sftm_text("nsSAFT:AssetTransactionDate", day))
+                tx = concat(tx, sftm_text("nsSAFT:TransactionID", sftm_clip(concat("ACQ-", asset_id), 70)))
+                tx = concat(tx, sftm_open("nsSAFT:AssetTransactionValuations"))
+                tx = concat(tx, sftm_open("nsSAFT:AssetTransactionValuation"))
+                tx = concat(tx, sftm_money("nsSAFT:AcquisitionAndProductionCostsOnTransaction", cost))
+                tx = concat(tx, sftm_money("nsSAFT:BookValueOnTransaction", cost))
+                tx = concat(tx, sftm_money("nsSAFT:AssetTransactionAmount", cost))
+                tx = concat(tx, xml_close("nsSAFT:AssetTransactionValuation"))
+                tx = concat(tx, xml_close("nsSAFT:AssetTransactionValuations"))
+                tx = concat(tx, xml_close("nsSAFT:AssetTransaction"))
+            }
+        }
+        i = i + 1
+    }
+    let mut xml = ""
+    xml = concat(xml, sftm_open("nsSAFT:MasterFilesAnnual"))
+    xml = concat(xml, sftm_open("nsSAFT:Assets"))
+    xml = concat(xml, assets)
+    xml = concat(xml, xml_close("nsSAFT:Assets"))
+    xml = concat(xml, xml_close("nsSAFT:MasterFilesAnnual"))
+    xml = concat(xml, sftm_open("nsSAFT:SourceDocumentsAnnual"))
+    xml = concat(xml, sftm_open("nsSAFT:AssetTransactions"))
+    xml = concat(xml, sftm_text("nsSAFT:NumberOfAssetTransactions", int_to_str(n)))
+    xml = concat(xml, tx)
+    xml = concat(xml, xml_close("nsSAFT:AssetTransactions"))
+    xml = concat(xml, xml_close("nsSAFT:SourceDocumentsAnnual"))
+    return SftMode { ok: 1, err: "", db: orm_db_q(q), xml: xml }
+}
+
+fn sftm_moves() -> str {
+    let rows = saft_stock_movement_rows()
+    let mut out = ""
+    out = concat(out, sftm_open("nsSAFT:MovementTypeTable"))
+    let mut i: i64 = 0
+    while i < vec_len(rows) {
+        let line = vec_get(rows, i)
+        let bar = str_find(line, "|")
+        if bar > 0 {
+            let code = substr(line, 0, bar)
+            let rest = substr(line, bar + 1, len(line))
+            let bar2 = str_find(rest, "|")
+            let mut name = rest
+            if bar2 > 0 {
+                name = substr(rest, 0, bar2)
+            }
+            out = concat(out, sftm_open("nsSAFT:MovementTypeTableEntry"))
+            out = concat(out, sftm_text("nsSAFT:MovementType", code))
+            out = concat(out, sftm_text("nsSAFT:Description", sftm_clip(name, 256)))
+            out = concat(out, xml_close("nsSAFT:MovementTypeTableEntry"))
+        }
+        i = i + 1
+    }
+    out = concat(out, xml_close("nsSAFT:MovementTypeTable"))
+    return out
+}
+
+fn sft_ondemand(db: OrmDb, company_id: i64, eik: str) -> SftMode !IO !Net {
+    let pq = product_all(db)?
+    if orm_ok_q(pq) == 0 {
+        return SftMode { ok: 0, err: orm_err_q(pq), db: orm_db_q(pq), xml: "" }
+    }
+    let owner = sftm_or(sftm_clip(eik, 35), "0")
+    let uoms: Vec<str> = vec_new()
+    let mut products = ""
+    let mut stock = ""
+    let mut i: i64 = 0
+    while i < orm_nrows(pq) {
+        if sftm_co(orm_cell_by_i64(pq, i, "company_id"), company_id) == 1 {
+            let mut u = str_trim(orm_cell_by(pq, i, "unit"))
+            if u == "" {
+                u = "C62"
+            }
+            u = sftm_clip(u, 9)
+            let mut found: i64 = 0
+            let mut j: i64 = 0
+            while j < vec_len(uoms) {
+                if vec_get(uoms, j) == u {
+                    found = 1
+                }
+                j = j + 1
+            }
+            if found == 0 {
+                vec_push(uoms, u)
+            }
+            let mut code = sftm_clip(orm_cell_by(pq, i, "code"), 70)
+            if code == "" {
+                code = "0"
+            }
+            let mut name = sftm_clip(orm_cell_by(pq, i, "name"), 256)
+            if name == "" {
+                name = code
+            }
+            products = concat(products, sftm_open("nsSAFT:Product"))
+            products = concat(products, sftm_text("nsSAFT:ProductCode", code))
+            products = concat(products, sftm_text("nsSAFT:ProductDescription", name))
+            products = concat(products, sftm_text("nsSAFT:UnitOfMeasure", u))
+            products = concat(products, xml_close("nsSAFT:Product"))
+            if orm_cell_by_i64(pq, i, "is_inventory") == 1 {
+                let qty = sftm_or(orm_cell_by(pq, i, "stock_quantity"), "0")
+                let value = sftm_or(orm_cell_by(pq, i, "stock_value"), "0")
+                let price = sftm_or(orm_cell_by(pq, i, "cost_price"), "0")
+                stock = concat(stock, sftm_open("nsSAFT:PhysicalStockEntry"))
+                stock = concat(stock, sftm_text("nsSAFT:WarehouseID", "1"))
+                stock = concat(stock, sftm_text("nsSAFT:ProductCode", code))
+                stock = concat(stock, sftm_text("nsSAFT:ProductType", "10"))
+                stock = concat(stock, sftm_text("nsSAFT:StockAccountCommodityCode", "0"))
+                stock = concat(stock, sftm_text("nsSAFT:OwnerID", owner))
+                stock = concat(stock, sftm_text("nsSAFT:UOMPhysicalStock", u))
+                stock = concat(stock, sftm_text("nsSAFT:UOMToUOMBaseConversionFactor", "1"))
+                stock = concat(stock, sftm_money("nsSAFT:UnitPriceBegin", price))
+                stock = concat(stock, sftm_money("nsSAFT:UnitPriceEnd", price))
+                stock = concat(stock, sftm_text("nsSAFT:OpeningStockQuantity", qty))
+                stock = concat(stock, sftm_money("nsSAFT:OpeningStockValue", value))
+                stock = concat(stock, sftm_text("nsSAFT:ClosingStockQuantity", qty))
+                stock = concat(stock, sftm_money("nsSAFT:ClosingStockValue", value))
+                stock = concat(stock, xml_close("nsSAFT:PhysicalStockEntry"))
+            }
+        }
+        i = i + 1
+    }
+    let mut uom_xml = ""
+    uom_xml = concat(uom_xml, sftm_open("nsSAFT:UOMTable"))
+    i = 0
+    while i < vec_len(uoms) {
+        uom_xml = concat(uom_xml, sftm_open("nsSAFT:UOMTableEntry"))
+        uom_xml = concat(uom_xml, sftm_text("nsSAFT:UnitOfMeasure", vec_get(uoms, i)))
+        uom_xml = concat(uom_xml, xml_close("nsSAFT:UOMTableEntry"))
+        i = i + 1
+    }
+    uom_xml = concat(uom_xml, xml_close("nsSAFT:UOMTable"))
+    let mut xml = ""
+    xml = concat(xml, sftm_open("nsSAFT:MasterFilesOnDemand"))
+    xml = concat(xml, sftm_moves())
+    xml = concat(xml, uom_xml)
+    xml = concat(xml, sftm_open("nsSAFT:Products"))
+    xml = concat(xml, products)
+    xml = concat(xml, xml_close("nsSAFT:Products"))
+    xml = concat(xml, sftm_open("nsSAFT:PhysicalStock"))
+    xml = concat(xml, stock)
+    xml = concat(xml, xml_close("nsSAFT:PhysicalStock"))
+    xml = concat(xml, xml_close("nsSAFT:MasterFilesOnDemand"))
+    xml = concat(xml, sftm_open("nsSAFT:SourceDocumentsOnDemand"))
+    xml = concat(xml, sftm_open("nsSAFT:MovementOfGoods"))
+    xml = concat(xml, sftm_text("nsSAFT:NumberOfMovementLines", "0"))
+    xml = concat(xml, sftm_text("nsSAFT:TotalQuantityReceived", "0"))
+    xml = concat(xml, sftm_text("nsSAFT:TotalQuantityIssued", "0"))
+    xml = concat(xml, xml_close("nsSAFT:MovementOfGoods"))
+    xml = concat(xml, xml_close("nsSAFT:SourceDocumentsOnDemand"))
+    return SftMode { ok: 1, err: "", db: orm_db_q(pq), xml: xml }
+}

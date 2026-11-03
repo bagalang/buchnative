@@ -1,0 +1,456 @@
+// actions/journal.baga — счетоводен дневник + ръчни записи.
+// Ръчният запис има ДДС тип: покупка/продажба/без_ДДС — покупките и продажбите
+// влизат в дневниците за ДДС (носят контрагент, документ, ДДС период и суми).
+// Сумата по ред може да е отрицателна (сторно, кредитно, аванс, корекция).
+// Не се обръщат Дт/Кт. Проверка: Σ дебит = Σ кредит (и двете могат да са минус).
+// Осчетоводяването на фактура е в invoices_post.baga.
+
+import "../models/journal.baga"
+import "../models/counterpart.baga"
+import "txn.baga"
+import "periods.baga"
+import "acl.baga"
+import "active_company.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/json/json.baga"
+import "std/str/str.baga"
+import "bagadecimal/src/decimal.baga"
+
+fn act_journal_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:read")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let page = act_page(ctx, 50, 200)
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    let q = journal_all(ac.db)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let mut o = journal_list_json_co(q, ac.id)
+    o = jobj_i64(o, "limit", page.limit)
+    o = jobj_i64(o, "offset", page.offset)
+    return act_ok(orm_db_q(q), o)
+}
+
+fn act_journal_show(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:read")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let q = journal_find(db, id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "Journal entry not found")
+    }
+    let mut o = journal_entry_to_json(q, 0)
+    let lq = journal_lines_by_entry(orm_db_q(q), id)?
+    o = jobj_arr(o, "lines", journal_lines_list_json(lq))
+    return act_ok(orm_db_q(lq), o)
+}
+
+// Ръчен счетоводен запис. Трите таба (покупки/продажби/без ДДС) са vat_type.
+fn act_journal_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:write")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let entry_date = jreq_str(b.doc, b.root, "entry_date")
+    if entry_date.ok == 0 {
+        return act_422_field(db, "entry_date", entry_date)
+    }
+    let description = jreq_str(b.doc, b.root, "description")
+    if description.ok == 0 {
+        return act_422_field(db, "description", description)
+    }
+    let vat_type = jopt_str(b.doc, b.root, "vat_type", "no_vat")
+    if vat_type.val != "no_vat" && vat_type.val != "purchase" && vat_type.val != "sales" {
+        return act_err(db, 422, "vat_type трябва да е purchase/sales/no_vat")
+    }
+    let cid = jreq_i64(b.doc, b.root, "counterpart_id")
+    let mut counterpart_id: i64 = 0
+    if cid.present == 1 {
+        if cid.ok == 0 {
+            return act_422_field(db, "counterpart_id", cid)
+        }
+        counterpart_id = cid.num
+    }
+    let document_number = jopt_str(b.doc, b.root, "document_number", "")
+    let document_date = jopt_str(b.doc, b.root, "document_date", "")
+    let vat_period_in = jopt_str(b.doc, b.root, "vat_period", "")
+    let mut vat_period = vat_period_in.val
+    if len(vat_period) > 7 {
+        vat_period = substr(vat_period, 0, 7)
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let pc = period_assert_open(db, entry_date.val)?
+    if pc.ok == 0 {
+        return act_err(pc.db, 422, pc.err)
+    }
+    let mut db2 = pc.db
+    // Снимка на контрагента (за ДДС дневниците).
+    let mut counterpart_name = ""
+    let mut counterpart_vat_number = ""
+    if counterpart_id > 0 {
+        let cq = counterpart_find(db2, counterpart_id)?
+        if orm_ok_q(cq) == 0 {
+            return act_err(orm_db_q(cq), 500, orm_err_q(cq))
+        }
+        if orm_nrows(cq) < 1 {
+            return act_404(orm_db_q(cq), "Counterpart not found")
+        }
+        counterpart_name = orm_cell_by(cq, 0, "name")
+        counterpart_vat_number = orm_cell_by(cq, 0, "vat_number")
+        db2 = orm_db_q(cq)
+    }
+    // Редове: суми и баланс.
+    let lines_node = json_get(b.doc, b.root, "lines")
+    if lines_node < 0 || json_tag(b.doc, lines_node) != 5 {
+        return act_err(db2, 422, "lines трябва да е масив")
+    }
+    let n = json_count(b.doc, lines_node)
+    if n < 1 {
+        return act_err(db2, 422, "поне един ред е задължителен")
+    }
+    let mut debit_total = dec_zero()
+    let mut credit_total = dec_zero()
+    let mut vat_total = dec_zero()
+    let line_accs: Vec<i64> = vec_new()
+    let line_dirs: Vec<str> = vec_new()
+    let line_amounts: Vec<str> = vec_new()
+    let line_vats: Vec<str> = vec_new()
+    let mut i: i64 = 0
+    while i < n {
+        let elem = json_at(b.doc, lines_node, i)
+        if json_tag(b.doc, elem) != 6 {
+            return act_err(db2, 422, "lines[i] трябва да е обект")
+        }
+        let aid = jreq_i64(b.doc, elem, "account_id")
+        if aid.ok == 0 {
+            return act_422_field(db2, "lines[i].account_id", aid)
+        }
+        let dir = jreq_str(b.doc, elem, "direction")
+        if dir.ok == 0 {
+            return act_422_field(db2, "lines[i].direction", dir)
+        }
+        if dir.val != "debit" && dir.val != "credit" {
+            return act_err(db2, 422, "lines[i].direction трябва да е debit/credit")
+        }
+        let amount = jreq_str(b.doc, elem, "amount")
+        if amount.ok == 0 {
+            return act_422_field(db2, "lines[i].amount", amount)
+        }
+        let vat = jopt_str(b.doc, elem, "vat_amount", "0")
+        let amt = dec_parse(amount.val)
+        if amt.ok == 0 {
+            return act_err(db2, 422, concat("невалидна сума: ", amount.val))
+        }
+        let vatp = dec_parse(vat.val)
+        if vatp.ok == 0 {
+            return act_err(db2, 422, concat("невалидно ДДС: ", vat.val))
+        }
+        if dir.val == "debit" {
+            let d2 = dec_add(debit_total, amt.value)
+            if d2.ok == 0 {
+                return act_err(db2, 422, d2.err)
+            }
+            debit_total = d2.value
+        } else {
+            let c2 = dec_add(credit_total, amt.value)
+            if c2.ok == 0 {
+                return act_err(db2, 422, c2.err)
+            }
+            credit_total = c2.value
+        }
+        let v2 = dec_add(vat_total, vatp.value)
+        if v2.ok == 0 {
+            return act_err(db2, 422, v2.err)
+        }
+        vat_total = v2.value
+        vec_push(line_accs, aid.num)
+        vec_push(line_dirs, dir.val)
+        vec_push(line_amounts, amount.val)
+        vec_push(line_vats, vat.val)
+        i = i + 1
+    }
+    if dec_cmp(debit_total, credit_total) != 0 {
+        return act_err(db2, 422, "дебит и кредит не се балансират")
+    }
+    // Създаване на записа (P4 BEGIN: entry + редове са една транзакция).
+    let bgn = bb_begin(db2)?
+    if orm_ok(bgn) == 0 {
+        return act_err(orm_db_exec(bgn), 500, orm_err_exec(bgn))
+    }
+    db2 = orm_db_exec(bgn)
+    let acj = active_company_id(db2, auth.ctx.user_sub)?
+    db2 = acj.db
+    let eq = journal_entry_insert(db2, entry_date.val, "manual", 0, description.val, vat_type.val, counterpart_id, counterpart_name, counterpart_vat_number, document_number.val, document_date.val, vat_period, dec_to_string(credit_total), dec_to_string(vat_total), acj.id)?
+    if orm_ok_q(eq) == 0 || orm_nrows(eq) < 1 {
+        return act_err_rb(orm_db_q(eq), 500, "journal entry insert failed")
+    }
+    let entry_id = orm_cell_by_i64(eq, 0, "id")
+    db2 = orm_db_q(eq)
+    i = 0
+    while i < n {
+        let li = journal_line_insert(db2, entry_id, vec_get(line_accs, i), vec_get(line_dirs, i), vec_get(line_amounts, i), vec_get(line_vats, i), counterpart_id, 0, 0)?
+        if orm_ok(li) == 0 {
+            return act_err_rb(orm_db_exec(li), 500, orm_err_exec(li))
+        }
+        db2 = orm_db_exec(li)
+        i = i + 1
+    }
+    let cmt = bb_commit(db2)?
+    if orm_ok(cmt) == 0 {
+        return act_err_rb(orm_db_exec(cmt), 500, orm_err_exec(cmt))
+    }
+    db2 = orm_db_exec(cmt)
+    let q = journal_find(db2, entry_id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_err(orm_db_q(q), 500, "journal entry missing after create")
+    }
+    let mut o = journal_entry_to_json(q, 0)
+    let lq = journal_lines_by_entry(orm_db_q(q), entry_id)?
+    o = jobj_arr(o, "lines", journal_lines_list_json(lq))
+    return act_created(orm_db_q(lq), o)
+}
+
+// Редакция на запис: същата форма като създаването, редовете се презаписват.
+fn act_journal_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:write")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let entry_date = jreq_str(b.doc, b.root, "entry_date")
+    if entry_date.ok == 0 {
+        return act_422_field(db, "entry_date", entry_date)
+    }
+    let description = jreq_str(b.doc, b.root, "description")
+    if description.ok == 0 {
+        return act_422_field(db, "description", description)
+    }
+    let vat_type = jopt_str(b.doc, b.root, "vat_type", "no_vat")
+    if vat_type.val != "no_vat" && vat_type.val != "purchase" && vat_type.val != "sales" {
+        return act_err(db, 422, "vat_type трябва да е purchase/sales/no_vat")
+    }
+    let cid = jreq_i64(b.doc, b.root, "counterpart_id")
+    let mut counterpart_id: i64 = 0
+    if cid.present == 1 {
+        if cid.ok == 0 {
+            return act_422_field(db, "counterpart_id", cid)
+        }
+        counterpart_id = cid.num
+    }
+    let document_number = jopt_str(b.doc, b.root, "document_number", "")
+    let document_date = jopt_str(b.doc, b.root, "document_date", "")
+    let vat_period_in = jopt_str(b.doc, b.root, "vat_period", "")
+    let mut vat_period = vat_period_in.val
+    if len(vat_period) > 7 {
+        vat_period = substr(vat_period, 0, 7)
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    let q0 = journal_find(ac.db, id)?
+    if orm_ok_q(q0) == 0 {
+        return act_err(orm_db_q(q0), 500, orm_err_q(q0))
+    }
+    if orm_nrows(q0) < 1 {
+        return act_404(orm_db_q(q0), "Journal entry not found")
+    }
+    let row_co = orm_cell_by_i64(q0, 0, "company_id")
+    if ac.id > 0 && row_co > 0 && row_co != ac.id {
+        return act_404(orm_db_q(q0), "Journal entry not found")
+    }
+    let old_date = orm_cell_by(q0, 0, "entry_date")
+    let pc_old = period_assert_open(orm_db_q(q0), old_date)?
+    if pc_old.ok == 0 {
+        return act_err(pc_old.db, 422, pc_old.err)
+    }
+    let pc = period_assert_open(pc_old.db, entry_date.val)?
+    if pc.ok == 0 {
+        return act_err(pc.db, 422, pc.err)
+    }
+    let mut db2 = pc.db
+    let mut counterpart_name = ""
+    let mut counterpart_vat_number = ""
+    if counterpart_id > 0 {
+        let cq = counterpart_find(db2, counterpart_id)?
+        if orm_ok_q(cq) == 0 {
+            return act_err(orm_db_q(cq), 500, orm_err_q(cq))
+        }
+        if orm_nrows(cq) < 1 {
+            return act_404(orm_db_q(cq), "Counterpart not found")
+        }
+        counterpart_name = orm_cell_by(cq, 0, "name")
+        counterpart_vat_number = orm_cell_by(cq, 0, "vat_number")
+        db2 = orm_db_q(cq)
+    }
+    let lines_node = json_get(b.doc, b.root, "lines")
+    if lines_node < 0 || json_tag(b.doc, lines_node) != 5 {
+        return act_err(db2, 422, "lines трябва да е масив")
+    }
+    let n = json_count(b.doc, lines_node)
+    if n < 1 {
+        return act_err(db2, 422, "поне един ред е задължителен")
+    }
+    let mut debit_total = dec_zero()
+    let mut credit_total = dec_zero()
+    let mut vat_total = dec_zero()
+    let line_accs: Vec<i64> = vec_new()
+    let line_dirs: Vec<str> = vec_new()
+    let line_amounts: Vec<str> = vec_new()
+    let line_vats: Vec<str> = vec_new()
+    let line_locs: Vec<i64> = vec_new()
+    let line_prods: Vec<i64> = vec_new()
+    let mut i: i64 = 0
+    while i < n {
+        let elem = json_at(b.doc, lines_node, i)
+        if json_tag(b.doc, elem) != 6 {
+            return act_err(db2, 422, "lines[i] трябва да е обект")
+        }
+        let aid = jreq_i64(b.doc, elem, "account_id")
+        if aid.ok == 0 {
+            return act_422_field(db2, "lines[i].account_id", aid)
+        }
+        let dir = jreq_str(b.doc, elem, "direction")
+        if dir.ok == 0 {
+            return act_422_field(db2, "lines[i].direction", dir)
+        }
+        if dir.val != "debit" && dir.val != "credit" {
+            return act_err(db2, 422, "lines[i].direction трябва да е debit/credit")
+        }
+        let amount = jreq_str(b.doc, elem, "amount")
+        if amount.ok == 0 {
+            return act_422_field(db2, "lines[i].amount", amount)
+        }
+        let vat = jopt_str(b.doc, elem, "vat_amount", "0")
+        let amt = dec_parse(amount.val)
+        if amt.ok == 0 {
+            return act_err(db2, 422, concat("невалидна сума: ", amount.val))
+        }
+        let vatp = dec_parse(vat.val)
+        if vatp.ok == 0 {
+            return act_err(db2, 422, concat("невалидно ДДС: ", vat.val))
+        }
+        if dir.val == "debit" {
+            let d2 = dec_add(debit_total, amt.value)
+            if d2.ok == 0 {
+                return act_err(db2, 422, d2.err)
+            }
+            debit_total = d2.value
+        } else {
+            let c2 = dec_add(credit_total, amt.value)
+            if c2.ok == 0 {
+                return act_err(db2, 422, c2.err)
+            }
+            credit_total = c2.value
+        }
+        let v2 = dec_add(vat_total, vatp.value)
+        if v2.ok == 0 {
+            return act_err(db2, 422, v2.err)
+        }
+        vat_total = v2.value
+        let loc = jreq_i64(b.doc, elem, "location_id")
+        let mut location_id: i64 = 0
+        if loc.present == 1 {
+            if loc.ok == 0 {
+                return act_422_field(db2, "lines[i].location_id", loc)
+            }
+            location_id = loc.num
+        }
+        let pr = jreq_i64(b.doc, elem, "product_id")
+        let mut product_id: i64 = 0
+        if pr.present == 1 {
+            if pr.ok == 0 {
+                return act_422_field(db2, "lines[i].product_id", pr)
+            }
+            product_id = pr.num
+        }
+        vec_push(line_accs, aid.num)
+        vec_push(line_dirs, dir.val)
+        vec_push(line_amounts, amount.val)
+        vec_push(line_vats, vat.val)
+        vec_push(line_locs, location_id)
+        vec_push(line_prods, product_id)
+        i = i + 1
+    }
+    if dec_cmp(debit_total, credit_total) != 0 {
+        return act_err(db2, 422, "дебит и кредит не се балансират")
+    }
+    let bgn = bb_begin(db2)?
+    if orm_ok(bgn) == 0 {
+        return act_err(orm_db_exec(bgn), 500, orm_err_exec(bgn))
+    }
+    db2 = orm_db_exec(bgn)
+    let up = journal_entry_update(db2, id, entry_date.val, description.val, vat_type.val, counterpart_id, counterpart_name, counterpart_vat_number, document_number.val, document_date.val, vat_period, dec_to_string(credit_total), dec_to_string(vat_total))?
+    if orm_ok(up) == 0 {
+        return act_err_rb(orm_db_exec(up), 500, orm_err_exec(up))
+    }
+    db2 = orm_db_exec(up)
+    let del = journal_lines_delete_by_entry(db2, id)?
+    if orm_ok(del) == 0 {
+        return act_err_rb(orm_db_exec(del), 500, orm_err_exec(del))
+    }
+    db2 = orm_db_exec(del)
+    i = 0
+    while i < n {
+        let li = journal_line_insert(db2, id, vec_get(line_accs, i), vec_get(line_dirs, i), vec_get(line_amounts, i), vec_get(line_vats, i), counterpart_id, vec_get(line_prods, i), vec_get(line_locs, i))?
+        if orm_ok(li) == 0 {
+            return act_err_rb(orm_db_exec(li), 500, orm_err_exec(li))
+        }
+        db2 = orm_db_exec(li)
+        i = i + 1
+    }
+    let cmt = bb_commit(db2)?
+    if orm_ok(cmt) == 0 {
+        return act_err_rb(orm_db_exec(cmt), 500, orm_err_exec(cmt))
+    }
+    db2 = orm_db_exec(cmt)
+    let q = journal_find(db2, id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_err(orm_db_q(q), 500, "journal entry missing after update")
+    }
+    let mut o = journal_entry_to_json(q, 0)
+    let lq = journal_lines_by_entry(orm_db_q(q), id)?
+    o = jobj_arr(o, "lines", journal_lines_list_json(lq))
+    return act_ok(orm_db_q(lq), o)
+}

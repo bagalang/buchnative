@@ -1,0 +1,465 @@
+// actions/bank_parse_xml.baga — XML банкови извлечения: OBB, ISO camt.053
+// и PostBank. Порт на secret/su-doxis bank_transactions.rs. Чисти функции.
+import "bank_parse_types.baga"
+import "xmlbaga/xml.baga"
+import "std/str/str.baga"
+// ─── OBB XML ───
+fn bp_parse_obb(content: str) -> ParseResult {
+    let mut result = parse_result_new("OBB XML")
+    let p = xml_parser(content)
+    let mut current_tag = ""
+    let mut in_tx: i64 = 0
+    let mut tx_date = ""
+    let mut amount_d = ""
+    let mut amount_c = ""
+    let mut tr_name = ""
+    let mut rem_i = ""
+    let mut rem_ii = ""
+    let mut reference = ""
+    let mut name_r = ""
+    let mut iban_r = ""
+    let mut running: i64 = 1
+    while running == 1 {
+        let ev = xml_next(p)
+        if ev.kind == 1 {
+            current_tag = ev.name
+            if current_tag == "TRANSACTION" {
+                in_tx = 1
+                tx_date = ""
+                amount_d = ""
+                amount_c = ""
+                tr_name = ""
+                rem_i = ""
+                rem_ii = ""
+                reference = ""
+                name_r = ""
+                iban_r = ""
+            }
+        } else {
+            if ev.kind == 3 {
+                if in_tx == 1 {
+                    if current_tag == "POST_DATE" {
+                        tx_date = ev.text
+                    } else {
+                        if current_tag == "AMOUNT_D" {
+                            amount_d = ev.text
+                        } else {
+                            if current_tag == "AMOUNT_C" {
+                                amount_c = ev.text
+                            } else {
+                                if current_tag == "TR_NAME" {
+                                    tr_name = ev.text
+                                } else {
+                                    if current_tag == "REM_I" {
+                                        rem_i = ev.text
+                                    } else {
+                                        if current_tag == "REM_II" {
+                                            rem_ii = ev.text
+                                        } else {
+                                            if current_tag == "REFERENCE" {
+                                                reference = ev.text
+                                            } else {
+                                                if current_tag == "NAME_R" {
+                                                    name_r = ev.text
+                                                } else {
+                                                    if current_tag == "IBAN_R" {
+                                                        let t = str_trim(ev.text)
+                                                        if str_starts_with(t, "BG") || str_starts_with(t, "LT") || str_starts_with(t, "DE") {
+                                                            iban_r = t
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    if current_tag == "IBAN_S" {
+                        result.account_iban = ev.text
+                    }
+                }
+            } else {
+                if ev.kind == 2 {
+                    if ev.name == "TRANSACTION" && in_tx == 1 {
+                        in_tx = 0
+                        if tx_date != "" {
+                            let date = bp_date_dmy(tx_date)
+                            let mut amount = ""
+                            if amount_d != "" {
+                                amount = bp_money(concat("-", amount_d))
+                            } else {
+                                if amount_c != "" {
+                                    amount = bp_money(amount_c)
+                                }
+                            }
+                            if amount != "" && amount != "0" && amount != "0.00" {
+                                let mut desc = ""
+                                if tr_name != "" {
+                                    desc = tr_name
+                                }
+                                if rem_i != "" {
+                                    if desc != "" {
+                                        desc = concat(desc, " - ")
+                                    }
+                                    desc = concat(desc, rem_i)
+                                }
+                                if rem_ii != "" {
+                                    if desc != "" {
+                                        desc = concat(desc, " - ")
+                                    }
+                                    desc = concat(desc, rem_ii)
+                                }
+                                let mut tx = parsed_tx_new()
+                                tx.date = date
+                                tx.amount = amount
+                                tx.currency = "EUR"
+                                tx.description = desc
+                                tx.contra_name = name_r
+                                tx.contra_iban = iban_r
+                                tx.reference = reference
+                                vec_push(result.txs, tx)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if ev.kind <= 0 {
+            running = 0
+        }
+    }
+    result.account_currency = "EUR"
+    return result
+}
+// ─── ISO camt.053 ───
+fn bp_parse_camt(content: str) -> ParseResult {
+    let mut result = parse_result_new("ISO camt.053")
+    let p = xml_parser(content)
+    let stack: Vec<str> = vec_new()
+    let mut depth: i64 = 0
+    let mut in_ntry: i64 = 0
+    let mut in_bal: i64 = 0
+    let mut in_rltd: i64 = 0
+    let mut ntry_amt = ""
+    let mut ntry_ccy = ""
+    let mut ntry_cd = ""
+    let mut ntry_date = ""
+    let mut ntry_desc = ""
+    let mut ntry_contra = ""
+    let mut ntry_iban = ""
+    let mut ntry_ref = ""
+    let mut ntry_e2e = ""
+    let mut running: i64 = 1
+    while running == 1 {
+        let ev = xml_next(p)
+        let local = xml_local_name(ev.name)
+        if ev.kind == 1 {
+            if local == "Ntry" {
+                in_ntry = 1
+                ntry_amt = ""
+                ntry_ccy = ""
+                ntry_cd = ""
+                ntry_date = ""
+                ntry_desc = ""
+                ntry_contra = ""
+                ntry_iban = ""
+                ntry_ref = ""
+                ntry_e2e = ""
+            }
+            if local == "Bal" {
+                in_bal = 1
+            }
+            if local == "RltdPties" {
+                in_rltd = 1
+            }
+            if local == "Amt" && (in_ntry == 1 || in_bal == 1) {
+                if map_has(ev.attrs, "Ccy") == 1 {
+                    let ccy = map_get(ev.attrs, "Ccy")
+                    if in_ntry == 1 && in_bal == 0 && ntry_ccy == "" {
+                        ntry_ccy = ccy
+                    }
+                    if result.account_currency == "" {
+                        result.account_currency = ccy
+                    }
+                }
+            }
+            if depth < vec_len(stack) {
+                vec_set(stack, depth, local)
+            } else {
+                vec_push(stack, local)
+            }
+            depth = depth + 1
+        } else {
+            if ev.kind == 3 {
+                let text = str_trim(ev.text)
+                if text != "" {
+                    let current = local
+                    let mut parent = ""
+                    if depth >= 2 {
+                        parent = vec_get(stack, depth - 2)
+                    }
+                    if in_ntry == 1 {
+                        if current == "Amt" && ntry_amt == "" {
+                            ntry_amt = text
+                        } else {
+                            if current == "CdtDbtInd" && ntry_cd == "" {
+                                ntry_cd = text
+                            } else {
+                                if current == "Dt" && (parent == "BookgDt" || parent == "ValDt") && ntry_date == "" {
+                                    ntry_date = text
+                                } else {
+                                    if current == "DtTm" && (parent == "BookgDt" || parent == "ValDt") && ntry_date == "" {
+                                        let ti = str_find(text, "T")
+                                        if ti >= 0 {
+                                            ntry_date = substr(text, 0, ti)
+                                        } else {
+                                            ntry_date = text
+                                        }
+                                    } else {
+                                        if current == "Ustrd" || current == "AddtlNtryInf" {
+                                            if ntry_desc == "" {
+                                                ntry_desc = text
+                                            } else {
+                                                ntry_desc = concat(concat(ntry_desc, " | "), text)
+                                            }
+                                        } else {
+                                            if current == "NtryRef" {
+                                                ntry_ref = text
+                                            } else {
+                                                if current == "EndToEndId" {
+                                                    if ntry_e2e == "" {
+                                                        ntry_e2e = text
+                                                    }
+                                                } else {
+                                                    if current == "AcctSvcrRef" {
+                                                        ntry_e2e = text
+                                                    } else {
+                                                        if current == "Nm" && in_rltd == 1 && ntry_contra == "" {
+                                                            ntry_contra = text
+                                                        } else {
+                                                            if current == "IBAN" && in_rltd == 1 && ntry_iban == "" {
+                                                                ntry_iban = text
+                                                            } else {
+                                                                if current == "IBAN" && in_rltd == 0 && result.account_iban == "" {
+                                                                    result.account_iban = text
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        if current == "IBAN" && result.account_iban == "" {
+                            result.account_iban = text
+                        }
+                    }
+                }
+            } else {
+                if ev.kind == 2 {
+                    if local == "Bal" && in_bal == 1 {
+                        in_bal = 0
+                    }
+                    if local == "RltdPties" {
+                        in_rltd = 0
+                    }
+                    if local == "Ntry" && in_ntry == 1 {
+                        in_ntry = 0
+                        let amt = bp_money(ntry_amt)
+                        if amt != "" && amt != "0" && amt != "0.00" && ntry_date != "" {
+                            let mut amount = amt
+                            if ntry_cd == "DBIT" {
+                                amount = concat("-", amt)
+                            }
+                            let mut reference = ntry_ref
+                            if reference == "" {
+                                reference = ntry_e2e
+                            }
+                            let mut ccy = ntry_ccy
+                            if ccy == "" {
+                                ccy = result.account_currency
+                            }
+                            if ccy == "" {
+                                ccy = "EUR"
+                            }
+                            let mut tx = parsed_tx_new()
+                            tx.date = ntry_date
+                            tx.amount = amount
+                            tx.currency = ccy
+                            tx.description = ntry_desc
+                            tx.contra_name = ntry_contra
+                            tx.contra_iban = ntry_iban
+                            tx.reference = reference
+                            vec_push(result.txs, tx)
+                        }
+                    }
+                    if depth > 0 {
+                        depth = depth - 1
+                    }
+                }
+            }
+        }
+        if ev.kind <= 0 {
+            running = 0
+        }
+    }
+    return result
+}
+// ─── PostBank XML ───
+fn bp_parse_postbank(content: str) -> ParseResult {
+    let mut result = parse_result_new("PostBank XML")
+    let p = xml_parser(content)
+    let stack: Vec<str> = vec_new()
+    let mut depth: i64 = 0
+    let mut in_model: i64 = 0
+    let mut account_number = ""
+    let mut account_currency = ""
+    let mut flow_direction = ""
+    let mut tx_amount = ""
+    let mut tx_currency = ""
+    let mut booking_date = ""
+    let mut counterparty = ""
+    let mut from_to_account = ""
+    let mut remittance = ""
+    let mut bordero = ""
+    let mut type_op = ""
+    let mut running: i64 = 1
+    while running == 1 {
+        let ev = xml_next(p)
+        if ev.kind == 1 {
+            if ev.name == "MultipleAccountTransactionItemAPIOutputModel" {
+                in_model = 1
+                account_number = ""
+                account_currency = ""
+                flow_direction = ""
+                tx_amount = ""
+                tx_currency = ""
+                booking_date = ""
+                counterparty = ""
+                from_to_account = ""
+                remittance = ""
+                bordero = ""
+                type_op = ""
+            }
+            if depth < vec_len(stack) {
+                vec_set(stack, depth, ev.name)
+            } else {
+                vec_push(stack, ev.name)
+            }
+            depth = depth + 1
+        } else {
+            if ev.kind == 3 {
+                let text = str_trim(ev.text)
+                if text != "" && in_model == 1 {
+                    let current = ev.name
+                    let mut parent = ""
+                    if depth >= 2 {
+                        parent = vec_get(stack, depth - 2)
+                    }
+                    if current == "AccountNumber" {
+                        account_number = text
+                        if result.account_iban == "" {
+                            result.account_iban = text
+                        }
+                    } else {
+                        if current == "AccountCurrency" {
+                            account_currency = text
+                            if result.account_currency == "" {
+                                result.account_currency = text
+                            }
+                        } else {
+                            if current == "FlowDirection" {
+                                flow_direction = text
+                            } else {
+                                if current == "TypeOperation" {
+                                    type_op = text
+                                } else {
+                                    if current == "Counterparty" {
+                                        counterparty = text
+                                    } else {
+                                        if current == "FromToAccount" {
+                                            from_to_account = text
+                                        } else {
+                                            if current == "RemittanceInformation" {
+                                                remittance = text
+                                            } else {
+                                                if current == "BorderoNumber" {
+                                                    bordero = text
+                                                } else {
+                                                    if current == "Value" && parent == "TransactionAmount" {
+                                                        tx_amount = text
+                                                    } else {
+                                                        if current == "Code" && parent == "CurrencyCode" && tx_currency == "" {
+                                                            tx_currency = text
+                                                        } else {
+                                                            if current == "DateTimeValue" && parent == "BookingDate" {
+                                                                let ti = str_find(text, "T")
+                                                                if ti >= 0 {
+                                                                    booking_date = substr(text, 0, ti)
+                                                                } else {
+                                                                    booking_date = text
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                if ev.kind == 2 {
+                    if ev.name == "MultipleAccountTransactionItemAPIOutputModel" && in_model == 1 {
+                        in_model = 0
+                        let amt = bp_money(tx_amount)
+                        if amt != "" && amt != "0" && amt != "0.00" && booking_date != "" {
+                            let mut amount = amt
+                            if flow_direction == "Outbound" {
+                                amount = concat("-", amt)
+                            }
+                            let mut desc = type_op
+                            if remittance != "" {
+                                if desc == "" {
+                                    desc = remittance
+                                } else {
+                                    desc = concat(concat(desc, " - "), remittance)
+                                }
+                            }
+                            let mut ccy = tx_currency
+                            if ccy == "" {
+                                ccy = account_currency
+                            }
+                            let mut tx = parsed_tx_new()
+                            tx.date = booking_date
+                            tx.amount = amount
+                            tx.currency = ccy
+                            tx.description = desc
+                            tx.contra_name = counterparty
+                            tx.contra_iban = from_to_account
+                            tx.reference = bordero
+                            vec_push(result.txs, tx)
+                        }
+                    }
+                    if depth > 0 {
+                        depth = depth - 1
+                    }
+                }
+            }
+        }
+        if ev.kind <= 0 {
+            running = 0
+        }
+    }
+    return result
+}

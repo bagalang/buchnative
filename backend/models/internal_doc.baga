@@ -1,0 +1,250 @@
+// models/internal_doc.baga — приемо-предавателен протокол между обекти.
+// Не е данъчен документ: няма контрагент, ДДС и запис в дневника.
+
+import "ormbaga/orm.baga"
+import "ormbaga/sql.baga"
+import "fmrbaga/jsonx.baga"
+import "pgbaga/pg.baga"
+import "std/str/str.baga"
+import "std/os/os.baga"
+
+fn idoc_table() -> str { return "internal_docs" }
+fn idoc_line_table() -> str { return "internal_doc_lines" }
+
+fn idoc_backend_boila() -> i64 !IO {
+    let be = env("ORM_BACKEND")?
+    if be == "boila" || be == "boiladb" || be == "boilaDB" {
+        return 1
+    }
+    return 0
+}
+
+fn idoc_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return orm_count_sql(db, "SELECT MAX(id) AS count FROM internal_docs")?
+}
+
+fn idoc_line_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return orm_count_sql(db, "SELECT MAX(id) AS count FROM internal_doc_lines")?
+}
+
+fn idoc_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_str(o, "number", orm_cell_by(q, row, "number"))
+    o = jobj_str(o, "doc_date", orm_cell_by(q, row, "doc_date"))
+    o = jobj_i64(o, "from_location_id", orm_cell_by_i64(q, row, "from_location_id"))
+    o = jobj_i64(o, "to_location_id", orm_cell_by_i64(q, row, "to_location_id"))
+    o = jobj_str(o, "status", orm_cell_by(q, row, "status"))
+    o = jobj_str(o, "notes", orm_cell_by(q, row, "notes"))
+    o = jobj_str(o, "handed_by", orm_cell_by(q, row, "handed_by"))
+    o = jobj_str(o, "received_by", orm_cell_by(q, row, "received_by"))
+    let ca = orm_cell_by(q, row, "created_at")
+    if ca != "" {
+        o = jobj_str(o, "created_at", ca)
+    }
+    return o
+}
+
+fn idoc_line_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_i64(o, "doc_id", orm_cell_by_i64(q, row, "doc_id"))
+    o = jobj_str(o, "line_kind", orm_cell_by(q, row, "line_kind"))
+    o = jobj_i64(o, "product_id", orm_cell_by_i64(q, row, "product_id"))
+    o = jobj_i64(o, "asset_id", orm_cell_by_i64(q, row, "asset_id"))
+    o = jobj_str(o, "quantity", orm_cell_by(q, row, "quantity"))
+    o = jobj_str(o, "unit_cost", orm_cell_by(q, row, "unit_cost"))
+    o = jobj_str(o, "amount", orm_cell_by(q, row, "amount"))
+    o = jobj_str(o, "description", orm_cell_by(q, row, "description"))
+    return o
+}
+
+fn idoc_select_sql() -> str {
+    return "SELECT id, number, doc_date, from_location_id, to_location_id, status, notes, handed_by, received_by, created_at FROM internal_docs"
+}
+
+fn idoc_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
+    let sql = concat(idoc_select_sql(), " WHERE id = $1")
+    let vals = vec_new()
+    let nulls = vec_new()
+    pg_param_i64(vals, nulls, id)
+    return orm_query_params(db, sql, vals, nulls)?
+}
+
+fn idoc_all(db: OrmDb) -> OrmQuery !IO !Net {
+    return orm_query(db, concat(idoc_select_sql(), " ORDER BY id"))?
+}
+
+fn idoc_numbers(db: OrmDb) -> OrmQuery !IO !Net {
+    return orm_query(db, "SELECT number FROM internal_docs")?
+}
+
+fn idoc_lines_by_doc(db: OrmDb, doc_id: i64) -> OrmQuery !IO !Net {
+    let sql = "SELECT id, doc_id, line_kind, product_id, asset_id, quantity, unit_cost, amount, description FROM internal_doc_lines WHERE doc_id = $1 ORDER BY id"
+    let vals = vec_new()
+    let nulls = vec_new()
+    pg_param_i64(vals, nulls, doc_id)
+    return orm_query_params(db, sql, vals, nulls)?
+}
+
+fn idoc_insert(db: OrmDb, number: str, doc_date: str, from_id: i64, to_id: i64, notes: str, handed_by: str, received_by: str) -> OrmQuery !IO !Net {
+    if idoc_backend_boila()? == 1 {
+        let c = idoc_next_id(db)?
+        if orm_ok_c(c) == 0 {
+            return OrmQErr(OrmQueryFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
+        }
+        let nid = orm_count_n(c) + 1
+        let mut d = orm_db_c(c)
+        let cols = vec_new()
+        vec_push(cols, "id")
+        vec_push(cols, "number")
+        vec_push(cols, "doc_date")
+        vec_push(cols, "from_location_id")
+        vec_push(cols, "to_location_id")
+        vec_push(cols, "status")
+        vec_push(cols, "notes")
+        vec_push(cols, "handed_by")
+        vec_push(cols, "received_by")
+        let vals = vec_new()
+        vec_push(vals, int_to_str(nid))
+        vec_push(vals, number)
+        vec_push(vals, doc_date)
+        vec_push(vals, int_to_str(from_id))
+        vec_push(vals, int_to_str(to_id))
+        vec_push(vals, "draft")
+        vec_push(vals, notes)
+        vec_push(vals, handed_by)
+        vec_push(vals, received_by)
+        let nulls = vec_new()
+        let mut i: i64 = 0
+        while i < 9 {
+            vec_push(nulls, 0)
+            i = i + 1
+        }
+        return orm_insert_returning_full(d, idoc_table(), cols, vals, nulls)?
+    }
+    let cols = vec_new()
+    vec_push(cols, "number")
+    vec_push(cols, "doc_date")
+    vec_push(cols, "from_location_id")
+    vec_push(cols, "to_location_id")
+    vec_push(cols, "status")
+    vec_push(cols, "notes")
+    vec_push(cols, "handed_by")
+    vec_push(cols, "received_by")
+    let vals = vec_new()
+    vec_push(vals, number)
+    vec_push(vals, doc_date)
+    vec_push(vals, int_to_str(from_id))
+    vec_push(vals, int_to_str(to_id))
+    vec_push(vals, "draft")
+    vec_push(vals, notes)
+    vec_push(vals, handed_by)
+    vec_push(vals, received_by)
+    let nulls = vec_new()
+    let mut i: i64 = 0
+    while i < 8 {
+        vec_push(nulls, 0)
+        i = i + 1
+    }
+    return orm_insert_returning_full(db, idoc_table(), cols, vals, nulls)?
+}
+
+fn idoc_line_insert(db: OrmDb, doc_id: i64, line_kind: str, product_id: i64, asset_id: i64, quantity: str, unit_cost: str, amount: str, description: str) -> OrmExec !IO !Net {
+    if idoc_backend_boila()? == 1 {
+        let c = idoc_line_next_id(db)?
+        if orm_ok_c(c) == 0 {
+            return OrmEErr(OrmExecFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
+        }
+        let nid = orm_count_n(c) + 1
+        let mut d = orm_db_c(c)
+        let cols = vec_new()
+        vec_push(cols, "id")
+        vec_push(cols, "doc_id")
+        vec_push(cols, "line_kind")
+        vec_push(cols, "product_id")
+        vec_push(cols, "asset_id")
+        vec_push(cols, "quantity")
+        vec_push(cols, "unit_cost")
+        vec_push(cols, "amount")
+        vec_push(cols, "description")
+        let vals = vec_new()
+        vec_push(vals, int_to_str(nid))
+        vec_push(vals, int_to_str(doc_id))
+        vec_push(vals, line_kind)
+        vec_push(vals, int_to_str(product_id))
+        vec_push(vals, int_to_str(asset_id))
+        vec_push(vals, quantity)
+        vec_push(vals, unit_cost)
+        vec_push(vals, amount)
+        vec_push(vals, description)
+        return orm_insert_strs(d, idoc_line_table(), cols, vals)?
+    }
+    let cols = vec_new()
+    vec_push(cols, "doc_id")
+    vec_push(cols, "line_kind")
+    vec_push(cols, "product_id")
+    vec_push(cols, "asset_id")
+    vec_push(cols, "quantity")
+    vec_push(cols, "unit_cost")
+    vec_push(cols, "amount")
+    vec_push(cols, "description")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(doc_id))
+    vec_push(vals, line_kind)
+    vec_push(vals, int_to_str(product_id))
+    vec_push(vals, int_to_str(asset_id))
+    vec_push(vals, quantity)
+    vec_push(vals, unit_cost)
+    vec_push(vals, amount)
+    vec_push(vals, description)
+    return orm_insert_strs(db, idoc_line_table(), cols, vals)?
+}
+
+fn idoc_delete_lines(db: OrmDb, doc_id: i64) -> OrmExec !IO !Net {
+    let sql = "DELETE FROM internal_doc_lines WHERE doc_id = $1"
+    let vals = vec_new()
+    let nulls = vec_new()
+    pg_param_i64(vals, nulls, doc_id)
+    return orm_exec_params(db, sql, vals, nulls)?
+}
+
+fn idoc_delete(db: OrmDb, id: i64) -> OrmExec !IO !Net {
+    return orm_delete_by_id(db, idoc_table(), id)?
+}
+
+fn idoc_list_json(q: OrmQuery) -> JObj {
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        arr = jarr_obj(arr, idoc_to_json(q, i))
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", orm_nrows(q))
+    return o
+}
+
+fn idoc_lines_list_json(q: OrmQuery) -> JArr {
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        arr = jarr_obj(arr, idoc_line_to_json(q, i))
+        i = i + 1
+    }
+    return arr
+}
+
+fn idoc_max_number(q: OrmQuery) -> i64 {
+    let mut maxn: i64 = 0
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        let n = parse_int(orm_cell_by(q, i, "number"))
+        if n > maxn {
+            maxn = n
+        }
+        i = i + 1
+    }
+    return maxn
+}

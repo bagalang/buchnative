@@ -1,0 +1,236 @@
+// actions/scans.baga — AI сканиране на покупки/продажби.
+// Резултат: данни за чернова фактура с редове (не запис по сметки).
+
+import "../models/counterpart.baga"
+import "../models/product_name_mapping.baga"
+import "mistral.baga"
+import "mistral_ocr.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/json/json.baga"
+import "std/str/str.baga"
+
+fn scan_attach_maps(lines: JArr, mapq: OrmQuery) -> JArr {
+    let mut out = jarr_new()
+    let n = vec_len(lines.items)
+    let mut i: i64 = 0
+    while i < n {
+        let raw = vec_get(lines.items, i)
+        let parsed = jbody_parse_str(raw)
+        if parsed.ok == 0 || json_tag(parsed.doc, parsed.root) != 6 {
+            out = jarr_raw(out, raw)
+        } else {
+            let desc = jflex_str(parsed.doc, parsed.root, "description", "")
+            let hit = pnmap_find_name(mapq, desc)
+            let mut o = jobj_new()
+            o = jobj_str(o, "description", desc)
+            o = jobj_str(o, "quantity", jflex_str(parsed.doc, parsed.root, "quantity", "1"))
+            o = jobj_str(o, "unit", jflex_str(parsed.doc, parsed.root, "unit", "C62"))
+            o = jobj_str(o, "unit_price", jflex_str(parsed.doc, parsed.root, "unit_price", "0"))
+            o = jobj_str(o, "vat_rate", jflex_str(parsed.doc, parsed.root, "vat_rate", "20"))
+            o = jobj_str(o, "net_amount", jflex_str(parsed.doc, parsed.root, "net_amount", ""))
+            o = jobj_str(o, "vat_amount", jflex_str(parsed.doc, parsed.root, "vat_amount", ""))
+            o = jobj_str(o, "total_amount", jflex_str(parsed.doc, parsed.root, "total_amount", ""))
+            if hit >= 0 {
+                o = jobj_i64(o, "product_id", orm_cell_by_i64(mapq, hit, "product_id"))
+            }
+            out = jarr_obj(out, o)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn act_scans_extract(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let filename = jopt_str(b.doc, b.root, "filename", "document.pdf")
+    let mime = jopt_str(b.doc, b.root, "mime", "")
+    let b64 = jreq_str(b.doc, b.root, "content_base64")
+    if b64.ok == 0 {
+        return act_422_field(db, "content_base64", b64)
+    }
+    let direction = jopt_str(b.doc, b.root, "direction", "in")
+    if direction.val != "in" && direction.val != "out" {
+        return act_err(db, 422, "direction must be 'in' or 'out'")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let mk = company_mistral_key(db, auth.ctx.user_sub)?
+    if mk.key == "" {
+        return act_err(mk.db, 422, "Няма Mistral ключ в настройките на фирмата (Настройки → Интеграции).")
+    }
+    let r = mistral_extract_invoice(mk.key, filename.val, mime.val, b64.val, direction.val)?
+    if r.ok == 0 {
+        return act_err(mk.db, 502, r.err)
+    }
+    let mut db2 = mk.db
+    let mut cp_id: i64 = 0
+    let mut cp_obj = jobj_new()
+    let vat = str_trim(r.counterpart_vat_number)
+    let eik = str_trim(r.counterpart_eik)
+    if vat != "" {
+        let cq = counterpart_by_vat(db2, vat)?
+        if orm_ok_q(cq) == 0 {
+            return act_err(orm_db_q(cq), 500, orm_err_q(cq))
+        }
+        db2 = orm_db_q(cq)
+        if orm_nrows(cq) >= 1 {
+            cp_id = orm_cell_by_i64(cq, 0, "id")
+            cp_obj = counterpart_to_json(cq, 0)
+        }
+    }
+    if cp_id == 0 && eik != "" {
+        let cq = counterpart_by_eik(db2, eik)?
+        if orm_ok_q(cq) == 0 {
+            return act_err(orm_db_q(cq), 500, orm_err_q(cq))
+        }
+        db2 = orm_db_q(cq)
+        if orm_nrows(cq) >= 1 {
+            cp_id = orm_cell_by_i64(cq, 0, "id")
+            cp_obj = counterpart_to_json(cq, 0)
+        }
+    }
+    let mut lines = r.lines
+    let mut maps = jarr_new()
+    if cp_id > 0 {
+        let mq = pnmap_by_counterpart(db2, cp_id)?
+        if orm_ok_q(mq) == 0 {
+            return act_err(orm_db_q(mq), 500, orm_err_q(mq))
+        }
+        db2 = orm_db_q(mq)
+        lines = scan_attach_maps(lines, mq)
+        let mut i: i64 = 0
+        while i < orm_nrows(mq) {
+            maps = jarr_obj(maps, pnmap_to_json(mq, i))
+            i = i + 1
+        }
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "direction", direction.val)
+    o = jobj_str(o, "filename", filename.val)
+    o = jobj_str(o, "invoice_number", r.invoice_number)
+    o = jobj_str(o, "issue_date", r.issue_date)
+    o = jobj_str(o, "due_date", r.due_date)
+    o = jobj_str(o, "document_type", r.document_type)
+    o = jobj_str(o, "counterpart_name", r.counterpart_name)
+    o = jobj_str(o, "counterpart_eik", r.counterpart_eik)
+    o = jobj_str(o, "counterpart_vat_number", r.counterpart_vat_number)
+    o = jobj_str(o, "currency", r.currency)
+    o = jobj_str(o, "total_net_amount", r.total_net_amount)
+    o = jobj_str(o, "total_vat_amount", r.total_vat_amount)
+    o = jobj_str(o, "total_amount", r.total_amount)
+    o = jobj_arr(o, "lines", lines)
+    o = jobj_arr(o, "mappings", maps)
+    if cp_id > 0 {
+        o = jobj_i64(o, "counterpart_id", cp_id)
+        o = jobj_obj(o, "counterpart", cp_obj)
+    }
+    return act_ok(db2, o)
+}
+
+fn act_pnmap_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let cid = parse_int(fmr_query(ctx, "counterpart_id"))
+    if cid <= 0 {
+        return act_err(db, 422, "counterpart_id е задължителен")
+    }
+    let q = pnmap_by_counterpart(db, cid)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    return act_ok(orm_db_q(q), pnmap_list_json(q))
+}
+
+fn act_pnmap_save(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let cid = jreq_i64(b.doc, b.root, "counterpart_id")
+    if cid.ok == 0 {
+        return act_422_field(db, "counterpart_id", cid)
+    }
+    if cid.num <= 0 {
+        return act_err(db, 422, "counterpart_id е задължителен")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let items = json_get(b.doc, b.root, "items")
+    if items < 0 || json_tag(b.doc, items) != 5 {
+        return act_err(db, 422, "items трябва да е масив")
+    }
+    let mut mq = pnmap_by_counterpart(db, cid.num)?
+    if orm_ok_q(mq) == 0 {
+        return act_err(orm_db_q(mq), 500, orm_err_q(mq))
+    }
+    let mut db2 = orm_db_q(mq)
+    let n = json_count(b.doc, items)
+    let mut i: i64 = 0
+    while i < n {
+        let elem = json_at(b.doc, items, i)
+        if json_tag(b.doc, elem) != 6 {
+            return act_err(db2, 422, "items[i] must be an object")
+        }
+        let name = jflex_str(b.doc, elem, "scanned_name", "")
+        let pid = jreq_i64(b.doc, elem, "product_id")
+        if name != "" && pid.ok == 1 && pid.num > 0 {
+            let hit = pnmap_find_name(mq, name)
+            if hit >= 0 {
+                let id = orm_cell_by_i64(mq, hit, "id")
+                let up = pnmap_set_product(db2, id, pid.num)?
+                if orm_ok(up) == 0 {
+                    return act_err(orm_db_exec(up), 500, orm_err_exec(up))
+                }
+                db2 = orm_db_exec(up)
+            } else {
+                let ins = pnmap_insert(db2, cid.num, name, pid.num)?
+                if orm_ok(ins) == 0 {
+                    return act_err(orm_db_exec(ins), 500, orm_err_exec(ins))
+                }
+                db2 = orm_db_exec(ins)
+                let mq2 = pnmap_by_counterpart(db2, cid.num)?
+                if orm_ok_q(mq2) == 0 {
+                    return act_err(orm_db_q(mq2), 500, orm_err_q(mq2))
+                }
+                mq = mq2
+                db2 = orm_db_q(mq2)
+            }
+        }
+        i = i + 1
+    }
+    let q = pnmap_by_counterpart(db2, cid.num)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    return act_ok(orm_db_q(q), pnmap_list_json(q))
+}

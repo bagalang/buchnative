@@ -1,0 +1,328 @@
+// actions/invoices_post.baga — осчетоводяване на фактура.
+// Продажба: Дт 411 / Кт приходна (702) + Кт 4532; изписване Дт 702 / Кт 304.
+// Покупка: Дт складова (304) или разход (602) + Дт 4531 / Кт 401.
+// Кредитно известие: същите Дт/Кт, сумите с минус (чисти обороти, група 60).
+// Изписването е по метода на фирмата: WAC / FIFO / LIFO.
+
+import "../models/journal.baga"
+import "../models/invoice.baga"
+import "../models/account.baga"
+import "../models/counterpart.baga"
+import "../models/company.baga"
+import "../models/product.baga"
+import "../models/doc_type.baga"
+import "inventory.baga"
+import "periods.baga"
+import "txn.baga"
+import "acl.baga"
+import "active_company.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+fn resolve_account(db: OrmDb, number: str, out_id: Vec<i64>) -> FmrOut !IO !Net {
+    let q = account_by_number(db, number)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return act_err(orm_db_q(q), 422, concat("липсва сметка с номер ", number))
+    }
+    vec_push(out_id, orm_cell_by_i64(q, 0, "id"))
+    return act_ok(orm_db_q(q), jobj_new())
+}
+
+fn resolve_account_id(db: OrmDb, preferred_id: i64, fallback: str, out_id: Vec<i64>) -> FmrOut !IO !Net {
+    if preferred_id > 0 {
+        let q = account_find(db, preferred_id)?
+        if orm_ok_q(q) == 0 {
+            return act_err(orm_db_q(q), 500, orm_err_q(q))
+        }
+        if orm_nrows(q) < 1 {
+            return act_err(orm_db_q(q), 422, concat("липсва сметка с id ", int_to_str(preferred_id)))
+        }
+        vec_push(out_id, preferred_id)
+        return act_ok(orm_db_q(q), jobj_new())
+    }
+    return resolve_account(db, fallback, out_id)?
+}
+
+fn post_jl(db: OrmDb, entry_id: i64, account_id: i64, direction: str, amount: str, vat_amount: str, counterpart_id: i64, product_id: i64, location_id: i64) -> InvResult !IO !Net {
+    let li = journal_line_insert(db, entry_id, account_id, direction, amount, vat_amount, counterpart_id, product_id, location_id)?
+    if orm_ok(li) == 0 {
+        return inv_err(orm_db_exec(li), orm_err_exec(li))
+    }
+    return inv_ok(orm_db_exec(li), "")
+}
+
+fn company_valuation_method(db: OrmDb) -> InvResult !IO !Net {
+    let cq = company_all(db)?
+    if orm_ok_q(cq) == 0 {
+        return inv_err(orm_db_q(cq), orm_err_q(cq))
+    }
+    let mut method = "WAC"
+    if orm_nrows(cq) > 0 {
+        let m = orm_cell_by(cq, 0, "inventory_valuation_method")
+        if m != "" {
+            method = m
+        }
+    }
+    return InvResult { ok: 1, err: "", db: orm_db_q(cq), cost: method }
+}
+
+fn act_invoices_post(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:post")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    return invoice_post_one(db, id, auth.ctx.user_sub)?
+}
+
+// Ядрото на осчетоводяването по id. Ползва се и от груповото пост.
+// user_sub се подава, за да се намери активната фирма (собственик на записа).
+fn invoice_post_one(db: OrmDb, id: i64, user_sub: str) -> FmrOut !IO !Net {
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let iq = invoice_find(db, id)?
+    if orm_ok_q(iq) == 0 {
+        return act_err(orm_db_q(iq), 500, orm_err_q(iq))
+    }
+    if orm_nrows(iq) < 1 {
+        return act_404(orm_db_q(iq), "Invoice not found")
+    }
+    let mut db2 = orm_db_q(iq)
+    let pc = period_assert_open(db2, orm_cell_by(iq, 0, "accounting_month"))?
+    if pc.ok == 0 {
+        return act_err(pc.db, 422, pc.err)
+    }
+    db2 = pc.db
+    if orm_cell_by(iq, 0, "status") == "posted" {
+        return act_err(db2, 409, "фактурата е вече постната")
+    }
+    if orm_cell_by(iq, 0, "document_type") == "proforma" {
+        return act_err(db2, 422, "проформата не е данъчен документ и не се осчетоводява")
+    }
+    let doc_type = orm_cell_by(iq, 0, "document_type")
+    let direction = orm_cell_by(iq, 0, "direction")
+    let vat_amount = amount_for_doc(doc_type, orm_cell_by(iq, 0, "vat_amount"))
+    let total_amount = amount_for_doc(doc_type, orm_cell_by(iq, 0, "total_amount"))
+    let counterpart_id = orm_cell_by_i64(iq, 0, "counterpart_id")
+    let issue_date = orm_cell_by(iq, 0, "issue_date")
+    let number = orm_cell_by(iq, 0, "number")
+    let accounting_month = orm_cell_by(iq, 0, "accounting_month")
+    let location_id = orm_cell_by_i64(iq, 0, "location_id")
+    let mut counterpart_name = ""
+    let mut counterpart_vat_number = ""
+    if counterpart_id > 0 {
+        let cq = counterpart_find(db2, counterpart_id)?
+        if orm_ok_q(cq) == 0 {
+            return act_err(orm_db_q(cq), 500, orm_err_q(cq))
+        }
+        if orm_nrows(cq) > 0 {
+            counterpart_name = orm_cell_by(cq, 0, "name")
+            counterpart_vat_number = orm_cell_by(cq, 0, "vat_number")
+            db2 = orm_db_q(cq)
+        }
+    }
+    let vm = company_valuation_method(db2)?
+    if vm.ok == 0 {
+        return act_err(vm.db, 500, vm.err)
+    }
+    db2 = vm.db
+    let method = vm.cost
+    let lq = invoice_lines_by_invoice(db2, id)?
+    if orm_ok_q(lq) == 0 {
+        return act_err(orm_db_q(lq), 500, orm_err_q(lq))
+    }
+    db2 = orm_db_q(lq)
+    let a411 = vec_new()
+    let r411 = resolve_account(db2, "411", a411)?
+    if vec_len(a411) == 0 { return r411 }
+    db2 = r411.db
+    let a401 = vec_new()
+    let r401 = resolve_account(db2, "401", a401)?
+    if vec_len(a401) == 0 { return r401 }
+    db2 = r401.db
+    let a4531 = vec_new()
+    let r4531 = resolve_account(db2, "4531", a4531)?
+    if vec_len(a4531) == 0 { return r4531 }
+    db2 = r4531.db
+    let a4532 = vec_new()
+    let r4532 = resolve_account(db2, "4532", a4532)?
+    if vec_len(a4532) == 0 { return r4532 }
+    db2 = r4532.db
+    let mut vat_type = "no_vat"
+    if direction == "out" {
+        vat_type = "sales"
+    } else {
+        vat_type = "purchase"
+    }
+    let desc = concat(concat(concat(doc_type_title(doc_type), " "), number), concat(" / ", direction))
+    let bgn = bb_begin(db2)?
+    if orm_ok(bgn) == 0 {
+        return act_err(orm_db_exec(bgn), 500, orm_err_exec(bgn))
+    }
+    db2 = orm_db_exec(bgn)
+    let acp = active_company_id(db2, user_sub)?
+    db2 = acp.db
+    let eq = journal_entry_insert(db2, issue_date, doc_type, id, desc, vat_type, counterpart_id, counterpart_name, counterpart_vat_number, number, issue_date, accounting_month, total_amount, vat_amount, acp.id)?
+    if orm_ok_q(eq) == 0 || orm_nrows(eq) < 1 {
+        return act_err_rb(orm_db_q(eq), 500, "journal entry insert failed")
+    }
+    let entry_id = orm_cell_by_i64(eq, 0, "id")
+    db2 = orm_db_q(eq)
+    let acc_cust = vec_get(a411, 0)
+    let acc_sup = vec_get(a401, 0)
+    let acc_vat_in = vec_get(a4531, 0)
+    let acc_vat_out = vec_get(a4532, 0)
+    let nlines = orm_nrows(lq)
+    let mut do_stock: i64 = 0
+    if doc_type == "01" || doc_type == "11" {
+        do_stock = 1
+    }
+    if direction == "out" {
+        let p1 = post_jl(db2, entry_id, acc_cust, "debit", total_amount, "0", counterpart_id, 0, location_id)?
+        if p1.ok == 0 { return act_err_rb(p1.db, 500, p1.err) }
+        db2 = p1.db
+        let mut i: i64 = 0
+        while i < nlines {
+            let net = amount_for_doc(doc_type, orm_cell_by(lq, i, "net_amount"))
+            let pid = orm_cell_by_i64(lq, i, "product_id")
+            let mut rev_pref: i64 = 0
+            let mut inv_pref: i64 = 0
+            let mut is_inv: i64 = 0
+            let mut pname = orm_cell_by(lq, i, "description")
+            if pid > 0 {
+                let pq = product_find(db2, pid)?
+                if orm_ok_q(pq) == 0 {
+                    return act_err_rb(orm_db_q(pq), 500, orm_err_q(pq))
+                }
+                db2 = orm_db_q(pq)
+                if orm_nrows(pq) > 0 {
+                    rev_pref = orm_cell_by_i64(pq, 0, "revenue_account_id")
+                    inv_pref = orm_cell_by_i64(pq, 0, "inventory_account_id")
+                    is_inv = orm_cell_by_i64(pq, 0, "is_inventory")
+                    pname = orm_cell_by(pq, 0, "name")
+                }
+            }
+            let ids = vec_new()
+            let rr = resolve_account_id(db2, rev_pref, "702", ids)?
+            if vec_len(ids) == 0 {
+                return act_err_rb(rr.db, 422, "липсва приходна сметка (702)")
+            }
+            db2 = rr.db
+            let revenue_id = vec_get(ids, 0)
+            let p2 = post_jl(db2, entry_id, revenue_id, "credit", net, "0", counterpart_id, pid, location_id)?
+            if p2.ok == 0 { return act_err_rb(p2.db, 500, p2.err) }
+            db2 = p2.db
+            if do_stock == 1 && is_inv == 1 {
+                let qty = orm_cell_by(lq, i, "quantity")
+                let issued = inv_issue(db2, pid, qty, method, pname, location_id)?
+                if issued.ok == 0 {
+                    return act_err_rb(issued.db, 422, issued.err)
+                }
+                db2 = issued.db
+                if issued.cost != "0" && issued.cost != "0.00" && issued.cost != "0.0" {
+                    let iids = vec_new()
+                    let ri = resolve_account_id(db2, inv_pref, "304", iids)?
+                    if vec_len(iids) == 0 {
+                        return act_err_rb(ri.db, 422, "липсва складова сметка (304)")
+                    }
+                    db2 = ri.db
+                    let inventory_id = vec_get(iids, 0)
+                    let w1 = post_jl(db2, entry_id, revenue_id, "debit", issued.cost, "0", counterpart_id, pid, location_id)?
+                    if w1.ok == 0 { return act_err_rb(w1.db, 500, w1.err) }
+                    db2 = w1.db
+                    let w2 = post_jl(db2, entry_id, inventory_id, "credit", issued.cost, "0", counterpart_id, pid, location_id)?
+                    if w2.ok == 0 { return act_err_rb(w2.db, 500, w2.err) }
+                    db2 = w2.db
+                }
+            }
+            i = i + 1
+        }
+        let p3 = post_jl(db2, entry_id, acc_vat_out, "credit", vat_amount, vat_amount, 0, 0, location_id)?
+        if p3.ok == 0 { return act_err_rb(p3.db, 500, p3.err) }
+        db2 = p3.db
+    } else {
+        let mut i: i64 = 0
+        while i < nlines {
+            let net = amount_for_doc(doc_type, orm_cell_by(lq, i, "net_amount"))
+            let pid = orm_cell_by_i64(lq, i, "product_id")
+            let qty = orm_cell_by(lq, i, "quantity")
+            let unit_price = orm_cell_by(lq, i, "unit_price")
+            let mut purch_pref: i64 = 0
+            let mut is_inv: i64 = 0
+            let mut fallback = "602"
+            if pid > 0 {
+                let pq = product_find(db2, pid)?
+                if orm_ok_q(pq) == 0 {
+                    return act_err_rb(orm_db_q(pq), 500, orm_err_q(pq))
+                }
+                db2 = orm_db_q(pq)
+                if orm_nrows(pq) > 0 {
+                    purch_pref = orm_cell_by_i64(pq, 0, "inventory_account_id")
+                    is_inv = orm_cell_by_i64(pq, 0, "is_inventory")
+                    if is_inv == 1 {
+                        fallback = "304"
+                    }
+                }
+            }
+            let ids = vec_new()
+            let rr = resolve_account_id(db2, purch_pref, fallback, ids)?
+            if vec_len(ids) == 0 {
+                return act_err_rb(rr.db, 422, concat("липсва сметка ", fallback))
+            }
+            db2 = rr.db
+            let debit_id = vec_get(ids, 0)
+            let p1 = post_jl(db2, entry_id, debit_id, "debit", net, "0", counterpart_id, pid, location_id)?
+            if p1.ok == 0 { return act_err_rb(p1.db, 500, p1.err) }
+            db2 = p1.db
+            if do_stock == 1 && is_inv == 1 && pid > 0 {
+                let rec = inv_receive(db2, pid, id, orm_cell_by_i64(lq, i, "id"), issue_date, qty, unit_price, location_id)?
+                if rec.ok == 0 {
+                    return act_err_rb(rec.db, 422, rec.err)
+                }
+                db2 = rec.db
+            }
+            i = i + 1
+        }
+        let p2 = post_jl(db2, entry_id, acc_vat_in, "debit", vat_amount, vat_amount, 0, 0, location_id)?
+        if p2.ok == 0 { return act_err_rb(p2.db, 500, p2.err) }
+        db2 = p2.db
+        let p3 = post_jl(db2, entry_id, acc_sup, "credit", total_amount, "0", counterpart_id, 0, location_id)?
+        if p3.ok == 0 { return act_err_rb(p3.db, 500, p3.err) }
+        db2 = p3.db
+    }
+    let scols = vec_new()
+    vec_push(scols, "status")
+    vec_push(scols, "journal_entry_id")
+    let svals = vec_new()
+    vec_push(svals, "posted")
+    vec_push(svals, int_to_str(entry_id))
+    let su = orm_update_by_id(db2, invoice_table(), id, scols, svals)?
+    if orm_ok(su) == 0 {
+        return act_err_rb(orm_db_exec(su), 500, orm_err_exec(su))
+    }
+    db2 = orm_db_exec(su)
+    let cmt = bb_commit(db2)?
+    if orm_ok(cmt) == 0 {
+        return act_err_rb(orm_db_exec(cmt), 500, orm_err_exec(cmt))
+    }
+    db2 = orm_db_exec(cmt)
+    let q = journal_find(db2, entry_id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_err(orm_db_q(q), 500, "journal entry missing after post")
+    }
+    let mut o = journal_entry_to_json(q, 0)
+    let jl = journal_lines_by_entry(orm_db_q(q), entry_id)?
+    o = jobj_arr(o, "lines", journal_lines_list_json(jl))
+    return act_created(orm_db_q(jl), o)
+}

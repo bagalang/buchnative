@@ -1,0 +1,111 @@
+// models/setting.baga — настройки (ключ/стойност) с упсърт по ключ.
+
+import "ormbaga/orm.baga"
+import "ormbaga/sql.baga"
+import "pgbaga/pg.baga"
+import "std/str/str.baga"
+import "std/os/os.baga"
+
+import "fmrbaga/jsonx.baga"
+
+fn setting_table() -> str {
+    return "settings"
+}
+
+fn setting_backend_boila() -> i64 !IO {
+    let be = env("ORM_BACKEND")?
+    if be == "boila" || be == "boiladb" || be == "boilaDB" {
+        return 1
+    }
+    return 0
+}
+
+fn setting_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return orm_count_sql(db, "SELECT MAX(id) AS count FROM settings")?
+}
+
+fn setting_get_by_key(db: OrmDb, key: str) -> OrmQuery !IO !Net {
+    let sql = "SELECT id, key, value FROM settings WHERE key = $1"
+    let vals = vec_new()
+    vec_push(vals, key)
+    let nulls = vec_new()
+    vec_push(nulls, 0)
+    return orm_query_params(db, sql, vals, nulls)?
+}
+
+// Ъпсърт по ключ: съществуващ ред → ОБНОВЯВАНЕ, иначе вмъкване.
+fn setting_set_by_key(db: OrmDb, key: str, value: str) -> OrmExec !IO !Net {
+    let q = setting_get_by_key(db, key)?
+    if orm_ok_q(q) == 0 {
+        return OrmEErr(OrmExecFail { err: orm_err_q(q), tag: "", db: orm_db_q(q) })
+    }
+    if orm_nrows(q) > 0 {
+        let id = orm_cell_by_i64(q, 0, "id")
+        let cols = vec_new()
+        vec_push(cols, "value")
+        let vals = vec_new()
+        vec_push(vals, value)
+        return orm_update_by_id(orm_db_q(q), setting_table(), id, cols, vals)?
+    }
+    let mut d = orm_db_q(q)
+    if setting_backend_boila()? == 1 {
+        let c = setting_next_id(d)?
+        if orm_ok_c(c) == 0 {
+            return OrmEErr(OrmExecFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
+        }
+        let nid = orm_count_n(c) + 1
+        d = orm_db_c(c)
+        let cols = vec_new()
+        vec_push(cols, "id")
+        vec_push(cols, "key")
+        vec_push(cols, "value")
+        let vals = vec_new()
+        vec_push(vals, int_to_str(nid))
+        vec_push(vals, key)
+        vec_push(vals, value)
+        return orm_insert_strs(d, setting_table(), cols, vals)?
+    }
+    let cols = vec_new()
+    vec_push(cols, "key")
+    vec_push(cols, "value")
+    let vals = vec_new()
+    vec_push(vals, key)
+    vec_push(vals, value)
+    return orm_insert_strs(d, setting_table(), cols, vals)?
+}
+
+fn setting_all(db: OrmDb) -> OrmQuery !IO !Net {
+    return orm_query(db, "SELECT id, key, value FROM settings ORDER BY key")?
+}
+
+fn setting_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_str(o, "key", orm_cell_by(q, row, "key"))
+    o = jobj_str(o, "value", orm_cell_by(q, row, "value"))
+    return o
+}
+
+fn setting_list_json(q: OrmQuery) -> JObj {
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        arr = jarr_obj(arr, setting_to_json(q, i))
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", orm_nrows(q))
+    return o
+}
+
+fn setting_map_get(q: OrmQuery, key: str) -> str {
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        if orm_cell_by(q, i, "key") == key {
+            return orm_cell_by(q, i, "value")
+        }
+        i = i + 1
+    }
+    return ""
+}

@@ -1,0 +1,164 @@
+// models/doc_type.baga — видове данъчни документи по ППДДС (кодове за ДДС дневниците).
+// Проформа фактура НЕ е данъчен документ: не влиза в дневниците и не се осчетоводява.
+
+import "bagadecimal/src/decimal.baga"
+
+fn doc_type_is_proforma(t: str) -> i64 {
+    if t == "proforma" {
+        return 1
+    }
+    return 0
+}
+
+// Известията трябва да сочат към първоначална фактура.
+fn doc_type_requires_original(t: str) -> i64 {
+    if t == "02" || t == "03" || t == "12" || t == "13" || t == "23" {
+        return 1
+    }
+    return 0
+}
+
+fn doc_type_valid_out(t: str) -> i64 {
+    if t == "01" || t == "02" || t == "03" || t == "04" || t == "07" || t == "09" {
+        return 1
+    }
+    if t == "11" || t == "12" || t == "13" {
+        return 1
+    }
+    if t == "23" || t == "29" || t == "50" {
+        return 1
+    }
+    if t == "81" || t == "82" || t == "83" || t == "84" || t == "85" {
+        return 1
+    }
+    if t == "91" || t == "93" || t == "94" || t == "95" {
+        return 1
+    }
+    return 0
+}
+
+fn doc_type_valid_in(t: str) -> i64 {
+    if t == "01" || t == "02" || t == "03" || t == "05" || t == "07" || t == "09" {
+        return 1
+    }
+    if t == "11" || t == "12" || t == "13" {
+        return 1
+    }
+    if t == "23" {
+        return 1
+    }
+    if t == "91" || t == "92" || t == "93" || t == "94" {
+        return 1
+    }
+    return 0
+}
+
+// Валиден код според посоката; проформата е извън ППДДС и е валидна за двете посоки.
+fn doc_type_valid_for(direction: str, t: str) -> i64 {
+    if doc_type_is_proforma(t) == 1 {
+        return 1
+    }
+    if direction == "out" {
+        return doc_type_valid_out(t)
+    }
+    return doc_type_valid_in(t)
+}
+
+fn doc_type_title(t: str) -> str {
+    if t == "02" {
+        return "ДЕБИТНО ИЗВЕСТИЕ"
+    }
+    if t == "03" {
+        return "КРЕДИТНО ИЗВЕСТИЕ"
+    }
+    if t == "04" || t == "05" {
+        return "РЕГИСТЪР НА СТОКИ ПОД РЕЖИМ СКЛАДИРАНЕ ДО ПОИСКВАНЕ"
+    }
+    if t == "07" {
+        return "МИТНИЧЕСКА ДЕКЛАРАЦИЯ"
+    }
+    if t == "09" {
+        return "ПРОТОКОЛ"
+    }
+    if t == "11" {
+        return "ФАКТУРА - КАСОВА ОТЧЕТНОСТ"
+    }
+    if t == "12" {
+        return "ДЕБИТНО ИЗВЕСТИЕ - КАСОВА ОТЧЕТНОСТ"
+    }
+    if t == "13" {
+        return "КРЕДИТНО ИЗВЕСТИЕ - КАСОВА ОТЧЕТНОСТ"
+    }
+    if t == "23" {
+        return "КРЕДИТНО ИЗВЕСТИЕ ПО ЧЛ. 126Б, АЛ. 1 ОТ ЗДДС"
+    }
+    if t == "29" {
+        return "ПРОТОКОЛ ПО ЧЛ. 126Б, АЛ. 2 И 7 ОТ ЗДДС"
+    }
+    if t == "50" {
+        return "ПРОТОКОЛ ЗА ИЗИСКУЕМИЯ ДДС ЗА ГОРИВА С КОМПЕНСАЦИИ"
+    }
+    if t == "81" || t == "83" || t == "84" || t == "85" {
+        return "ОТЧЕТ ЗА ИЗВЪРШЕНИТЕ ПРОДАЖБИ"
+    }
+    if t == "82" {
+        return "ОТЧЕТ ЗА ПРОДАЖБИ ПРИ СПЕЦИАЛЕН РЕД НА ОБЛАГАНЕ"
+    }
+    if t == "91" || t == "92" || t == "93" || t == "94" {
+        return "ПРОТОКОЛ ЗА ДАНЪК ПО ГЛАВА ДВАНАДЕСЕТА ОТ ЗДДС"
+    }
+    if t == "95" {
+        return "ПРОТОКОЛ ЗА БЕЗВЪЗМЕЗДНО ПРЕДОСТАВЯНЕ НА ХРАНИТЕЛНИ СТОКИ"
+    }
+    if t == "proforma" {
+        return "ПРОФОРМА ФАКТУРА"
+    }
+    return "ФАКТУРА"
+}
+
+// Кредитно известие: същите кореспонденции, сумите в базата са с минус.
+fn doc_type_is_credit(t: str) -> i64 {
+    if t == "03" || t == "13" || t == "23" {
+        return 1
+    }
+    return 0
+}
+
+// Ако видът е кредитно и сумата още е плюс — записва се като минус.
+// Вече отрицателна не се обръща втори път. Статиите не се разменят Дт↔Кт.
+fn amount_for_doc(doc_type: str, amount: str) -> str {
+    if doc_type_is_credit(doc_type) == 0 {
+        return amount
+    }
+    let p = dec_parse(amount)
+    if p.ok == 0 {
+        return amount
+    }
+    if dec_is_zero(p.value) == 1 {
+        return amount
+    }
+    if dec_is_negative(p.value) == 1 {
+        return amount
+    }
+    return dec_to_string(dec_neg(p.value))
+}
+
+fn amount_for_doc_pick(use_patched: i64, patched: str, existing: str, amount: str) -> str {
+    if use_patched == 1 {
+        return amount_for_doc(patched, amount)
+    }
+    return amount_for_doc(existing, amount)
+}
+
+fn doc_type_prefix(t: str) -> str {
+    if t == "02" || t == "12" {
+        return "ДИ-"
+    }
+    if t == "03" || t == "13" || t == "23" {
+        return "КИ-"
+    }
+    if t == "proforma" {
+        return "ПФ-"
+    }
+    return ""
+}

@@ -1,0 +1,63 @@
+// actions/bank_parse.baga — диспечер на банкови извлечения по съдържание и
+// JSON сериализация на резултата. Форматите живеят в bank_parse_xml.baga,
+// bank_parse_mt940.baga и bank_parse_csv.baga; моделите и общите помощници —
+// в bank_parse_types.baga. Чисти функции (без IO).
+import "bank_parse_types.baga"
+import "bank_parse_xml.baga"
+import "bank_parse_mt940.baga"
+import "bank_parse_csv.baga"
+import "fmrbaga/jsonx.baga"
+// ─── Диспечер ───
+// Разпознава формата и връща парснат резултат. err != "" при непознат формат.
+fn bp_detect_and_parse(content: str) -> ParseResult {
+    let trimmed = str_trim(content)
+    if str_find(trimmed, "<STATEMENT>") >= 0 && str_find(trimmed, "<POST_DATE>") >= 0 {
+        return bp_parse_obb(trimmed)
+    }
+    if str_find(trimmed, "camt.053") >= 0 || str_find(trimmed, "BkToCstmrStmt") >= 0 {
+        return bp_parse_camt(trimmed)
+    }
+    if str_find(trimmed, "<CustomerReportAccountsTransactionsHistory") >= 0 || str_find(trimmed, "<MultipleAccountTransactionItemAPIOutputModel") >= 0 {
+        return bp_parse_postbank(trimmed)
+    }
+    if str_starts_with(trimmed, ":20:") || str_find(trimmed, ":60F:") >= 0 || str_find(trimmed, ":61:") >= 0 {
+        return bp_parse_mt940(trimmed)
+    }
+    if (str_find(trimmed, ";") >= 0 || str_find(trimmed, ",") >= 0) {
+        let lower = bp_lower(trimmed)
+        if str_find(lower, "iban") >= 0 || str_find(lower, "дата") >= 0 || str_find(lower, "date") >= 0 {
+            return bp_parse_csv(trimmed)
+        }
+    }
+    return parse_result_new("")
+}
+// ─── JSON сериализация ───
+fn bp_tx_to_json(tx: ParsedTx) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_str(o, "date", tx.date)
+    o = jobj_str(o, "amount", tx.amount)
+    o = jobj_str(o, "currency", tx.currency)
+    o = jobj_str(o, "description", tx.description)
+    o = jobj_str(o, "contra_name", tx.contra_name)
+    o = jobj_str(o, "contra_iban", tx.contra_iban)
+    o = jobj_str(o, "reference", tx.reference)
+    o = jobj_bool(o, "is_duplicate", tx.is_duplicate)
+    return o
+}
+fn bp_result_to_json(r: ParseResult) -> JObj {
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < vec_len(r.txs) {
+        arr = jarr_obj(arr, bp_tx_to_json(vec_get(r.txs, i)))
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "format_name", r.format_name)
+    o = jobj_str(o, "account_iban", r.account_iban)
+    o = jobj_str(o, "account_currency", r.account_currency)
+    o = jobj_arr(o, "transactions", arr)
+    o = jobj_i64(o, "total_count", r.total_count)
+    o = jobj_i64(o, "duplicate_count", r.duplicate_count)
+    o = jobj_i64(o, "new_count", r.new_count)
+    return o
+}

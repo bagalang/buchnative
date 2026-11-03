@@ -1,0 +1,164 @@
+// models/vat_exemption.baga — основания за неначисляване на ДДС.
+// EN 16931 / Peppol VATEX + ЗДДС (като secret/inv).
+// Ред: code|name_bg|name_en|legal_bg|legal_en|category|ubl_code|description
+// category = UNCL5305 (S/Z/E/K/G/O/AE); ubl_code = TaxExemptionReasonCode.
+
+import "fmrbaga/jsonx.baga"
+import "std/str/str.baga"
+
+fn vatex_push(rows: Vec<str>, line: str) -> Vec<str> {
+    vec_push(rows, line)
+    return rows
+}
+
+fn vatex_catalog_rows() -> Vec<str> {
+    let mut r = vec_new()
+    r = vatex_push(r, "VATEX-EU-SM|Освободена доставка - малко предприятие|Small business exemption|чл. 113 от ЗДДС|Art. 113 VAT Act|E|vatex-eu-e|Нерегистрирано по ЗДДС лице под прага")
+    r = vatex_push(r, "VATEX-EU-G|Износ на стоки|Export of goods|чл. 28 от ЗДДС|Art. 28 VAT Act|G|vatex-eu-g|Доставка на стоки извън територията на ЕС")
+    r = vatex_push(r, "VATEX-EU-IC|Вътреобщностна доставка на стоки|Intra-Community supply of goods|чл. 7, ал. 1 от ЗДДС|Art. 7(1) VAT Act|K|vatex-eu-ic|Доставка към регистриран по ДДС получател в друга държава-членка")
+    r = vatex_push(r, "VATEX-EU-O|Обратно начисляване на ДДС|Reverse charge|чл. 82, ал. 2-5 от ЗДДС|Art. 82(2-5) VAT Act|O|vatex-eu-o|Данъкът се дължи от получателя")
+    r = vatex_push(r, "VATEX-EU-AE|Специален режим на обратно начисляване|VAT Reverse Charge|чл. 163а от ЗДДС|Art. 163a VAT Act|AE|vatex-eu-ae|Обратно начисляване при инвестиционно злато и други")
+    r = vatex_push(r, "VATEX-EU-E-39|Освободена доставка - здравеопазване|Exempt - healthcare|чл. 39 от ЗДДС|Art. 39 VAT Act|E|vatex-eu-e|Здравни услуги и свързани стоки")
+    r = vatex_push(r, "VATEX-EU-E-40|Освободена доставка - социални услуги|Exempt - social services|чл. 40 от ЗДДС|Art. 40 VAT Act|E|vatex-eu-e|Социални услуги")
+    r = vatex_push(r, "VATEX-EU-E-41|Освободена доставка - образование|Exempt - education|чл. 41 от ЗДДС|Art. 41 VAT Act|E|vatex-eu-e|Образователни услуги")
+    r = vatex_push(r, "VATEX-EU-E-42|Освободена доставка - културни услуги|Exempt - cultural services|чл. 42 от ЗДДС|Art. 42 VAT Act|E|vatex-eu-e|Културни и спортни услуги")
+    r = vatex_push(r, "VATEX-EU-E-44|Освободена доставка - финансови услуги|Exempt - financial services|чл. 44 от ЗДДС|Art. 44 VAT Act|E|vatex-eu-e|Финансови услуги")
+    r = vatex_push(r, "VATEX-EU-E-45|Освободена доставка - застраховки|Exempt - insurance|чл. 45 от ЗДДС|Art. 45 VAT Act|E|vatex-eu-e|Застрахователни и презастрахователни услуги")
+    r = vatex_push(r, "VATEX-EU-E-45-1|Земя (нерегулирана)|Land (non-regulated)|чл. 45, ал. 1 от ЗДДС|Art. 45(1) VAT Act|E|vatex-eu-e|Прехвърляне на право на собственост върху земя")
+    r = vatex_push(r, "VATEX-EU-E-45-3|Сгради (които не са нови)|Buildings (not new)|чл. 45, ал. 3 от ЗДДС|Art. 45(3) VAT Act|E|vatex-eu-e|Доставка на сгради или части от тях, които не са нови")
+    r = vatex_push(r, "VATEX-EU-E-45-4|Отдаване под наем за жилищни нужди|Rental for residential purposes|чл. 45, ал. 4 от ЗДДС|Art. 45(4) VAT Act|E|vatex-eu-e|Наем на сграда за жилищни нужди на физическо лице")
+    r = vatex_push(r, "VATEX-EU-E-46|Освободена доставка - недвижими имоти|Exempt - immovable property|чл. 45-46 от ЗДДС|Art. 45-46 VAT Act|E|vatex-eu-e|Доставка на недвижим имот, наем")
+    r = vatex_push(r, "VATEX-EU-E-47|Освободена доставка - хазартни услуги|Exempt - gambling|чл. 47 от ЗДДС|Art. 47 VAT Act|E|vatex-eu-e|Хазартни услуги")
+    r = vatex_push(r, "VATEX-EU-Z-29|Нулева ставка - международен транспорт|Zero rate - international transport|чл. 29 от ЗДДС|Art. 29 VAT Act|Z|vatex-eu-z|Международен транспорт на пътници и стоки")
+    r = vatex_push(r, "VATEX-EU-Z-30|Нулева ставка - услуги за плавателни съдове|Zero rate - maritime services|чл. 30 от ЗДДС|Art. 30 VAT Act|Z|vatex-eu-z|Доставки за плавателни съдове")
+    r = vatex_push(r, "VATEX-EU-Z-31|Нулева ставка - услуги за въздухоплавателни средства|Zero rate - aircraft services|чл. 31 от ЗДДС|Art. 31 VAT Act|Z|vatex-eu-z|Доставки за въздухоплавателни средства")
+    r = vatex_push(r, "VATEX-EU-Z-32|Нулева ставка - транзитни стоки|Zero rate - transit goods|чл. 32 от ЗДДС|Art. 32 VAT Act|Z|vatex-eu-z|Доставки в режим транзит")
+    r = vatex_push(r, "VATEX-EU-Z-33|Нулева ставка - митнически режими|Zero rate - customs regimes|чл. 33 от ЗДДС|Art. 33 VAT Act|Z|vatex-eu-z|Доставки, свързани с митнически режими")
+    r = vatex_push(r, "VATEX-EU-Z-173|Нулева ставка - дипломатически мисии|Zero rate - diplomatic missions|чл. 173 от ЗДДС|Art. 173 VAT Act|Z|vatex-eu-z|Доставки за дипломатически и консулски представителства")
+    r = vatex_push(r, "VATEX-EU-S-21|Услуги към лица извън ЕС|Services to non-EU persons|чл. 21, ал. 2 от ЗДДС|Art. 21(2) VAT Act|O|vatex-eu-o|Място на изпълнение извън ЕС")
+    r = vatex_push(r, "VATEX-EU-S-22|Услуги, свързани с недвижим имот извън БГ|Services related to immovable property outside BG|чл. 21, ал. 4, т. 1 от ЗДДС|Art. 21(4)(1) VAT Act|O|vatex-eu-o|Недвижим имот извън България")
+    return r
+}
+
+fn vatex_ascii_lower(s: str) -> str {
+    let mut out = ""
+    let mut i: i64 = 0
+    while i < len(s) {
+        let c = char_at(s, i)
+        if c >= 65 && c <= 90 {
+            out = concat(out, chr(c + 32))
+        } else {
+            out = concat(out, substr(s, i, i + 1))
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn vatex_parse_line(line: str) -> JObj {
+    let p = str_split(line, "|")
+    let mut o = jobj_new()
+    let n = vec_len(p)
+    let mut code = ""
+    let mut name = ""
+    let mut name_en = ""
+    let mut legal = ""
+    let mut legal_en = ""
+    let mut category = ""
+    let mut ubl = ""
+    let mut desc = ""
+    if n > 0 { code = vec_get(p, 0) }
+    if n > 1 { name = vec_get(p, 1) }
+    if n > 2 { name_en = vec_get(p, 2) }
+    if n > 3 { legal = vec_get(p, 3) }
+    if n > 4 { legal_en = vec_get(p, 4) }
+    if n > 5 { category = vec_get(p, 5) }
+    if n > 6 { ubl = vec_get(p, 6) }
+    if n > 7 { desc = vec_get(p, 7) }
+    o = jobj_str(o, "code", code)
+    o = jobj_str(o, "name", name)
+    o = jobj_str(o, "name_en", name_en)
+    o = jobj_str(o, "legal_basis", legal)
+    o = jobj_str(o, "legal_basis_en", legal_en)
+    o = jobj_str(o, "ubl_category_code", category)
+    o = jobj_str(o, "ubl_exemption_code", ubl)
+    o = jobj_str(o, "description", desc)
+    return o
+}
+
+fn vatex_list_json(search: str) -> JObj {
+    let q = vatex_ascii_lower(str_trim(search))
+    let rows = vatex_catalog_rows()
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    let mut count: i64 = 0
+    while i < vec_len(rows) {
+        let line = vec_get(rows, i)
+        if q == "" || str_find(vatex_ascii_lower(line), q) >= 0 {
+            arr = jarr_obj(arr, vatex_parse_line(line))
+            count = count + 1
+        }
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", count)
+    return o
+}
+
+fn vatex_find_line(code: str) -> str {
+    if code == "" {
+        return ""
+    }
+    let rows = vatex_catalog_rows()
+    let prefix = concat(code, "|")
+    let mut i: i64 = 0
+    while i < vec_len(rows) {
+        let line = vec_get(rows, i)
+        if str_starts_with(line, prefix) {
+            return line
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn vatex_field(code: str, idx: i64) -> str {
+    let line = vatex_find_line(code)
+    if line == "" {
+        return ""
+    }
+    let p = str_split(line, "|")
+    if idx < 0 || idx >= vec_len(p) {
+        return ""
+    }
+    return vec_get(p, idx)
+}
+
+fn vatex_category(code: str) -> str {
+    let c = vatex_field(code, 5)
+    if c == "" {
+        return "Z"
+    }
+    return c
+}
+
+fn vatex_ubl_code(code: str) -> str {
+    return vatex_field(code, 6)
+}
+
+fn vatex_legal_en(code: str) -> str {
+    let e = vatex_field(code, 4)
+    if e != "" {
+        return e
+    }
+    return vatex_field(code, 3)
+}
+
+fn vatex_name(code: str) -> str {
+    let n = vatex_field(code, 1)
+    if n != "" {
+        return n
+    }
+    return code
+}

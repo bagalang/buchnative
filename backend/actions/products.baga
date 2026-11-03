@@ -1,0 +1,350 @@
+// actions/products.baga — стоки/услуги: CRUD + каталог мерни единици.
+
+import "../models/product.baga"
+import "acl.baga"
+import "active_company.baga"
+import "../models/unit.baga"
+import "../models/inventory.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/json/json.baga"
+import "std/str/str.baga"
+import "bagadecimal/src/decimal.baga"
+
+fn jflag(d: JsonDoc, obj: i64, key: str, default_n: i64) -> JField {
+    let n = json_get(d, obj, key)
+    if n < 0 {
+        return JField { ok: 1, err: "", err_type: "", val: int_to_str(default_n), num: default_n, present: 0 }
+    }
+    let t = json_tag(d, n)
+    if t == 0 {
+        return JField { ok: 1, err: "", err_type: "", val: int_to_str(default_n), num: default_n, present: 1 }
+    }
+    if t == 1 {
+        return JField { ok: 1, err: "", err_type: "", val: "0", num: 0, present: 1 }
+    }
+    if t == 2 {
+        return JField { ok: 1, err: "", err_type: "", val: "1", num: 1, present: 1 }
+    }
+    if t == 3 {
+        let v = parse_int(json_str(d, n))
+        return JField { ok: 1, err: "", err_type: "", val: json_str(d, n), num: v, present: 1 }
+    }
+    return jfield_type(key, "boolean")
+}
+
+fn jopt_id(d: JsonDoc, obj: i64, key: str) -> JField {
+    let n = json_get(d, obj, key)
+    if n < 0 {
+        return JField { ok: 1, err: "", err_type: "", val: "0", num: 0, present: 0 }
+    }
+    let t = json_tag(d, n)
+    if t == 0 {
+        return JField { ok: 1, err: "", err_type: "", val: "0", num: 0, present: 1 }
+    }
+    if t == 3 {
+        let v = parse_int(json_str(d, n))
+        return JField { ok: 1, err: "", err_type: "", val: json_str(d, n), num: v, present: 1 }
+    }
+    if t == 4 {
+        let s = json_str(d, n)
+        if s == "" {
+            return JField { ok: 1, err: "", err_type: "", val: "0", num: 0, present: 1 }
+        }
+        return JField { ok: 1, err: "", err_type: "", val: s, num: parse_int(s), present: 1 }
+    }
+    return jfield_type(key, "integer")
+}
+
+fn stock_value_of(qty: str, cost: str) -> str {
+    let q = dec_parse(qty)
+    let c = dec_parse(cost)
+    if q.ok == 0 || c.ok == 0 {
+        return "0"
+    }
+    let m = dec_mul(q.value, c.value)
+    if m.ok == 0 {
+        return "0"
+    }
+    let r = dec_round_dp(m.value, 2)
+    if r.ok == 0 {
+        return dec_to_string(m.value)
+    }
+    return dec_to_string(r.value)
+}
+
+fn act_units_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:read")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let search = fmr_query(ctx, "search")
+    return act_ok(db, unit_list_json(search))
+}
+
+fn act_products_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:read")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let page = act_page(ctx, 50, 200)
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    let q = product_all(ac.db)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let mut o = product_list_json_co(q, ac.id)
+    o = jobj_i64(o, "limit", page.limit)
+    o = jobj_i64(o, "offset", page.offset)
+    return act_ok(orm_db_q(q), o)
+}
+
+fn act_products_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:write")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let name = jreq_str(b.doc, b.root, "name")
+    if name.ok == 0 {
+        return act_422_field(db, "name", name)
+    }
+    let code = jopt_str(b.doc, b.root, "code", "")
+    let description = jopt_str(b.doc, b.root, "description", "")
+    let unit = jopt_str(b.doc, b.root, "unit", "C62")
+    let price = jopt_str(b.doc, b.root, "price", "0")
+    let cost_price = jopt_str(b.doc, b.root, "cost_price", "0")
+    let vat_rate = jopt_str(b.doc, b.root, "vat_rate", "20")
+    let sv = jflag(b.doc, b.root, "is_service", 0)
+    if sv.ok == 0 {
+        return act_422_field(db, "is_service", sv)
+    }
+    let invf = jflag(b.doc, b.root, "is_inventory", 0)
+    if invf.ok == 0 {
+        return act_422_field(db, "is_inventory", invf)
+    }
+    let actf = jflag(b.doc, b.root, "is_active", 1)
+    if actf.ok == 0 {
+        return act_422_field(db, "is_active", actf)
+    }
+    let iacc = jopt_id(b.doc, b.root, "inventory_account_id")
+    if iacc.ok == 0 {
+        return act_422_field(db, "inventory_account_id", iacc)
+    }
+    let racc = jopt_id(b.doc, b.root, "revenue_account_id")
+    if racc.ok == 0 {
+        return act_422_field(db, "revenue_account_id", racc)
+    }
+    let stock_quantity = jopt_str(b.doc, b.root, "stock_quantity", "0")
+    let mut is_service = sv.num
+    let mut is_inventory = invf.num
+    if is_service == 1 {
+        is_inventory = 0
+    }
+    let mut stock_value = stock_value_of(stock_quantity.val, cost_price.val)
+    if is_inventory == 0 {
+        stock_value = "0"
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let acp = active_company_id(db, auth.ctx.user_sub)?
+    let ins = product_create(acp.db, name.val, code.val, description.val, unit.val, price.val, cost_price.val, vat_rate.val, is_service, is_inventory, iacc.num, racc.num, stock_quantity.val, stock_value, actf.num, acp.id)?
+    if orm_ok(ins) == 0 {
+        return act_err(orm_db_exec(ins), 409, orm_err_exec(ins))
+    }
+    let q = product_all(orm_db_exec(ins))?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_err(orm_db_q(q), 500, "insert ok but row missing")
+    }
+    let new_id = orm_cell_by_i64(q, orm_nrows(q) - 1, "id")
+    let mut db2 = orm_db_q(q)
+    if is_inventory == 1 {
+        let qp = dec_parse(stock_quantity.val)
+        if qp.ok == 1 && dec_cmp(qp.value, dec_zero()) > 0 {
+            let lot = lot_insert(db2, new_id, 0, 0, "", stock_quantity.val, stock_quantity.val, cost_price.val, 0)?
+            if orm_ok(lot) == 0 {
+                return act_err(orm_db_exec(lot), 500, orm_err_exec(lot))
+            }
+            db2 = orm_db_exec(lot)
+        }
+    }
+    let q2 = product_find(db2, new_id)?
+    if orm_ok_q(q2) == 0 || orm_nrows(q2) < 1 {
+        return act_err(orm_db_q(q2), 500, "insert ok but row missing")
+    }
+    return act_created(orm_db_q(q2), product_to_json(q2, 0))
+}
+
+fn act_products_show(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:read")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let q = product_find(db, id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "Product not found")
+    }
+    return act_ok(orm_db_q(q), product_to_json(q, 0))
+}
+
+fn act_products_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:write")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let cols = vec_new()
+    let vals = vec_new()
+    let name = jreq_str(b.doc, b.root, "name")
+    if name.present == 1 {
+        if name.ok == 0 { return act_422_field(db, "name", name) }
+        vec_push(cols, "name")
+        vec_push(vals, name.val)
+    }
+    let code = jreq_str(b.doc, b.root, "code")
+    if code.present == 1 {
+        if code.ok == 0 { return act_422_field(db, "code", code) }
+        vec_push(cols, "code")
+        vec_push(vals, code.val)
+    }
+    let description = jreq_str(b.doc, b.root, "description")
+    if description.present == 1 {
+        if description.ok == 0 { return act_422_field(db, "description", description) }
+        vec_push(cols, "description")
+        vec_push(vals, description.val)
+    }
+    let unit = jreq_str(b.doc, b.root, "unit")
+    if unit.present == 1 {
+        if unit.ok == 0 { return act_422_field(db, "unit", unit) }
+        vec_push(cols, "unit")
+        vec_push(vals, unit.val)
+    }
+    let price = jreq_str(b.doc, b.root, "price")
+    if price.present == 1 {
+        if price.ok == 0 { return act_422_field(db, "price", price) }
+        vec_push(cols, "price")
+        vec_push(vals, price.val)
+    }
+    let cost_price = jreq_str(b.doc, b.root, "cost_price")
+    if cost_price.present == 1 {
+        if cost_price.ok == 0 { return act_422_field(db, "cost_price", cost_price) }
+        vec_push(cols, "cost_price")
+        vec_push(vals, cost_price.val)
+    }
+    let vat_rate = jreq_str(b.doc, b.root, "vat_rate")
+    if vat_rate.present == 1 {
+        if vat_rate.ok == 0 { return act_422_field(db, "vat_rate", vat_rate) }
+        vec_push(cols, "vat_rate")
+        vec_push(vals, vat_rate.val)
+    }
+    let sv = jflag(b.doc, b.root, "is_service", 0)
+    if sv.present == 1 {
+        if sv.ok == 0 { return act_422_field(db, "is_service", sv) }
+        vec_push(cols, "is_service")
+        vec_push(vals, int_to_str(sv.num))
+    }
+    let invf = jflag(b.doc, b.root, "is_inventory", 0)
+    if invf.present == 1 {
+        if invf.ok == 0 { return act_422_field(db, "is_inventory", invf) }
+        let mut is_inv = invf.num
+        if sv.present == 1 && sv.num == 1 {
+            is_inv = 0
+        }
+        vec_push(cols, "is_inventory")
+        vec_push(vals, int_to_str(is_inv))
+    }
+    let actf = jflag(b.doc, b.root, "is_active", 1)
+    if actf.present == 1 {
+        if actf.ok == 0 { return act_422_field(db, "is_active", actf) }
+        vec_push(cols, "is_active")
+        vec_push(vals, int_to_str(actf.num))
+    }
+    let iacc = jopt_id(b.doc, b.root, "inventory_account_id")
+    if iacc.present == 1 {
+        if iacc.ok == 0 { return act_422_field(db, "inventory_account_id", iacc) }
+        vec_push(cols, "inventory_account_id")
+        vec_push(vals, int_to_str(iacc.num))
+    }
+    let racc = jopt_id(b.doc, b.root, "revenue_account_id")
+    if racc.present == 1 {
+        if racc.ok == 0 { return act_422_field(db, "revenue_account_id", racc) }
+        vec_push(cols, "revenue_account_id")
+        vec_push(vals, int_to_str(racc.num))
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    if vec_len(cols) == 0 {
+        let q0 = product_find(db, id)?
+        if orm_ok_q(q0) == 0 {
+            return act_err(orm_db_q(q0), 500, orm_err_q(q0))
+        }
+        if orm_nrows(q0) < 1 {
+            return act_404(orm_db_q(q0), "Product not found")
+        }
+        return act_ok(orm_db_q(q0), product_to_json(q0, 0))
+    }
+    let upd = orm_update_by_id(db, product_table(), id, cols, vals)?
+    if orm_ok(upd) == 0 {
+        return act_err(orm_db_exec(upd), 500, orm_err_exec(upd))
+    }
+    let q = product_find(orm_db_exec(upd), id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "Product not found")
+    }
+    return act_ok(orm_db_q(q), product_to_json(q, 0))
+}
+
+fn act_products_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:write")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let del = product_delete(db, id)?
+    if orm_ok(del) == 0 {
+        return act_err(orm_db_exec(del), 500, orm_err_exec(del))
+    }
+    return act_no_content(orm_db_exec(del))
+}

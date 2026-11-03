@@ -1,0 +1,133 @@
+// actions/vat_files.baga — DEKLAR.TXT / POKUPKI.TXT / PRODAGBI.TXT + ZIP за НАП.
+// Фиксирана ширина, CRLF, Windows-1251. Дължини както в vat-2026 образеца.
+
+import "vat_fmt.baga"
+import "vat_line.baga"
+import "zipbaga/zip.baga"
+import "bagadecimal/src/decimal.baga"
+import "std/str/str.baga"
+
+fn vat_head_vat(vat: str, period: str, branch: str) -> bytes {
+    let mut b = nap_sym(vat_with_bg(vat), 15)
+    b = nap_cat(b, nap_sym(period, 6))
+    let mut br = str_trim(branch)
+    if br == "" {
+        br = "0"
+    }
+    b = nap_cat(b, nap_num_str(br, 4))
+    return b
+}
+
+fn vat_pok_line(vat: str, period: str, branch: str, row: i64, ln: VatLine) -> bytes {
+    let mut b = vat_head_vat(vat, period, branch)
+    b = nap_cat(b, nap_i64(row, 15))
+    b = nap_cat(b, nap_sym(ln.doc_type, 2))
+    b = nap_cat(b, nap_sym(ln.doc_no, 20))
+    b = nap_cat(b, nap_sym(vat_nap_date(ln.doc_date), 10))
+    b = nap_cat(b, nap_sym(ln.cp_vat, 15))
+    b = nap_cat(b, nap_sym(ln.cp_name, 50))
+    b = nap_cat(b, nap_sym(ln.goods, 30))
+    b = nap_cat(b, nap_amt(ln.p_no))
+    b = nap_cat(b, nap_amt(ln.p_fb))
+    b = nap_cat(b, nap_amt(ln.p_fv))
+    b = nap_cat(b, nap_amt(ln.p_pb))
+    b = nap_cat(b, nap_amt(ln.p_pv))
+    b = nap_cat(b, nap_amt(ln.p_adj))
+    b = nap_cat(b, nap_amt(ln.p_vop))
+    b = nap_cat(b, nap_sym(ln.delivery, 2))
+    return nap_cat(b, nap_crlf())
+}
+
+fn vat_pro_line(vat: str, period: str, branch: str, row: i64, ln: VatLine) -> bytes {
+    let mut b = vat_head_vat(vat, period, branch)
+    b = nap_cat(b, nap_i64(row, 15))
+    b = nap_cat(b, nap_sym(ln.doc_type, 2))
+    b = nap_cat(b, nap_sym(ln.doc_no, 20))
+    b = nap_cat(b, nap_sym(vat_nap_date(ln.doc_date), 10))
+    b = nap_cat(b, nap_sym(ln.cp_vat, 15))
+    b = nap_cat(b, nap_sym(ln.cp_name, 50))
+    b = nap_cat(b, nap_sym(ln.goods, 30))
+    b = nap_cat(b, nap_amt(ln.s_tb))
+    b = nap_cat(b, nap_amt(ln.s_tv))
+    b = nap_cat(b, nap_amt(ln.s_b20))
+    b = nap_cat(b, nap_amt(ln.s_v20))
+    b = nap_cat(b, nap_amt(ln.s_vopb))
+    b = nap_cat(b, nap_amt(ln.s_82))
+    b = nap_cat(b, nap_amt(ln.s_vopv))
+    b = nap_cat(b, nap_amt(ln.s_pers))
+    b = nap_cat(b, nap_amt(ln.s_b9))
+    b = nap_cat(b, nap_amt(ln.s_v9))
+    b = nap_cat(b, nap_amt(ln.s_ch3))
+    b = nap_cat(b, nap_amt(ln.s_vod))
+    b = nap_cat(b, nap_amt(ln.s_art))
+    b = nap_cat(b, nap_amt(ln.s_svc))
+    b = nap_cat(b, nap_amt(ln.s_69))
+    b = nap_cat(b, nap_amt(ln.s_ex))
+    b = nap_cat(b, nap_amt(ln.s_tri))
+    b = nap_cat(b, nap_sym(ln.delivery, 2))
+    return nap_cat(b, nap_crlf())
+}
+
+fn vat_submitter(egn: str, name: str) -> str {
+    let e = str_trim(egn)
+    let n = str_trim(name)
+    if e != "" && n != "" {
+        return concat(concat(e, "/"), n)
+    }
+    if n != "" {
+        return n
+    }
+    return e
+}
+
+fn vat_deklar(vat: str, name: str, period: str, submitter: str, c: VatCells) -> bytes {
+    let mut b = nap_sym(vat_with_bg(vat), 15)
+    b = nap_cat(b, nap_sym(name, 50))
+    b = nap_cat(b, nap_sym(period, 6))
+    b = nap_cat(b, nap_sym(submitter, 50))
+    b = nap_cat(b, nap_i64(c.sales_n, 15))
+    b = nap_cat(b, nap_i64(c.purch_n, 15))
+    b = nap_cat(b, nap_amt(c.s01))
+    b = nap_cat(b, nap_amt(c.s20))
+    b = nap_cat(b, nap_amt(c.s11))
+    b = nap_cat(b, nap_amt(c.s21))
+    b = nap_cat(b, nap_amt(c.s12))
+    b = nap_cat(b, nap_amt(c.s22))
+    b = nap_cat(b, nap_amt(c.s23))
+    b = nap_cat(b, nap_amt(c.s13))
+    b = nap_cat(b, nap_amt(c.s24))
+    b = nap_cat(b, nap_amt(c.s14))
+    b = nap_cat(b, nap_amt(c.s15))
+    b = nap_cat(b, nap_amt(c.s16))
+    b = nap_cat(b, nap_amt(c.s17))
+    b = nap_cat(b, nap_amt(c.s18))
+    b = nap_cat(b, nap_amt(c.s19))
+    b = nap_cat(b, nap_amt(c.p30))
+    b = nap_cat(b, nap_amt(c.p31))
+    b = nap_cat(b, nap_amt(c.p41))
+    b = nap_cat(b, nap_amt(c.p32))
+    b = nap_cat(b, nap_amt(c.p42))
+    b = nap_cat(b, nap_amt(c.p43))
+    b = nap_cat(b, nap_sym("0.00", 4))
+    b = nap_cat(b, nap_amt(c.r40))
+    b = nap_cat(b, nap_amt(c.r50))
+    b = nap_cat(b, nap_amt(c.r60))
+    b = nap_cat(b, nap_amt(vat_z()))
+    b = nap_cat(b, nap_amt(vat_z()))
+    b = nap_cat(b, nap_amt(vat_z()))
+    b = nap_cat(b, nap_amt(vat_z()))
+    b = nap_cat(b, nap_amt(vat_z()))
+    return nap_cat(b, nap_crlf())
+}
+
+fn vat_zip3(deklar: bytes, pok: bytes, pro: bytes) -> bytes {
+    let names = vec_new()
+    vec_push(names, "DEKLAR.TXT")
+    vec_push(names, "POKUPKI.TXT")
+    vec_push(names, "PRODAGBI.TXT")
+    let parts = vec_new()
+    vec_push(parts, deklar)
+    vec_push(parts, pok)
+    vec_push(parts, pro)
+    return zip_write_store(names, parts)
+}
