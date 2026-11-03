@@ -122,4 +122,4 @@ if [ "${#up[@]}" -gt 0 ]; then
   exit 1
 fi
 
-echo "    спряно (6575 / 8080 / 3000 / 5050 са свободни, ако не са презаписани с env)"
+echo "    спряно ($ROCKS_PORT / $PORT / $FRONTEND_PORT / $SIDECAR_PORT са свободни, ако не са презаписани с env)"
