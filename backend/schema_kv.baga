@@ -1,0 +1,96 @@
+// schema_kv.baga — версионирани миграции върху rocksbaga (KV).
+//
+// Защо съществува: счетоводната програма се мени със закона. Ново задължително
+// поле, сменена ДДС ставка, нова версия на SAF-T — тези промени често искат
+// СЪЩЕСТВУВАЩИТЕ редове да се преизчислят или допълнят. В bagabuch това бяха
+// SQL миграциите (schema_pg_* / schema_boila_*). В KV няма DDL, затова тук е
+// обхождане на таблицата с един MSET на ред.
+//
+// Какво НЕ е миграция: добавяне на нова колона. Редът е JSON — новият ключ се
+// появява при следващия запис, а старите редове се четат като "" (нула).
+// Миграция е само когато старите редове трябва да получат стойност, различна
+// от нулата, или да бъдат преоформени.
+//
+// Как се добавя (пример за законова промяна):
+//   1. напиши transform: fn(db, table, cols, vals, nulls, id) -> i64 !Net !IO !Time
+//      — променя cols/vals/nulls на място и връща 1, ако е променил реда;
+//   2. регистрирай го с kv_migrations_add(reg, "таблица", ВЕРСИЯ, "описание", fn);
+//   3. версията се пази в kv:mig:<таблица> — миграцията се пуска веднъж.
+//
+// Версията е на таблица, не глобална: една таблица може да се промени
+// независимо от другите, а редът на таблиците не е важен.
+
+import "ormbaga/orm.baga"
+import "models/kvtime.baga"
+import "std/str/str.baga"
+
+// ── примери / шаблони ─────────────────────────────────────────────────────
+
+// Попълва created_at на редове, създадени преди колоната да съществува.
+// Полезен при първо включване на KV backend-а към вече съществуваща база.
+fn kv_mig_company_created_at(db: OrmDb, table: str, cols: Vec<str>, vals: Vec<str>, nulls: Vec<i64>, id: str) -> i64 !Net !IO !Time {
+    let mut i: i64 = 0
+    let mut hit: i64 = 0 - 1
+    while i < vec_len(cols) {
+        if vec_get(cols, i) == "created_at" {
+            hit = i
+        }
+        i = i + 1
+    }
+    if hit < 0 {
+        vec_push(cols, "created_at")
+        vec_push(vals, kv_now_iso()?)
+        vec_push(nulls, 0)
+        return 1
+    }
+    if vec_get(nulls, hit) == 1 || vec_get(vals, hit) == "" {
+        vec_set(vals, hit, kv_now_iso()?)
+        vec_set(nulls, hit, 0)
+        return 1
+    }
+    return 0
+}
+
+// SAF-T: software_id/software_company_name/software_version са задължителни в
+// износа. Стари редове може да са без тях.
+fn kv_mig_company_software(db: OrmDb, table: str, cols: Vec<str>, vals: Vec<str>, nulls: Vec<i64>, id: str) -> i64 !Net !IO !Time {
+    let mut changed: i64 = 0
+    changed = kv_mig_set_default(cols, vals, nulls, "software_company_name", "buchnative")
+    changed = kv_mig_set_default(cols, vals, nulls, "software_id", "BUCHNATIVE")
+    changed = kv_mig_set_default(cols, vals, nulls, "software_version", "1.0")
+    return changed
+}
+
+// Ако колоната липсва или е NULL/празна — слага default. Връща 1 при промяна.
+fn kv_mig_set_default(cols: Vec<str>, vals: Vec<str>, nulls: Vec<i64>, name: str, def: str) -> i64 {
+    let mut i: i64 = 0
+    while i < vec_len(cols) {
+        if vec_get(cols, i) == name {
+            if vec_get(nulls, i) == 1 || vec_get(vals, i) == "" {
+                vec_set(vals, i, def)
+                vec_set(nulls, i, 0)
+                return 1
+            }
+            return 0
+        }
+        i = i + 1
+    }
+    vec_push(cols, name)
+    vec_push(vals, def)
+    vec_push(nulls, 0)
+    return 1
+}
+
+// ── регистър ──────────────────────────────────────────────────────────────
+
+// Празен списък е нормалното състояние на ново приложение: схемата се движи
+// с кода, а миграция се добавя само при промяна, която иска преизчисление.
+fn buchnative_kv_migrations() -> KvMigrations {
+    let mut m = kv_migrations_new()
+    return m
+}
+
+// Зарежда версиите и пуска само новите. Връща броя приложени.
+fn buchnative_kv_migrate(db: OrmDb) -> i64 !Net !IO !Time {
+    return kv_migrate_run(db, buchnative_kv_migrations())?
+}

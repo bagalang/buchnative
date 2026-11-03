@@ -3,6 +3,7 @@
 
 import "routes.baga"
 import "schema.baga"
+import "schema_kv.baga"
 import "fmrbaga/app.baga"
 import "ormbaga/orm.baga"
 import "ormbaga/migrate.baga"
@@ -10,7 +11,7 @@ import "drockb/drockb.baga"
 import "std/str/str.baga"
 import "std/os/os.baga"
 
-fn boot_migrate() -> i64 !Net !IO !Random {
+fn boot_migrate() -> i64 !Net !IO !Random !Time {
     let app = fmr_build_app()?
     let db = fmr_open_db(app)?
     if orm_ok_db(db) == 0 {
@@ -27,7 +28,15 @@ fn boot_migrate() -> i64 !Net !IO !Random {
             orm_close(db)?
             return 1
         }
-        print("migrate: ORM_BACKEND=drock — KV backend, без SQL миграции")
+        // KV е безсхематичен, но законовите промени искат преизчисляване на
+        // стари редове — това е buchnative_kv_migrate (виж schema_kv.baga).
+        let n = buchnative_kv_migrate(db)?
+        if n < 0 {
+            print("migrate: KV миграцията се провали")
+            orm_close(db)?
+            return 1
+        }
+        print(concat("migrate: ORM_BACKEND=drock — KV backend, приложени миграции ", int_to_str(n)))
         orm_close(db)?
         return 0
     }
