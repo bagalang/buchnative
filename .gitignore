@@ -24,6 +24,11 @@ build/
 __pycache__/
 *.pyc
 
+# rocksbaga LSM файлове (LSMPATH) и локални пидове
+*.wal
+*.sst
+db/
+
 # logs / misc
 *.log
 .DS_Store
