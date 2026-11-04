@@ -76,8 +76,9 @@ services:
       - ../scripts/py:/app:ro
     environment:
       BUCHNATIVE_SIDECAR_PORT: "5050"
-      # dump.py още говори PG wire (виж docs/conventions.md — известна дупка);
-      # env-ът вече е rocksbaga, така че скриптът е следващата стъпка.
+      # ORM_BACKEND избира dump-а: drock/rocks → kvdump.py (RESP2 SCAN),
+      # иначе dump.py (PG wire, boilaDB).
+      ORM_BACKEND: drock
       LSMPATH: /data
       DROCK_HOST: "127.0.0.1"
       DROCK_PORT: "16579"
