@@ -131,3 +131,52 @@ fn vat_zip3(deklar: bytes, pok: bytes, pro: bytes) -> bytes {
     vec_push(parts, pro)
     return zip_write_store(names, parts)
 }
+// ── VIES.TXT ──────────────────────────────────────────────────────────────
+// Декларация за внутриобщностни сделки: VHR + VDR + VTR + TTR + VIR редове.
+// Фиксирана ширина, Windows-1251, CRLF — както в vat-2026 образеца.
+// k3 = стоки в обла сна вредност, k4 = тристрани сделки, k5 = услуги.
+
+fn vat_vies_txt(vat: str, name: str, addr: str, decl_egn: str, decl_name: str, city: str, post: str, street: str, quality: str, period: str, vins: Vec<str>, k3: Vec<i64>, k4: Vec<i64>, k5: Vec<i64>) -> bytes {
+    let mut b = nap_sym("VHR", 3)
+    b = nap_cat(b, nap_sym(period, 7))
+    b = nap_cat(b, nap_num_str(int_to_str(vec_len(vins)), 5))
+    b = nap_cat(b, nap_crlf())
+    b = nap_cat(b, nap_sym("VDR", 3))
+    b = nap_cat(b, nap_sym(decl_egn, 15))
+    b = nap_cat(b, nap_sym(decl_name, 150))
+    b = nap_cat(b, nap_sym(city, 50))
+    b = nap_cat(b, nap_sym(post, 4))
+    b = nap_cat(b, nap_sym(street, 150))
+    b = nap_cat(b, nap_sym(quality, 1))
+    b = nap_cat(b, nap_crlf())
+    b = nap_cat(b, nap_sym("VTR", 3))
+    b = nap_cat(b, nap_sym(vat_with_bg(vat), 15))
+    b = nap_cat(b, nap_sym(name, 150))
+    b = nap_cat(b, nap_sym(addr, 200))
+    b = nap_cat(b, nap_crlf())
+    let mut total: i64 = 0
+    let mut vod: i64 = 0
+    let mut i: i64 = 0
+    while i < vec_len(vins) {
+        total = total + vec_get(k3, i) + vec_get(k4, i) + vec_get(k5, i)
+        vod = vod + vec_get(k3, i)
+        i = i + 1
+    }
+    b = nap_cat(b, nap_sym("TTR", 3))
+    b = nap_cat(b, nap_num_str(nap_money_cents(total), 12))
+    b = nap_cat(b, nap_num_str(nap_money_cents(vod), 12))
+    b = nap_cat(b, nap_crlf())
+    i = 0
+    while i < vec_len(vins) {
+        b = nap_cat(b, nap_sym("VIR", 3))
+        b = nap_cat(b, nap_num_str(int_to_str(i + 1), 5))
+        b = nap_cat(b, nap_sym(vec_get(vins, i), 15))
+        b = nap_cat(b, nap_num_str(nap_money_cents(vec_get(k3, i)), 12))
+        b = nap_cat(b, nap_num_str(nap_money_cents(vec_get(k4, i)), 12))
+        b = nap_cat(b, nap_num_str(nap_money_cents(vec_get(k5, i)), 12))
+        b = nap_cat(b, nap_sym("", 7))
+        b = nap_cat(b, nap_crlf())
+        i = i + 1
+    }
+    return b
+}

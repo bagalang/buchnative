@@ -35,6 +35,13 @@ interface VatRow {
   vat_amount: string;
 }
 
+interface VatParty {
+  vat_number: string;
+  k3: string;
+  k4: string;
+  k5: string;
+}
+
 interface VatPack {
   period: string;
   period_nap: string;
@@ -48,6 +55,8 @@ interface VatPack {
   cells: Record<string, string>;
   due: string;
   refund: string;
+  vies_parties: VatParty[];
+  vies_count: number;
 }
 
 function prevPeriod(): { year: string; month: string } {
@@ -61,11 +70,6 @@ function money(raw: string | undefined): string {
   const n = Number(String(raw ?? "").replace(",", "."));
   if (!Number.isFinite(n)) return raw || "0,00";
   return n.toLocaleString("bg-BG", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-function isZero(raw: string | undefined): boolean {
-  const n = Number(String(raw ?? "").replace(",", "."));
-  return !Number.isFinite(n) || n === 0;
 }
 
 const SECTION_A: string[] = [
@@ -155,7 +159,6 @@ function VatInner() {
     }
   };
 
-  const viesRows = (data?.sales ?? []).filter((r) => !isZero(r.base_vod));
   const dueN = Number(data?.due ?? "0");
   const refundN = Number(data?.refund ?? "0");
 
@@ -209,6 +212,9 @@ function VatInner() {
               </button>
               <button className="btn" onClick={() => void download("prodagbi", "PRODAGBI.TXT")}>
                 {t("vat.download_prodagbi")}
+              </button>
+              <button className="btn" onClick={() => void download("vies", `VIES_${data.period_nap}.TXT`)}>
+                {t("vat.download_vies")}
               </button>
             </>
           )}
@@ -427,34 +433,35 @@ function VatInner() {
             <div className="card content" style={{ marginBottom: 18 }}>
               <h3 style={{ margin: "0 0 10px" }}>{t("vat.tab.vies")}</h3>
               <p className="muted">{t("vat.vies_hint")}</p>
-              {viesRows.length === 0 ? (
+              {(data.vies_parties ?? []).length === 0 ? (
                 <div className="muted">{t("vat.vies_empty")}</div>
               ) : (
                 <div className="table-wrap">
                   <table className="table">
                     <thead>
                       <tr>
-                        <th>{t("vat.document")}</th>
-                        <th>{t("vat.date")}</th>
-                        <th>{t("vat.vat_number")}</th>
-                        <th>{t("vat.counterpart")}</th>
-                        <th className="num">{t("vat.col_vod")}</th>
+                        <th>{t("vat.vies_vat_number")}</th>
+                        <th className="num">{t("vat.vies_k3")}</th>
+                        <th className="num">{t("vat.vies_k4")}</th>
+                        <th className="num">{t("vat.vies_k5")}</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {viesRows.map((r) => (
-                        <tr key={r.id}>
-                          <td>{r.document_number}</td>
-                          <td>{formatBgDate(r.document_date)}</td>
-                          <td>{r.counterpart_vat_number}</td>
-                          <td>{r.counterpart_name}</td>
-                          <td className="num">{money(r.base_vod)}</td>
+                      {(data.vies_parties ?? []).map((p) => (
+                        <tr key={p.vat_number}>
+                          <td>{p.vat_number}</td>
+                          <td className="num">{money(p.k3)}</td>
+                          <td className="num">{money(p.k4)}</td>
+                          <td className="num">{money(p.k5)}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
               )}
+              <p className="muted" style={{ marginTop: 10 }}>
+                {t("vat.vies_file_hint")}
+              </p>
             </div>
           )}
         </>

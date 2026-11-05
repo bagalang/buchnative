@@ -35,6 +35,9 @@ struct VatPack {
     pok: bytes
     pro: bytes
     dek: bytes
+    vies: bytes
+    vies_parties: JArr
+    vies_count: i64
 }
 
 fn vat_pack_err(db: OrmDb, err: str) -> VatPack {
@@ -42,7 +45,8 @@ fn vat_pack_err(db: OrmDb, err: str) -> VatPack {
         ok: 0, err: err, db: db, period: "", period_fin: "",
         company_name: "", company_vat: "", submitter: "", branch: "",
         purchases: jarr_new(), sales: jarr_new(), cells: vat_cells_empty(),
-        pok: bytes_new(0), pro: bytes_new(0), dek: bytes_new(0)
+        pok: bytes_new(0), pro: bytes_new(0), dek: bytes_new(0),
+        vies: bytes_new(0), vies_parties: jarr_new(), vies_count: 0
     }
 }
 
@@ -75,6 +79,47 @@ fn vat_company_submitter(cq: OrmQuery) -> str {
     return vat_submitter(orm_cell_by(cq, 0, "manager_egn"), orm_cell_by(cq, 0, "manager_name"))
 }
 
+// Decimal → стотинки (NUMERIC(18,2) е точно с 2 знака).
+fn vat_dec_cents(d: Decimal) -> i64 {
+    let m = dec_mul(d, dec_from_i64(100))
+    if m.ok == 0 {
+        return 0
+    }
+    let r = dec_to_i64(m.value)
+    if r.ok == 0 {
+        return 0
+    }
+    return r.value
+}
+
+// ДДС номерата за VIES се сортират по азбучен ред (стабилен insertion sort).
+fn vat_sort_vins(vins: Vec<str>) -> Vec<str> {
+    let out: Vec<str> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(vins) {
+        vec_push(out, vec_get(vins, i))
+        i = i + 1
+    }
+    i = 1
+    let n = vec_len(out)
+    while i < n {
+        let v = vec_get(out, i)
+        let mut j = i - 1
+        let mut stop: i64 = 0
+        while j >= 0 && stop == 0 {
+            if kv_strcmp(vec_get(out, j), v) > 0 {
+                vec_set(out, j + 1, vec_get(out, j))
+                j = j - 1
+            } else {
+                stop = 1
+            }
+        }
+        vec_set(out, j + 1, v)
+        i = i + 1
+    }
+    return out
+}
+
 fn vat_base_from_total(total: str, vat: str) -> Decimal {
     return vat_dsub(vat_parse_amt(total), vat_parse_amt(vat))
 }
@@ -103,6 +148,11 @@ fn vat_collect(db: OrmDb, period: str) -> VatPack !IO !Net {
     let mut cells = vat_cells_empty()
     let mut pok = bytes_new(0)
     let mut pro = bytes_new(0)
+    // VIES: агрегат по ДДС номер на контрагент (само ЕС, не BG).
+    let mut vk3: Map<str, i64> = map_new()
+    let mut vk4: Map<str, i64> = map_new()
+    let mut vk5: Map<str, i64> = map_new()
+    let mut vins: Vec<str> = vec_new()
     let mut i: i64 = 0
     let n = orm_nrows(q)
     while i < n {
@@ -131,6 +181,20 @@ fn vat_collect(db: OrmDb, period: str) -> VatPack !IO !Net {
                 ln = f.line
             }
             ln = vat_apply_credit(ln)
+            if vt == "sales" {
+                let vin = vat_vies_vin(ln.cp_vat)
+                if vin != "" {
+                    if map_has(vk3, vin) == 0 {
+                        vec_push(vins, vin)
+                        map_set(vk3, vin, 0)
+                        map_set(vk4, vin, 0)
+                        map_set(vk5, vin, 0)
+                    }
+                    map_set(vk3, vin, map_get(vk3, vin) + vat_dec_cents(ln.s_vod))
+                    map_set(vk4, vin, map_get(vk4, vin) + vat_dec_cents(ln.s_tri))
+                    map_set(vk5, vin, map_get(vk5, vin) + vat_dec_cents(ln.s_svc))
+                }
+            }
             let id = orm_cell_by_i64(q, i, "id")
             if vt == "purchase" {
                 let row = cells.purch_n + 1
@@ -148,12 +212,60 @@ fn vat_collect(db: OrmDb, period: str) -> VatPack !IO !Net {
     }
     cells = vat_cells_finish(cells)
     let dek = vat_deklar(company_vat, company_name, period_fin, submitter, cells)
+    // VIES: държавите се сортират по ДДС номер; нулевите агрегати се махат.
+    let sv = vat_sort_vins(vins)
+    let vins_out: Vec<str> = vec_new()
+    let out3: Vec<i64> = vec_new()
+    let out4: Vec<i64> = vec_new()
+    let out5: Vec<i64> = vec_new()
+    let mut vies_parties = jarr_new()
+    let mut vi: i64 = 0
+    while vi < vec_len(sv) {
+        let vin = vec_get(sv, vi)
+        let a3 = map_get(vk3, vin)
+        let a4 = map_get(vk4, vin)
+        let a5 = map_get(vk5, vin)
+        if a3 != 0 || a4 != 0 || a5 != 0 {
+            vec_push(vins_out, vin)
+            vec_push(out3, a3)
+            vec_push(out4, a4)
+            vec_push(out5, a5)
+            let mut pj = jobj_new()
+            pj = jobj_str(pj, "vat_number", vin)
+            pj = jobj_str(pj, "k3", nap_money_cents(a3))
+            pj = jobj_str(pj, "k4", nap_money_cents(a4))
+            pj = jobj_str(pj, "k5", nap_money_cents(a5))
+            vies_parties = jarr_obj(vies_parties, pj)
+        }
+        vi = vi + 1
+    }
+    let dq = company_all(db2)?
+    let mut d_egn = orm_cell_by(dq, 0, "accountant_egn")
+    let mut d_name = orm_cell_by(dq, 0, "accountant_name")
+    let mut quality = "A"
+    if str_trim(d_egn) == "" && str_trim(d_name) == "" {
+        d_egn = orm_cell_by(dq, 0, "authorized_person_egn")
+        d_name = orm_cell_by(dq, 0, "authorized_person_name")
+        if str_trim(d_egn) == "" && str_trim(d_name) == "" {
+            d_egn = orm_cell_by(dq, 0, "manager_egn")
+            d_name = orm_cell_by(dq, 0, "manager_name")
+            quality = "R"
+        }
+    }
+    let d_addr = orm_cell_by(dq, 0, "address")
+    let d_city = orm_cell_by(dq, 0, "city")
+    let d_post = orm_cell_by(dq, 0, "post_code")
+    let mm = substr(period_fin, 4, 6)
+    let yyyy = substr(period_fin, 0, 4)
+    let vies_period = concat(mm, concat("/", yyyy))
+    let vies = vat_vies_txt(company_vat, company_name, d_addr, d_egn, d_name, d_city, d_post, d_addr, quality, vies_period, vins_out, out3, out4, out5)
     return VatPack {
         ok: 1, err: "", db: db2, period: period, period_fin: period_fin,
         company_name: company_name, company_vat: vat_with_bg(company_vat),
         submitter: submitter, branch: branch,
         purchases: purchases, sales: sales, cells: cells,
-        pok: pok, pro: pro, dek: dek
+        pok: pok, pro: pro, dek: dek,
+        vies: vies, vies_parties: vies_parties, vies_count: vec_len(vins_out)
     }
 }
 
@@ -178,6 +290,8 @@ fn vat_pack_json(p: VatPack) -> JObj {
     o = jobj_str(o, "cell_71", vat_money(p.cells.p41))
     o = jobj_str(o, "cell_81", vat_money(p.cells.r50))
     o = jobj_str(o, "cell_82", vat_money(p.cells.r60))
+    o = jobj_arr(o, "vies_parties", p.vies_parties)
+    o = jobj_i64(o, "vies_count", p.vies_count)
     return o
 }
 
@@ -238,6 +352,10 @@ fn act_vat_export(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     }
     if kind == "prodagbi" || kind == "prodajbi" {
         return vat_file_resp(p.db, p.pro, "text/plain; charset=windows-1251", "PRODAGBI.TXT")
+    }
+    if kind == "vies" {
+        let nm = concat(concat("VIES_", p.period_fin), ".TXT")
+        return vat_file_resp(p.db, p.vies, "text/plain; charset=windows-1251", nm)
     }
     if kind == "zip" {
         let z = vat_zip3(p.dek, p.pok, p.pro)
