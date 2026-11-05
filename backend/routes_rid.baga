@@ -178,3 +178,8 @@ fn RID_INVOICES_BULK_DELETE() -> i64 { return 268 }
 fn RID_DASHBOARD() -> i64 { return 269 }
 fn RID_SCANS_UBL() -> i64 { return 270 }
 fn RID_ADDRESS_PARSE() -> i64 { return 271 }
+
+// Приключвателни операции (края на месеца) + изтриване на запис в дневника.
+fn RID_CLOSING_PREVIEW() -> i64 { return 272 }
+fn RID_CLOSING_RUN() -> i64 { return 273 }
+fn RID_JOURNAL_DELETE() -> i64 { return 274 }

@@ -5,6 +5,27 @@ import { api, ListResponse } from "../../lib/api";
 import { useI18n } from "../../components/I18nProvider";
 import { RequireAuth } from "../../components/RequireAuth";
 
+interface ClosingLine {
+  source_number: string;
+  source_name: string;
+  target_number: string;
+  target_name: string;
+  balance: string;
+}
+
+interface ClosingPreview {
+  year: number;
+  month: number;
+  entry_date: string;
+  period: string;
+  document_number: string;
+  total: string;
+  count: number;
+  already_done: number;
+  existing_entry_id?: number;
+  lines: ClosingLine[];
+}
+
 interface Period {
   id?: number;
   year: number;
@@ -27,6 +48,9 @@ function PeriodsInner() {
   const [busy, setBusy] = useState(0);
   const [closeMonth, setCloseMonth] = useState(0);
   const [notes, setNotes] = useState("");
+  const [closingMonth, setClosingMonth] = useState(0);
+  const [preview, setPreview] = useState<ClosingPreview | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -60,6 +84,40 @@ function PeriodsInner() {
       setItems(data.items ?? []);
       setCloseMonth(0);
       setNotes("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(0);
+    }
+  };
+
+  const openPreview = async (month: number) => {
+    setClosingMonth(month);
+    setPreview(null);
+    setPreviewBusy(true);
+    setError("");
+    try {
+      const data = await api.get<ClosingPreview>(
+        `/v1/closing-operations/preview?year=${year}&month=${month}`
+      );
+      setPreview(data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setClosingMonth(0);
+    } finally {
+      setPreviewBusy(false);
+    }
+  };
+
+  const runClosing = async () => {
+    if (!preview) return;
+    setBusy(preview.month);
+    setError("");
+    try {
+      await api.post("/v1/closing-operations/run", { year, month: preview.month });
+      setClosingMonth(0);
+      setPreview(null);
+      await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -128,22 +186,96 @@ function PeriodsInner() {
                       {t("per.reopen")}
                     </button>
                   ) : (
-                    <button
-                      className="btn btn-danger"
-                      type="button"
-                      disabled={busy === p.month}
-                      onClick={() => {
-                        setCloseMonth(p.month);
-                        setNotes("");
-                      }}
-                    >
-                      {t("per.close")}
-                    </button>
+                    <>
+                      <button
+                        className="btn"
+                        type="button"
+                        disabled={busy === p.month || previewBusy}
+                        onClick={() => openPreview(p.month)}
+                      >
+                        {t("per.close_month")}
+                      </button>
+                      <button
+                        className="btn btn-danger"
+                        type="button"
+                        disabled={busy === p.month}
+                        onClick={() => {
+                          setCloseMonth(p.month);
+                          setNotes("");
+                        }}
+                      >
+                        {t("per.close")}
+                      </button>
+                    </>
                   )}
                 </div>
               </div>
             );
           })}
+        </div>
+      )}
+      {closingMonth > 0 && (
+        <div className="card card-pad" style={{ marginTop: 16 }}>
+          <h3 className="section-title">
+            {t("per.close_month")}: {t(`per.m${closingMonth}`)} {year}
+          </h3>
+          {previewBusy ? (
+            <p className="muted">{t("common.loading")}</p>
+          ) : preview ? (
+            <>
+              {preview.already_done === 1 && (
+                <div className="error-text">{t("closing.already_done")}</div>
+              )}
+              <p className="muted">
+                {t("closing.preview_total")}: <strong>{preview.total}</strong> ·{" "}
+                {t("closing.preview_count")}: <strong>{preview.count}</strong>
+              </p>
+              {preview.lines.length > 0 && (
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>{t("closing.source")}</th>
+                      <th>{t("closing.target")}</th>
+                      <th style={{ textAlign: "right" }}>{t("closing.balance")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {preview.lines.map((l, i) => (
+                      <tr key={i}>
+                        <td>
+                          {l.source_number} {l.source_name}
+                        </td>
+                        <td>
+                          {l.target_number} {l.target_name}
+                        </td>
+                        <td style={{ textAlign: "right" }}>{l.balance}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              <div className="form-actions">
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={() => {
+                    setClosingMonth(0);
+                    setPreview(null);
+                  }}
+                >
+                  {t("common.cancel")}
+                </button>
+                <button
+                  className="btn btn-primary"
+                  type="button"
+                  disabled={preview.already_done === 1 || preview.count === 0 || busy === preview.month}
+                  onClick={runClosing}
+                >
+                  {t("closing.run")}
+                </button>
+              </div>
+            </>
+          ) : null}
         </div>
       )}
       {closeMonth > 0 && (

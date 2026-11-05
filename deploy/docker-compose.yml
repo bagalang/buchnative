@@ -20,7 +20,10 @@ services:
     network_mode: host
     environment:
       LSMPORT: "16579"
-      LSMPATH: /data
+      # rocksbaga ползва LSMPATH като ПРЕФИКС на файл (излиза /data/rocks.wal),
+      # не като директория — затова префиксът е вътре във волюма, иначе данните
+      # се пишат в контейнерния слой и се губят при всяко рестартиране.
+      LSMPATH: /data/rocks
     volumes:
       - rocks-data:/data
     healthcheck:
@@ -54,7 +57,7 @@ services:
       FMR_JWT_SECRET: ${FMR_JWT_SECRET:?set FMR_JWT_SECRET in deploy/.env}
       FMR_JWT_TTL_SEC: ${FMR_JWT_TTL_SEC:-604800}
       FMR_TITLE: buchnative
-      FMR_VERSION: "0.9.0"
+      FMR_VERSION: "0.9.1"
       BUCHNATIVE_SIDECAR: http://127.0.0.1:5050
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/127.0.0.1/8080'"]
@@ -79,7 +82,6 @@ services:
       # ORM_BACKEND избира dump-а: drock/rocks → kvdump.py (RESP2 SCAN),
       # иначе dump.py (PG wire, boilaDB).
       ORM_BACKEND: drock
-      LSMPATH: /data
       DROCK_HOST: "127.0.0.1"
       DROCK_PORT: "16579"
     command: ["sh", "-c", "pip install -q -r requirements.txt && python sidecar.py"]

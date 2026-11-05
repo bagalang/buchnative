@@ -77,7 +77,7 @@ echo "==> backend на :$PORT (ORM_BACKEND=drock)"
   # 8 workers: Next.js + React Strict Mode fire many parallel GETs per page;
   # 4 pinned on keep-alive and new pages (and /health) hung.
   export FMR_WORKERS="${FMR_WORKERS:-8}" FMR_LOG="${FMR_LOG:-1}" FMR_CORS="${FMR_CORS:-*}"
-  export FMR_JWT_SECRET="${FMR_JWT_SECRET:-dev-secret}" FMR_TITLE=buchnative FMR_VERSION=0.9.0
+  export FMR_JWT_SECRET="${FMR_JWT_SECRET:-dev-secret}" FMR_TITLE=buchnative FMR_VERSION=0.9.1
   if [ -n "$STDBUF" ]; then
     exec stdbuf -oL -eL ./baga -I . -I app-product app-product/buchnative/backend/start.baga
   else
