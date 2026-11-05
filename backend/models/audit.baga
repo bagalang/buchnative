@@ -1,0 +1,191 @@
+// models/audit.baga — одитна следа: кой потребител, кога и какво е променил
+// по документ или счетоводна статия. Кладена е в KV (audit_logs); четене по
+// фирма с филтри по дати и вид обект.
+//
+// Записът е информационен: грешка в него не трябва да вали основната операция
+// (в RPC версията на ytbuch се log-ва и се игнорира).
+
+import "ormbaga/orm.baga"
+import "fmrbaga/jsonx.baga"
+import "kvtime.baga"
+import "std/str/str.baga"
+
+fn audit_table() -> str {
+    return "audit_logs"
+}
+
+fn audit_cols() -> Vec<str> {
+    let c: Vec<str> = vec_new()
+    vec_push(c, "id")
+    vec_push(c, "company_id")
+    vec_push(c, "user_login")
+    vec_push(c, "user_name")
+    vec_push(c, "entity_type")
+    vec_push(c, "entity_id")
+    vec_push(c, "entity_number")
+    vec_push(c, "action")
+    vec_push(c, "summary")
+    vec_push(c, "old_amount")
+    vec_push(c, "new_amount")
+    vec_push(c, "data")
+    vec_push(c, "created_at")
+    return c
+}
+
+fn audit_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return kv_count_sql(db, "SELECT MAX(id) AS count FROM audit_logs")?
+}
+
+// Записва ред. data е JSON-низ с допълнителна снимка (може да е "").
+fn audit_insert(db: OrmDb, company_id: i64, login: str, uname: str, entity_type: str, entity_id: i64, entity_number: str, action: str, summary: str, old_amount: str, new_amount: str, data: str) -> OrmExec !IO !Net !Time {
+    let cols: Vec<str> = vec_new()
+    vec_push(cols, "company_id")
+    vec_push(cols, "user_login")
+    vec_push(cols, "user_name")
+    vec_push(cols, "entity_type")
+    vec_push(cols, "entity_id")
+    vec_push(cols, "entity_number")
+    vec_push(cols, "action")
+    vec_push(cols, "summary")
+    vec_push(cols, "old_amount")
+    vec_push(cols, "new_amount")
+    vec_push(cols, "data")
+    vec_push(cols, "created_at")
+    let vals: Vec<str> = vec_new()
+    vec_push(vals, int_to_str(company_id))
+    vec_push(vals, login)
+    vec_push(vals, uname)
+    vec_push(vals, entity_type)
+    vec_push(vals, int_to_str(entity_id))
+    vec_push(vals, entity_number)
+    vec_push(vals, action)
+    vec_push(vals, summary)
+    vec_push(vals, old_amount)
+    vec_push(vals, new_amount)
+    vec_push(vals, data)
+    vec_push(vals, kv_now_iso()?)
+    return orm_insert_strs(db, audit_table(), cols, vals)?
+}
+
+// Дата без час (ISO с T) — сравнение байт по байт, защото < в baga е само първият байт.
+fn audit_day_key(s: str) -> str {
+    return substr(s, 0, 10)
+}
+
+fn audit_day_ge(a: str, b: str) -> i64 {
+    let ka = audit_day_key(a)
+    let kb = audit_day_key(b)
+    let mut n = len(ka)
+    if len(kb) < n {
+        n = len(kb)
+    }
+    let mut i: i64 = 0
+    while i < n {
+        let ca = char_at(ka, i)
+        let cb = char_at(kb, i)
+        if ca > cb {
+            return 1
+        }
+        if ca < cb {
+            return 0
+        }
+        i = i + 1
+    }
+    if len(ka) >= len(kb) {
+        return 1
+    }
+    return 0
+}
+
+fn audit_day_le(a: str, b: str) -> i64 {
+    let ka = audit_day_key(a)
+    let kb = audit_day_key(b)
+    let mut n = len(ka)
+    if len(kb) < n {
+        n = len(kb)
+    }
+    let mut i: i64 = 0
+    while i < n {
+        let ca = char_at(ka, i)
+        let cb = char_at(kb, i)
+        if ca < cb {
+            return 1
+        }
+        if ca > cb {
+            return 0
+        }
+        i = i + 1
+    }
+    if len(ka) <= len(kb) {
+        return 1
+    }
+    return 0
+}
+
+// Редове на фирмата (индекс по company_id), филтрирани по дати и вид обект.
+// Редът е по id (ред на запис).
+fn audit_by_company(db: OrmDb, company_id: i64, from: str, to: str, entity_type: str, limit: i64, offset: i64) -> OrmQuery !IO !Net {
+    let q = kv_select_where(db, audit_table(), "company_id", int_to_str(company_id), audit_cols())?
+    if orm_ok_q(q) == 0 {
+        return q
+    }
+    let cells: Vec<str> = vec_new()
+    let nulls: Vec<i64> = vec_new()
+    let mut matched: i64 = 0
+    let mut pushed: i64 = 0
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        let day = orm_cell_by(q, i, "created_at")
+        let et = orm_cell_by(q, i, "entity_type")
+        if audit_day_ge(day, from) == 1 && audit_day_le(day, to) == 1 {
+            if entity_type == "" || et == entity_type {
+                if matched >= offset && (limit <= 0 || pushed < limit) {
+                    let mut c: i64 = 0
+                    while c < vec_len(audit_cols()) {
+                        vec_push(cells, orm_cell(q, i, c))
+                        vec_push(nulls, 0)
+                        c = c + 1
+                    }
+                    pushed = pushed + 1
+                }
+                matched = matched + 1
+            }
+        }
+        i = i + 1
+    }
+    return kv_query_ok(orm_db_q(q), audit_cols(), cells, nulls, pushed)
+}
+
+fn audit_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_i64(o, "company_id", orm_cell_by_i64(q, row, "company_id"))
+    o = jobj_str(o, "user_login", orm_cell_by(q, row, "user_login"))
+    o = jobj_str(o, "user_name", orm_cell_by(q, row, "user_name"))
+    o = jobj_str(o, "entity_type", orm_cell_by(q, row, "entity_type"))
+    o = jobj_i64(o, "entity_id", orm_cell_by_i64(q, row, "entity_id"))
+    o = jobj_str(o, "entity_number", orm_cell_by(q, row, "entity_number"))
+    o = jobj_str(o, "action", orm_cell_by(q, row, "action"))
+    o = jobj_str(o, "summary", orm_cell_by(q, row, "summary"))
+    o = jobj_str(o, "old_amount", orm_cell_by(q, row, "old_amount"))
+    o = jobj_str(o, "new_amount", orm_cell_by(q, row, "new_amount"))
+    let d = orm_cell_by(q, row, "data")
+    if d != "" {
+        o = jobj_raw(o, "data", d)
+    }
+    o = jobj_str(o, "created_at", orm_cell_by(q, row, "created_at"))
+    return o
+}
+
+fn audit_list_json(q: OrmQuery) -> JObj {
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        arr = jarr_obj(arr, audit_to_json(q, i))
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", orm_nrows(q))
+    return o
+}

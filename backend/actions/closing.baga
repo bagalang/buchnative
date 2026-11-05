@@ -15,6 +15,7 @@ import "../models/company.baga"
 import "../models/journal.baga"
 import "../models/accounting_period.baga"
 import "acl.baga"
+import "audit.baga"
 import "active_company.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
@@ -592,5 +593,6 @@ fn act_closing_run(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     out = jobj_str(out, "total", total)
     out = jobj_i64(out, "count", cl_i64(doc, "count"))
     out = jobj_i64(out, "entry_id", entry_id)
+    audit_record(d2, ac.id, auth.ctx.user_sub, "closing", entry_id, doc_number, "close", concat("Приключвателни операции за ", period), "", total, "")
     return act_ok(d2, out)
 }

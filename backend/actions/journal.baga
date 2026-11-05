@@ -10,6 +10,7 @@ import "../models/counterpart.baga"
 import "txn.baga"
 import "periods.baga"
 import "acl.baga"
+import "audit.baga"
 import "active_company.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
@@ -40,7 +41,7 @@ fn act_journal_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     return act_ok(orm_db_q(q), o)
 }
 
-fn act_journal_show(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_journal_show(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let auth = act_require_perm(ctx, db, "accounting:read")?
     if auth.ok == 0 {
         return auth.out
@@ -237,11 +238,14 @@ fn act_journal_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let mut o = journal_entry_to_json(q, 0)
     let lq = journal_lines_by_entry(orm_db_q(q), entry_id)?
     o = jobj_arr(o, "lines", journal_lines_list_json(lq))
+    let audit_sum = dec_to_string(credit_total)
+    let audit_msg = concat("Ръчен запис: ", concat(description.val, concat(" — ", audit_sum)))
+    audit_record(orm_db_q(lq), acj.id, auth.ctx.user_sub, "journal", entry_id, document_number.val, "create", audit_msg, "", audit_sum, "")
     return act_created(orm_db_q(lq), o)
 }
 
 // Редакция на запис: същата форма като създаването, редовете се презаписват.
-fn act_journal_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_journal_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let auth = act_require_perm(ctx, db, "accounting:write")?
     if auth.ok == 0 {
         return auth.out
@@ -452,12 +456,15 @@ fn act_journal_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     let mut o = journal_entry_to_json(q, 0)
     let lq = journal_lines_by_entry(orm_db_q(q), id)?
     o = jobj_arr(o, "lines", journal_lines_list_json(lq))
+    let audit_sum = dec_to_string(credit_total)
+    let audit_msg = concat("Ръчен запис (редакция): ", concat(description.val, concat(" — ", audit_sum)))
+    audit_record(orm_db_q(lq), ac.id, auth.ctx.user_sub, "journal", id, document_number.val, "update", audit_msg, "", audit_sum, "")
     return act_ok(orm_db_q(lq), o)
 }
 
 // Изтриване на запис (редове + заглавен ред). Нужно за приключване: след
 // изтриване месецът може да се приключи отново.
-fn act_journal_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_journal_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let auth = act_require_perm(ctx, db, "accounting:write")?
     if auth.ok == 0 {
         return auth.out
@@ -490,5 +497,6 @@ fn act_journal_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if orm_ok(cmt) == 0 {
         return act_err(orm_db_exec(cmt), 500, orm_err_exec(cmt))
     }
+    audit_record(orm_db_exec(cmt), ac.id, auth.ctx.user_sub, "journal", id, "", "delete", "Изтрит запис от дневника", "", "", "")
     return act_no_content(orm_db_exec(cmt))
 }

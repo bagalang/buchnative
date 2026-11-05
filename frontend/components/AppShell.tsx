@@ -35,6 +35,7 @@ const NAV_ITEMS = [
   { href: "/reports", key: "nav.reports" },
   { href: "/opening-balances", key: "nav.opening_balances" },
   { href: "/accounting-periods", key: "nav.periods" },
+  { href: "/audit", key: "nav.audit" },
   { href: "/vat", key: "nav.vat" },
   { href: "/dividends", key: "nav.dividends" },
   { href: "/exchange-rates", key: "nav.exchange_rates" },

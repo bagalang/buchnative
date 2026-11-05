@@ -1,0 +1,77 @@
+// actions/audit.baga — одитна следа: запис на промяна + списък по фирма.
+//
+// Записът е информационен по дизайн: audit_record връща -1 при грешка, а
+// извикващият го игнорира (основната операция не се чупи от одита).
+// Актьорът се ресолвна по sub (email); празен → "system".
+
+import "../models/audit.baga"
+import "../models/user.baga"
+import "acl.baga"
+import "active_company.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+fn audit_record(db: OrmDb, company_id: i64, sub: str, entity_type: str, entity_id: i64, entity_number: str, action: str, summary: str, old_amount: str, new_amount: str, data: str) -> i64 !IO !Net !Time {
+    let mut d = db
+    let mut login = sub
+    let mut uname = ""
+    if str_trim(login) == "" {
+        login = "system"
+        uname = "Система"
+    } else {
+        let uq = user_by_email(d, login)?
+        if orm_ok_q(uq) == 1 && orm_nrows(uq) > 0 {
+            login = orm_cell_by(uq, 0, "email")
+            uname = orm_cell_by(uq, 0, "name")
+            if uname == "" {
+                uname = login
+            }
+        }
+        d = orm_db_q(uq)
+    }
+    let r = audit_insert(d, company_id, login, uname, entity_type, entity_id, entity_number, action, summary, old_amount, new_amount, data)?
+    if orm_ok(r) == 0 {
+        return 0 - 1
+    }
+    return 0
+}
+
+fn audit_q(ctx: FmrCtx, key: str, def: str) -> str {
+    let v = fmr_query(ctx, key)
+    if v == "" {
+        return def
+    }
+    return v
+}
+
+fn act_audit_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:read")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let ac = active_company_id(db, auth.ctx.user_sub)
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let d = ac.db
+    let from = audit_q(ctx, "from", "2000-01-01")
+    let to = audit_q(ctx, "to", "2100-01-01")
+    let et = fmr_query(ctx, "entity")
+    let limit = parse_int(audit_q(ctx, "limit", "50"))
+    let offset = parse_int(audit_q(ctx, "offset", "0"))
+    let q = audit_by_company(d, ac.id, from, to, et, limit, offset)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let mut o = audit_list_json(q)
+    o = jobj_i64(o, "limit", limit)
+    o = jobj_i64(o, "offset", offset)
+    return act_ok(orm_db_q(q), o)
+}

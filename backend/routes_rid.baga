@@ -183,3 +183,6 @@ fn RID_ADDRESS_PARSE() -> i64 { return 271 }
 fn RID_CLOSING_PREVIEW() -> i64 { return 272 }
 fn RID_CLOSING_RUN() -> i64 { return 273 }
 fn RID_JOURNAL_DELETE() -> i64 { return 274 }
+
+// Одитна следа.
+fn RID_AUDIT_INDEX() -> i64 { return 275 }

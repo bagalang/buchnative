@@ -30,6 +30,7 @@ import "actions/fs_formulas.baga"
 import "actions/fixed_assets.baga"
 import "actions/internal_docs.baga"
 import "actions/internal_docs_confirm.baga"
+import "actions/audit.baga"
 import "actions/closing.baga"
 import "actions/periods.baga"
 import "actions/opening_balances.baga"
@@ -140,6 +141,7 @@ fn fmr_build_app() -> FmrApp !IO {
     app = fmr_route_meta(app, "DELETE", "/v1/journal/{id}", RID_JOURNAL_DELETE(), "", "journal", 0, "", "-", "204", "")
     app = fmr_route_meta(app, "GET", "/v1/closing-operations/preview", RID_CLOSING_PREVIEW(), "", "closing", 0, "", "ClosingPreview", "200", "year,month")
     app = fmr_route_meta(app, "POST", "/v1/closing-operations/run", RID_CLOSING_RUN(), "", "closing", 0, "ClosingRun", "ClosingResult", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/audit", RID_AUDIT_INDEX(), "", "audit", 0, "", "AuditList", "200", "from,to,entity,limit,offset")
     app = fmr_route_meta(app, "GET", "/v1/vat/registers", RID_VAT_REGISTERS(), "", "vat", 0, "", "VatRegisters", "200", "period")
     app = fmr_route_meta(app, "GET", "/v1/vat/return", RID_VAT_RETURN(), "", "vat", 0, "", "VatReturn", "200", "period")
     app = fmr_route_meta(app, "GET", "/v1/vat/export", RID_VAT_EXPORT(), "", "vat", 0, "", "-", "200", "period,type:s")
@@ -345,6 +347,7 @@ fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     if id == RID_JOURNAL_DELETE() { return act_journal_delete(ctx, db)? }
     if id == RID_CLOSING_PREVIEW() { return act_closing_preview(ctx, db)? }
     if id == RID_CLOSING_RUN() { return act_closing_run(ctx, db)? }
+    if id == RID_AUDIT_INDEX() { return act_audit_index(ctx, db)? }
     if id == RID_VAT_REGISTERS() { return act_vat_registers(ctx, db)? }
     if id == RID_VAT_RETURN() { return act_vat_return(ctx, db)? }
     if id == RID_VAT_EXPORT() { return act_vat_export(ctx, db)? }

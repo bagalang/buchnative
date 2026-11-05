@@ -88,7 +88,7 @@ fn act_periods_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     return act_ok(orm_db_q(q), aper_list_json(q, year))
 }
 
-fn act_period_close(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_period_close(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let auth = act_require_auth(ctx, db)
     if auth.ok == 0 {
         return auth.out
@@ -153,11 +153,14 @@ fn act_period_close(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         }
         db2 = orm_db_exec(ins)
     }
+    let aco = active_company_id(db2, auth.ctx.user_sub)?
+    db2 = aco.db
+    audit_record(db2, aco.id, auth.ctx.user_sub, "period", rid, concat(int_to_str(yf.num), concat("-", audit_pad2(mf.num))), "close", "Затворен счетоводен период", "", "", "")
     let q2 = aper_by_year(db2, yf.num)?
     return act_ok(orm_db_q(q2), aper_list_json(q2, yf.num))
 }
 
-fn act_period_reopen(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_period_reopen(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let auth = act_require_auth(ctx, db)
     if auth.ok == 0 {
         return auth.out
@@ -209,6 +212,17 @@ fn act_period_reopen(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         }
         db2 = orm_db_exec(up)
     }
+    let aco = active_company_id(db2, auth.ctx.user_sub)?
+    db2 = aco.db
+    audit_record(db2, aco.id, auth.ctx.user_sub, "period", rid, concat(int_to_str(yf.num), concat("-", audit_pad2(mf.num))), "reopen", "Отворен счетоводен период", "", "", "")
     let q2 = aper_by_year(db2, yf.num)?
     return act_ok(orm_db_q(q2), aper_list_json(q2, yf.num))
+}
+
+fn audit_pad2(n: i64) -> str {
+    let s = int_to_str(n)
+    if len(s) < 2 {
+        return concat("0", s)
+    }
+    return s
 }
