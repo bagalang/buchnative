@@ -133,6 +133,40 @@ function DetailInner() {
               {fmt.toUpperCase()}
             </button>
           ))}
+          {inv.direction === "in" && (
+            <>
+              <button
+                className="btn btn-sm"
+                disabled={!!busy}
+                onClick={() =>
+                  run("protocol", async () => {
+                    const article = window.prompt(t("invoices.protocol_article"), "чл. 117");
+                    if (article === null) return;
+                    await api.post(`/v1/invoices/${inv.id}/issue-protocol`, {
+                      vat_article: article.trim() || "чл. 117",
+                    });
+                    router.push("/invoices");
+                  })
+                }
+              >
+                {t("invoices.issue_protocol")}
+              </button>
+              <button
+                className="btn btn-sm"
+                disabled={!!busy}
+                onClick={() =>
+                  run("customs", async () => {
+                    const mrn = window.prompt(t("invoices.customs_number"), "");
+                    if (mrn === null || !mrn.trim()) return;
+                    await api.post(`/v1/invoices/${inv.id}/issue-customs`, { number: mrn.trim() });
+                    router.push("/invoices");
+                  })
+                }
+              >
+                {t("invoices.issue_customs")}
+              </button>
+            </>
+          )}
           {draft && (
             <IconButton
               icon="delete"

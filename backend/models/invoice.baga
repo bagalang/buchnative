@@ -46,6 +46,10 @@ fn invoice_cols() -> Vec<str> {
     vec_push(c, "journal_entry_id")
     vec_push(c, "location_id")
     vec_push(c, "company_id")
+    vec_push(c, "vat_article")
+    vec_push(c, "customs_statistical")
+    vec_push(c, "customs_duty")
+    vec_push(c, "customs_vat")
     vec_push(c, "created_at")
     return c
 }
@@ -112,6 +116,22 @@ fn invoice_to_json(q: OrmQuery, row: i64) -> JObj {
     }
     if cname != "" {
         o = jobj_str(o, "counterpart_name", cname)
+    }
+    let va = orm_cell_by(q, row, "vat_article")
+    if va != "" {
+        o = jobj_str(o, "vat_article", va)
+    }
+    let cs = orm_cell_by(q, row, "customs_statistical")
+    if cs != "" && cs != "0" && cs != "0.00" {
+        o = jobj_str(o, "customs_statistical", cs)
+    }
+    let cd = orm_cell_by(q, row, "customs_duty")
+    if cd != "" && cd != "0" && cd != "0.00" {
+        o = jobj_str(o, "customs_duty", cd)
+    }
+    let cv = orm_cell_by(q, row, "customs_vat")
+    if cv != "" && cv != "0" && cv != "0.00" {
+        o = jobj_str(o, "customs_vat", cv)
     }
     let ca = orm_cell_by(q, row, "created_at")
     if ca != "" {
@@ -423,4 +443,20 @@ fn invoice_next_number_str(q: OrmQuery, document_type: str, direction: str) -> s
         i = i + 1
     }
     return invoice_pad10(maxn + 1)
+}
+
+// Специални полета на документа: протокол по чл. 117 (vat_article) и
+// митническа декларация (статистическа стойност, мито, митническо ДДС).
+fn invoice_set_special(db: OrmDb, id: i64, vat_article: str, customs_statistical: str, customs_duty: str, customs_vat: str) -> OrmExec !IO !Net {
+    let cols: Vec<str> = vec_new()
+    vec_push(cols, "vat_article")
+    vec_push(cols, "customs_statistical")
+    vec_push(cols, "customs_duty")
+    vec_push(cols, "customs_vat")
+    let vals: Vec<str> = vec_new()
+    vec_push(vals, vat_article)
+    vec_push(vals, customs_statistical)
+    vec_push(vals, customs_duty)
+    vec_push(vals, customs_vat)
+    return orm_update_by_id(db, invoice_table(), id, cols, vals)?
 }

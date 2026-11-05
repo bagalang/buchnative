@@ -3,6 +3,7 @@
 // амортизация и потвърждение на вътрешен документ.
 
 import "../models/accounting_period.baga"
+import "audit.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
 import "fmrbaga/action.baga"

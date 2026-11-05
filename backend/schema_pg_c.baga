@@ -224,5 +224,9 @@ fn buchnative_migrations_c() -> MigrationSet {
     set = migrate_add(set, 20260921109, "add_counterparts_address_building", "ALTER TABLE counterparts ADD COLUMN address_building TEXT NOT NULL DEFAULT ''", "ALTER TABLE counterparts DROP COLUMN address_building")
     set = migrate_add(set, 20260921110, "add_counterparts_additional_address_detail", "ALTER TABLE counterparts ADD COLUMN additional_address_detail TEXT NOT NULL DEFAULT ''", "ALTER TABLE counterparts DROP COLUMN additional_address_detail")
     set = migrate_add(set, 20260921111, "add_counterparts_address_type", "ALTER TABLE counterparts ADD COLUMN address_type TEXT NOT NULL DEFAULT ''", "ALTER TABLE counterparts DROP COLUMN address_type")
+    set = migrate_add(set, 20261105001, "add_invoices_special_docs", "ALTER TABLE invoices ADD COLUMN vat_article TEXT NOT NULL DEFAULT ''", "ALTER TABLE invoices DROP COLUMN vat_article")
+    set = migrate_add(set, 20261105002, "add_invoices_customs_statistical", "ALTER TABLE invoices ADD COLUMN customs_statistical NUMERIC(18,2) NOT NULL DEFAULT 0", "ALTER TABLE invoices DROP COLUMN customs_statistical")
+    set = migrate_add(set, 20261105003, "add_invoices_customs_duty", "ALTER TABLE invoices ADD COLUMN customs_duty NUMERIC(18,2) NOT NULL DEFAULT 0", "ALTER TABLE invoices DROP COLUMN customs_duty")
+    set = migrate_add(set, 20261105004, "add_invoices_customs_vat", "ALTER TABLE invoices ADD COLUMN customs_vat NUMERIC(18,2) NOT NULL DEFAULT 0", "ALTER TABLE invoices DROP COLUMN customs_vat")
     return set
 }

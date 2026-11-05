@@ -13,6 +13,7 @@ import "../models/product.baga"
 import "../models/doc_type.baga"
 import "inventory.baga"
 import "periods.baga"
+import "vat_fmt.baga"
 import "txn.baga"
 import "acl.baga"
 import "active_company.baga"
@@ -179,6 +180,13 @@ fn invoice_post_one(db: OrmDb, id: i64, user_sub: str) -> FmrOut !IO !Net !Time 
     }
     let entry_id = orm_cell_by_i64(eq, 0, "id")
     db2 = orm_db_q(eq)
+    // Специални документи: протокол по чл. 117 (09) и митническа декларация (07).
+    if direction == "in" && doc_type == "09" {
+        return invoice_post_117(db2, entry_id, id, vat_amount)?
+    }
+    if direction == "in" && doc_type == "07" {
+        return invoice_post_customs(db2, entry_id, id, iq)?
+    }
     let acc_cust = vec_get(a411, 0)
     let acc_sup = vec_get(a401, 0)
     let acc_vat_in = vec_get(a4531, 0)
@@ -301,23 +309,28 @@ fn invoice_post_one(db: OrmDb, id: i64, user_sub: str) -> FmrOut !IO !Net !Time 
         if p3.ok == 0 { return act_err_rb(p3.db, 500, p3.err) }
         db2 = p3.db
     }
+    return invoice_mark_posted(db2, entry_id, id)?
+}
+
+// Маркира фактурата като постната и връща записа с редовете.
+fn invoice_mark_posted(db: OrmDb, entry_id: i64, id: i64) -> FmrOut !IO !Net !Time {
     let scols = vec_new()
     vec_push(scols, "status")
     vec_push(scols, "journal_entry_id")
     let svals = vec_new()
     vec_push(svals, "posted")
     vec_push(svals, int_to_str(entry_id))
-    let su = orm_update_by_id(db2, invoice_table(), id, scols, svals)?
+    let su = orm_update_by_id(db, invoice_table(), id, scols, svals)?
     if orm_ok(su) == 0 {
         return act_err_rb(orm_db_exec(su), 500, orm_err_exec(su))
     }
-    db2 = orm_db_exec(su)
-    let cmt = bb_commit(db2)?
+    db = orm_db_exec(su)
+    let cmt = bb_commit(db)?
     if orm_ok(cmt) == 0 {
         return act_err_rb(orm_db_exec(cmt), 500, orm_err_exec(cmt))
     }
-    db2 = orm_db_exec(cmt)
-    let q = journal_find(db2, entry_id)?
+    db = orm_db_exec(cmt)
+    let q = journal_find(db, entry_id)?
     if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
         return act_err(orm_db_q(q), 500, "journal entry missing after post")
     }
@@ -325,4 +338,115 @@ fn invoice_post_one(db: OrmDb, id: i64, user_sub: str) -> FmrOut !IO !Net !Time 
     let jl = journal_lines_by_entry(orm_db_q(q), entry_id)?
     o = jobj_arr(o, "lines", journal_lines_list_json(jl))
     return act_created(orm_db_q(jl), o)
+}
+
+// Протокол по чл. 117: Дт 4531 (начислен ДДС за покупките) / Кт 4532.
+fn invoice_post_117(db: OrmDb, entry_id: i64, id: i64, vat: str) -> FmrOut !IO !Net !Time {
+    if vat == "" || vat == "0" || vat == "0.00" {
+        return act_err(db, 422, "протоколът по чл. 117 трябва да има начислен ДДС")
+    }
+    let a4531 = vec_new()
+    let r1 = resolve_account(db, "4531", a4531)?
+    if vec_len(a4531) == 0 {
+        return r1
+    }
+    db = r1.db
+    let a4532 = vec_new()
+    let r2 = resolve_account(db, "4532", a4532)?
+    if vec_len(a4532) == 0 {
+        return r2
+    }
+    db = r2.db
+    let p1 = post_jl(db, entry_id, vec_get(a4531, 0), "debit", vat, vat, 0, 0, 0)?
+    if p1.ok == 0 {
+        return act_err_rb(p1.db, 500, p1.err)
+    }
+    db = p1.db
+    let p2 = post_jl(db, entry_id, vec_get(a4532, 0), "credit", vat, "0", 0, 0, 0)?
+    if p2.ok == 0 {
+        return act_err_rb(p2.db, 500, p2.err)
+    }
+    db = p2.db
+    return invoice_mark_posted(db, entry_id, id)?
+}
+
+// Разходна сметка за митото: складова/разходна сметка на стоката от
+// оригиналната фактура (същата логика като при обикновената покупка).
+fn invoice_duty_expense_account(db: OrmDb, id: i64) -> i64 !IO !Net {
+    let iq = invoice_find(db, id)?
+    if orm_ok_q(iq) == 0 {
+        return 0
+    }
+    let orig = orm_cell_by_i64(iq, 0, "original_invoice_id")
+    if orig > 0 {
+        let lq = invoice_lines_by_invoice(orm_db_q(iq), orig)?
+        if orm_ok_q(lq) == 1 {
+            let mut i: i64 = 0
+            while i < orm_nrows(lq) {
+                let pid = orm_cell_by_i64(lq, i, "product_id")
+                if pid > 0 {
+                    let pq = product_find(orm_db_q(lq), pid)?
+                    if orm_ok_q(pq) == 1 && orm_nrows(pq) > 0 {
+                        let aid = orm_cell_by_i64(pq, 0, "inventory_account_id")
+                        if aid > 0 {
+                            return aid
+                        }
+                    }
+                }
+                i = i + 1
+            }
+        }
+    }
+    return 0
+}
+
+// Митническа декларация: Дт разход (мито) / Дт 4531 (митническо ДДС) / Кт 458.
+fn invoice_post_customs(db: OrmDb, entry_id: i64, id: i64, iq: OrmQuery) -> FmrOut !IO !Net !Time {
+    let duty = orm_cell_by(iq, 0, "customs_duty")
+    let cvat = orm_cell_by(iq, 0, "customs_vat")
+    let has_duty = duty != "" && duty != "0" && duty != "0.00"
+    let has_vat = cvat != "" && cvat != "0" && cvat != "0.00"
+    if has_duty == 0 && has_vat == 0 {
+        return act_err(db, 422, "митническата декларация трябва да съдържа мито или ДДС")
+    }
+    let a458 = vec_new()
+    let r458 = resolve_account(db, "458", a458)?
+    if vec_len(a458) == 0 {
+        return r458
+    }
+    db = r458.db
+    let a4531 = vec_new()
+    let r4531 = resolve_account(db, "4531", a4531)?
+    if vec_len(a4531) == 0 {
+        return r4531
+    }
+    db = r4531.db
+    if has_duty == 1 {
+        let exp = invoice_duty_expense_account(db, id)
+        let eids = vec_new()
+        let rr = resolve_account_id(db, exp, "602", eids)?
+        if vec_len(eids) == 0 {
+            return act_err_rb(rr.db, 422, "липсва разходна сметка (602)")
+        }
+        db = rr.db
+        let p1 = post_jl(db, entry_id, vec_get(eids, 0), "debit", duty, "0", 0, 0, 0)?
+        if p1.ok == 0 {
+            return act_err_rb(p1.db, 500, p1.err)
+        }
+        db = p1.db
+    }
+    if has_vat == 1 {
+        let p2 = post_jl(db, entry_id, vec_get(a4531, 0), "debit", cvat, cvat, 0, 0, 0)?
+        if p2.ok == 0 {
+            return act_err_rb(p2.db, 500, p2.err)
+        }
+        db = p2.db
+    }
+    let total = vat_dadd(vat_parse_amt(duty), vat_parse_amt(cvat))
+    let p3 = post_jl(db, entry_id, vec_get(a458, 0), "credit", vat_money(total), "0", 0, 0, 0)?
+    if p3.ok == 0 {
+        return act_err_rb(p3.db, 500, p3.err)
+    }
+    db = p3.db
+    return invoice_mark_posted(db, entry_id, id)?
 }
