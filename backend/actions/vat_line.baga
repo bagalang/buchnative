@@ -69,6 +69,13 @@ struct VatCells {
     r40: Decimal
     r50: Decimal
     r60: Decimal
+    // Ръчно въведени клетки (33 е коефициент, останалите суми).
+    m33: str
+    m70: Decimal
+    m71: Decimal
+    m80: Decimal
+    m81: Decimal
+    m82: Decimal
     sales_n: i64
     purch_n: i64
 }
@@ -102,7 +109,9 @@ fn vat_cells_empty() -> VatCells {
         s01: z, s20: z, s11: z, s21: z, s12: z, s22: z, s23: z,
         s13: z, s24: z, s14: z, s15: z, s16: z, s17: z, s18: z, s19: z,
         p30: z, p31: z, p41: z, p32: z, p42: z, p43: z,
-        r40: z, r50: z, r60: z, sales_n: 0, purch_n: 0
+        r40: z, r50: z, r60: z,
+        m33: "0.00", m70: z, m71: z, m80: z, m81: z, m82: z,
+        sales_n: 0, purch_n: 0
     }
 }
 

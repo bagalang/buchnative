@@ -143,6 +143,7 @@ fn fmr_build_app() -> FmrApp !IO {
     app = fmr_route_meta(app, "GET", "/v1/closing-operations/preview", RID_CLOSING_PREVIEW(), "", "closing", 0, "", "ClosingPreview", "200", "year,month")
     app = fmr_route_meta(app, "POST", "/v1/closing-operations/run", RID_CLOSING_RUN(), "", "closing", 0, "ClosingRun", "ClosingResult", "200", "")
     app = fmr_route_meta(app, "GET", "/v1/audit", RID_AUDIT_INDEX(), "", "audit", 0, "", "AuditList", "200", "from,to,entity,limit,offset")
+    app = fmr_route_meta(app, "PUT", "/v1/vat/manual", RID_VAT_MANUAL(), "", "vat", 0, "VatManual", "VatPack", "200", "period")
     app = fmr_route_meta(app, "POST", "/v1/invoices/{id}/issue-protocol", RID_INVOICES_ISSUE_PROTOCOL(), "", "invoices", 0, "IssueProtocol", "Invoice", "201", "")
     app = fmr_route_meta(app, "POST", "/v1/invoices/{id}/issue-customs", RID_INVOICES_ISSUE_CUSTOMS(), "", "invoices", 0, "IssueCustoms", "Invoice", "201", "")
     app = fmr_route_meta(app, "GET", "/v1/vat/registers", RID_VAT_REGISTERS(), "", "vat", 0, "", "VatRegisters", "200", "period")
@@ -351,6 +352,7 @@ fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     if id == RID_CLOSING_PREVIEW() { return act_closing_preview(ctx, db)? }
     if id == RID_CLOSING_RUN() { return act_closing_run(ctx, db)? }
     if id == RID_AUDIT_INDEX() { return act_audit_index(ctx, db)? }
+    if id == RID_VAT_MANUAL() { return act_vat_manual_save(ctx, db)? }
     if id == RID_INVOICES_ISSUE_PROTOCOL() { return act_invoices_issue_protocol(ctx, db)? }
     if id == RID_INVOICES_ISSUE_CUSTOMS() { return act_invoices_issue_customs(ctx, db)? }
     if id == RID_VAT_REGISTERS() { return act_vat_registers(ctx, db)? }

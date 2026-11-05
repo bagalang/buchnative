@@ -1,0 +1,114 @@
+// models/vat_manual.baga — ръчно въведени ДДС клетки за период (33, 70, 71, 80, 81, 82).
+//
+// Тези клетки не се изчисляват от дневниците, а се въвеждат ръчно от таба
+// „Декларация“ и влизат в DEKLAR.TXT. cell_33 е коефициент (текст, напр. 0.60),
+// останалите са суми.
+
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+fn vat_manual_table() -> str {
+    return "vat_manual"
+}
+
+fn vat_manual_cols() -> Vec<str> {
+    let c: Vec<str> = vec_new()
+    vec_push(c, "id")
+    vec_push(c, "company_id")
+    vec_push(c, "period")
+    vec_push(c, "cell_33")
+    vec_push(c, "cell_70")
+    vec_push(c, "cell_71")
+    vec_push(c, "cell_80")
+    vec_push(c, "cell_81")
+    vec_push(c, "cell_82")
+    vec_push(c, "created_at")
+    return c
+}
+
+fn vat_manual_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return kv_count_sql(db, "SELECT MAX(id) AS count FROM vat_manual")?
+}
+
+// Ред за фирма + период; празен резултат, ако няма въведени клетки.
+fn vat_manual_find(db: OrmDb, company_id: i64, period: str) -> OrmQuery !IO !Net {
+    let q = kv_select_where(db, vat_manual_table(), "company_id", int_to_str(company_id), vat_manual_cols())?
+    if orm_ok_q(q) == 0 {
+        return q
+    }
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        if orm_cell_by(q, i, "period") == period {
+            // Пресяваме само този ред в нов резултат.
+            let cells: Vec<str> = vec_new()
+            let nulls: Vec<i64> = vec_new()
+            let mut c: i64 = 0
+            while c < vec_len(vat_manual_cols()) {
+                vec_push(cells, orm_cell(q, i, c))
+                vec_push(nulls, 0)
+                c = c + 1
+            }
+            return kv_query_ok(orm_db_q(q), vat_manual_cols(), cells, nulls, 1)
+        }
+        i = i + 1
+    }
+    return kv_query_empty(orm_db_q(q), vat_manual_cols())
+}
+
+// Ъпсърт по (фирма, период): същите клетки се презаписват.
+fn vat_manual_save(db: OrmDb, company_id: i64, period: str, c33: str, c70: str, c71: str, c80: str, c81: str, c82: str) -> OrmExec !IO !Net {
+    let q = vat_manual_find(db, company_id, period)?
+    if orm_ok_q(q) == 0 {
+        return kv_exec_err(orm_db_q(q), "vat_manual: не можах да прочета клетките")
+    }
+    if orm_nrows(q) > 0 {
+        let id = orm_cell_by_i64(q, 0, "id")
+        let cols: Vec<str> = vec_new()
+        vec_push(cols, "cell_33")
+        vec_push(cols, "cell_70")
+        vec_push(cols, "cell_71")
+        vec_push(cols, "cell_80")
+        vec_push(cols, "cell_81")
+        vec_push(cols, "cell_82")
+        let vals: Vec<str> = vec_new()
+        vec_push(vals, c33)
+        vec_push(vals, c70)
+        vec_push(vals, c71)
+        vec_push(vals, c80)
+        vec_push(vals, c81)
+        vec_push(vals, c82)
+        return orm_update_by_id(orm_db_q(q), vat_manual_table(), id, cols, vals)?
+    }
+    let cols: Vec<str> = vec_new()
+    vec_push(cols, "company_id")
+    vec_push(cols, "period")
+    vec_push(cols, "cell_33")
+    vec_push(cols, "cell_70")
+    vec_push(cols, "cell_71")
+    vec_push(cols, "cell_80")
+    vec_push(cols, "cell_81")
+    vec_push(cols, "cell_82")
+    let vals: Vec<str> = vec_new()
+    vec_push(vals, int_to_str(company_id))
+    vec_push(vals, period)
+    vec_push(vals, c33)
+    vec_push(vals, c70)
+    vec_push(vals, c71)
+    vec_push(vals, c80)
+    vec_push(vals, c81)
+    vec_push(vals, c82)
+    return orm_insert_strs(db, vat_manual_table(), cols, vals)?
+}
+
+fn vat_manual_to_json(q: OrmQuery) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "company_id", orm_cell_by_i64(q, 0, "company_id"))
+    o = jobj_str(o, "period", orm_cell_by(q, 0, "period"))
+    o = jobj_str(o, "cell_33", orm_cell_by(q, 0, "cell_33"))
+    o = jobj_str(o, "cell_70", orm_cell_by(q, 0, "cell_70"))
+    o = jobj_str(o, "cell_71", orm_cell_by(q, 0, "cell_71"))
+    o = jobj_str(o, "cell_80", orm_cell_by(q, 0, "cell_80"))
+    o = jobj_str(o, "cell_81", orm_cell_by(q, 0, "cell_81"))
+    o = jobj_str(o, "cell_82", orm_cell_by(q, 0, "cell_82"))
+    return o
+}

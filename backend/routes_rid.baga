@@ -190,3 +190,6 @@ fn RID_AUDIT_INDEX() -> i64 { return 275 }
 // Протокол по чл. 117 и митническа декларация към входяща фактура.
 fn RID_INVOICES_ISSUE_PROTOCOL() -> i64 { return 276 }
 fn RID_INVOICES_ISSUE_CUSTOMS() -> i64 { return 277 }
+
+// Ръчно въведени ДДС клетки за период.
+fn RID_VAT_MANUAL() -> i64 { return 278 }

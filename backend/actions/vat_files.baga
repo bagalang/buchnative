@@ -108,15 +108,16 @@ fn vat_deklar(vat: str, name: str, period: str, submitter: str, c: VatCells) -> 
     b = nap_cat(b, nap_amt(c.p32))
     b = nap_cat(b, nap_amt(c.p42))
     b = nap_cat(b, nap_amt(c.p43))
-    b = nap_cat(b, nap_sym("0.00", 4))
+    // 01-33 е коефициент (текст с десетична запетая), 01-70..82 — суми.
+    b = nap_cat(b, nap_sym(c.m33, 4))
     b = nap_cat(b, nap_amt(c.r40))
     b = nap_cat(b, nap_amt(c.r50))
     b = nap_cat(b, nap_amt(c.r60))
-    b = nap_cat(b, nap_amt(vat_z()))
-    b = nap_cat(b, nap_amt(vat_z()))
-    b = nap_cat(b, nap_amt(vat_z()))
-    b = nap_cat(b, nap_amt(vat_z()))
-    b = nap_cat(b, nap_amt(vat_z()))
+    b = nap_cat(b, nap_amt(c.m70))
+    b = nap_cat(b, nap_amt(c.m71))
+    b = nap_cat(b, nap_amt(c.m80))
+    b = nap_cat(b, nap_amt(c.m81))
+    b = nap_cat(b, nap_amt(c.m82))
     return nap_cat(b, nap_crlf())
 }
 

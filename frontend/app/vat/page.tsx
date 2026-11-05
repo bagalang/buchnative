@@ -57,6 +57,12 @@ interface VatPack {
   refund: string;
   vies_parties: VatParty[];
   vies_count: number;
+  manual_cell_33: string;
+  manual_cell_70: string;
+  manual_cell_71: string;
+  manual_cell_80: string;
+  manual_cell_81: string;
+  manual_cell_82: string;
 }
 
 function prevPeriod(): { year: string; month: string } {
@@ -79,6 +85,15 @@ const SECTION_A: string[] = [
 const SECTION_B: string[] = ["01-30", "01-31", "01-41", "01-32", "01-42", "01-43"];
 const SECTION_C: string[] = [
   "01-33", "01-40", "01-50", "01-60", "01-70", "01-71", "01-80", "01-81", "01-82",
+];
+
+const MANUAL_CELLS: { key: string; labelKey: string; num: boolean }[] = [
+  { key: "cell_33", labelKey: "vat.manual_cell_33", num: false },
+  { key: "cell_70", labelKey: "vat.manual_cell_70", num: true },
+  { key: "cell_71", labelKey: "vat.manual_cell_71", num: true },
+  { key: "cell_80", labelKey: "vat.manual_cell_80", num: true },
+  { key: "cell_81", labelKey: "vat.manual_cell_81", num: true },
+  { key: "cell_82", labelKey: "vat.manual_cell_82", num: true },
 ];
 
 function cellKey(code: string): string {
@@ -126,6 +141,10 @@ function VatInner() {
   const [data, setData] = useState<VatPack | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [manual, setManual] = useState<Record<string, string>>({});
+  const [savingManual, setSavingManual] = useState(false);
+  const [manualMsg, setManualMsg] = useState("");
+  const [manualErr, setManualErr] = useState("");
 
   const period = `${year}-${month}`;
 
@@ -135,6 +154,14 @@ function VatInner() {
     try {
       const r = await api.get<VatPack>(`/v1/vat/registers?period=${encodeURIComponent(period)}`);
       setData(r);
+      setManual({
+        cell_33: r.manual_cell_33 ?? "0.00",
+        cell_70: r.manual_cell_70 ?? "0,00",
+        cell_71: r.manual_cell_71 ?? "0,00",
+        cell_80: r.manual_cell_80 ?? "0,00",
+        cell_81: r.manual_cell_81 ?? "0,00",
+        cell_82: r.manual_cell_82 ?? "0,00",
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setData(null);
@@ -142,6 +169,21 @@ function VatInner() {
       setLoading(false);
     }
   }, [period]);
+
+  const saveManual = async () => {
+    setSavingManual(true);
+    setManualMsg("");
+    setManualErr("");
+    try {
+      await api.put(`/v1/vat/manual?period=${encodeURIComponent(period)}`, manual);
+      setManualMsg(t("vat.manual_saved"));
+      await load();
+    } catch (e) {
+      setManualErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSavingManual(false);
+    }
+  };
 
   useEffect(() => {
     void load();
@@ -425,6 +467,36 @@ function VatInner() {
               <div className="card content" style={{ marginBottom: 18 }}>
                 <h3 className="section-title">{t("vat.section_c")}</h3>
                 <CellTable codes={SECTION_C} cells={data.cells} t={t} />
+              </div>
+              <div className="card content" style={{ marginBottom: 18 }}>
+                <h3 className="section-title">{t("vat.manual_title")}</h3>
+                <p className="muted">{t("vat.manual_hint")}</p>
+                <div className="form-grid">
+                  {MANUAL_CELLS.map((c) => (
+                    <div className="field" key={c.key}>
+                      <label className="label">{t(c.labelKey)}</label>
+                      <input
+                        className="input"
+                        value={manual[c.key] ?? ""}
+                        onChange={(e) =>
+                          setManual({ ...manual, [c.key]: e.target.value.replace(",", ".") })
+                        }
+                      />
+                    </div>
+                  ))}
+                </div>
+                <div className="form-actions">
+                  <button
+                    className="btn btn-primary"
+                    type="button"
+                    disabled={savingManual}
+                    onClick={() => void saveManual()}
+                  >
+                    {savingManual ? t("common.saving") : t("vat.manual_save")}
+                  </button>
+                </div>
+                {manualMsg && <div className="success-text">{manualMsg}</div>}
+                {manualErr && <div className="error-text">{manualErr}</div>}
               </div>
             </>
           )}

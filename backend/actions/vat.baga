@@ -5,6 +5,7 @@
 
 import "../models/journal.baga"
 import "../models/company.baga"
+import "../models/vat_manual.baga"
 import "vat_fmt.baga"
 import "acl.baga"
 import "vat_line.baga"
@@ -132,6 +133,7 @@ fn vat_collect(db: OrmDb, period: str) -> VatPack !IO !Net {
     if orm_nrows(cq) < 1 {
         return vat_pack_err(orm_db_q(cq), "няма фирма за ДДС")
     }
+    let company_id_of_pack = orm_cell_by_i64(cq, 0, "id")
     let company_name = orm_cell_by(cq, 0, "name")
     let company_vat = orm_cell_by(cq, 0, "vat_number")
     let submitter = vat_company_submitter(cq)
@@ -211,6 +213,16 @@ fn vat_collect(db: OrmDb, period: str) -> VatPack !IO !Net {
         i = i + 1
     }
     cells = vat_cells_finish(cells)
+    // Ръчно въведени клетки за периода (същата фирма като пакета).
+    let mq = vat_manual_find(db2, company_id_of_pack, period)?
+    if orm_ok_q(mq) == 1 && orm_nrows(mq) > 0 {
+        cells.m33 = orm_cell_by(mq, 0, "cell_33")
+        cells.m70 = vat_parse_amt(orm_cell_by(mq, 0, "cell_70"))
+        cells.m71 = vat_parse_amt(orm_cell_by(mq, 0, "cell_71"))
+        cells.m80 = vat_parse_amt(orm_cell_by(mq, 0, "cell_80"))
+        cells.m81 = vat_parse_amt(orm_cell_by(mq, 0, "cell_81"))
+        cells.m82 = vat_parse_amt(orm_cell_by(mq, 0, "cell_82"))
+    }
     let dek = vat_deklar(company_vat, company_name, period_fin, submitter, cells)
     // VIES: държавите се сортират по ДДС номер; нулевите агрегати се махат.
     let sv = vat_sort_vins(vins)
@@ -292,6 +304,12 @@ fn vat_pack_json(p: VatPack) -> JObj {
     o = jobj_str(o, "cell_82", vat_money(p.cells.r60))
     o = jobj_arr(o, "vies_parties", p.vies_parties)
     o = jobj_i64(o, "vies_count", p.vies_count)
+    o = jobj_str(o, "manual_cell_33", p.cells.m33)
+    o = jobj_str(o, "manual_cell_70", vat_money(p.cells.m70))
+    o = jobj_str(o, "manual_cell_71", vat_money(p.cells.m71))
+    o = jobj_str(o, "manual_cell_80", vat_money(p.cells.m80))
+    o = jobj_str(o, "manual_cell_81", vat_money(p.cells.m81))
+    o = jobj_str(o, "manual_cell_82", vat_money(p.cells.m82))
     return o
 }
 
@@ -362,4 +380,56 @@ fn act_vat_export(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         return vat_file_resp(p.db, z, "application/zip", concat(concat("PPDDS_", p.period_fin), ".zip"))
     }
     return vat_file_resp(p.db, p.dek, "text/plain; charset=windows-1251", "DEKLAR.TXT")
+}
+
+// Запис на ръчно въведените ДДС клетки за период.
+fn act_vat_manual_save(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "vat:read")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let raw = fmr_query(ctx, "period")
+    let period = vat_period_ok(raw)
+    if period == "" {
+        if raw == "" {
+            return vat_need_period(ctx, db)
+        }
+        return act_err(db, 400, "period трябва да е YYYY-MM или YYYYMM")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let c33 = vat_manual_field(b.doc, b.root, "cell_33", "0.00")
+    let c70 = vat_manual_field(b.doc, b.root, "cell_70", "0")
+    let c71 = vat_manual_field(b.doc, b.root, "cell_71", "0")
+    let c80 = vat_manual_field(b.doc, b.root, "cell_80", "0")
+    let c81 = vat_manual_field(b.doc, b.root, "cell_81", "0")
+    let c82 = vat_manual_field(b.doc, b.root, "cell_82", "0")
+    let cq = company_all(db)?
+    if orm_ok_q(cq) == 0 || orm_nrows(cq) < 1 {
+        return act_err(orm_db_q(cq), 422, "няма фирма за ДДС")
+    }
+    let cid = orm_cell_by_i64(cq, 0, "id")
+    let sv = vat_manual_save(orm_db_q(cq), cid, period, c33, c70, c71, c80, c81, c82)?
+    if orm_ok(sv) == 0 {
+        return act_err(orm_db_exec(sv), 500, orm_err_exec(sv))
+    }
+    let p = vat_collect(orm_db_exec(sv), period)?
+    if p.ok == 0 {
+        return act_err(p.db, 500, p.err)
+    }
+    return act_ok(p.db, vat_pack_json(p))
+}
+
+fn vat_manual_field(d: JsonDoc, root: i64, key: str, def: str) -> str {
+    let f = jopt_str(d, root, key, def)
+    return f.val
 }
