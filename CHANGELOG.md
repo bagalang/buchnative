@@ -1,5 +1,18 @@
 # История на версиите — buchnative
 
+## 0.9.10 — 2026-11-07
+
+Премахване на boilaDB поддържката.
+
+- Историческият boilaDB набор миграции (`schema_boila_*`, ~930 реда) е изтрит —
+  buchnative не работи с boilaDB, а наборът беше вече изостанал с 4 миграции.
+- `act_s3_backup` вече не подава boilaDB връзка на sidecar-а: при
+  `ORM_BACKEND=drock` sidecar-ът прави KV dump и не му трябва PG wire.
+- Текстовете в Глобални настройки вече не твърдят, че архивът е boilaDB COPY
+  dump (на drock е логички KV dump).
+- Документите са обновени: `docs/data-model.md`, `docs/architecture.md`,
+  `docs/conventions.md`, `README.md`.
+
 ## 0.9.9 — 2026-11-06
 
 Предложение на код по КН8 при артикул.

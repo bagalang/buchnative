@@ -40,9 +40,9 @@ fn boot_migrate() -> i64 !Net !IO !Random !Time {
         orm_close(db)?
         return 0
     }
-    // buchnative_migrations_auto: Postgres набор или историческия boila набор
-    // (ORM_BACKEND=). Нови boila миграции ползват текущия BoilaSQL (P20–P29).
-    let set = buchnative_migrations_auto()?
+    // Миграциите са само за PostgreSQL. На rocksbaga (ORM_BACKEND=drock) този
+    // път не се изпълнява — там се пуска buchnative_kv_migrate по-горе.
+    let set = buchnative_migrations()?
     let up = migrate_up(db, set)?
     if migrate_is_ok(up) == 0 {
         print(concat("migrate failed: ", migrate_err_str(up)))

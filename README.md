@@ -192,10 +192,11 @@ buchnative е **отделно репозиторий** (`github.com:bagalang/bu
 - ormbaga `a2e68b0` — multi-column UPDATE (презаписваше SET списъка)
 - boilaDB `c7d5fbb` — числови низове с водещи нули вече не се инференцират като числа
 
-Миграциите от bagabuch (dual набор `schema_pg_*` / `schema_boila_*`) **не се
-прилагат** върху rocksbaga — KV е безсхематичен, а `ORM_BACKEND=drock` ги
-пропуска в `start.baga`. Остават в дървото само като справка за колоните и
-техните по подразбиране стойности.
+Миграциите от bagabuch (`schema_pg_*`) **не се прилагат** върху rocksbaga —
+KV е безсхематичен, а `ORM_BACKEND=drock` ги пропуска в `start.baga`. Остават
+в дървото само като справка за колоните и техните по подразбиране стойности.
+Историческия boilaDB набор (`schema_boila_*`) е премахнат — buchnative не се
+използва с boilaDB.
 
 Жив архив от админа: Python sidecar dump към rocksbaga (`LSMPATH`) → S3.
 Физическият checkpoint е операция на сървъра (`CHECKPOINT` / `BACKUP` през

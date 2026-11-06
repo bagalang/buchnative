@@ -159,10 +159,10 @@ S3 архивът е **логически dump**: обхождат се редо
 drockb, виж `app-product/drockb`), но той е офлайн/сървърна операция, не
 алтернатива на логическия dump за архив.
 
-**Известна дупка:** `scripts/py/dump.py` (Python sidecar) още говори PG wire
-и прави `COPY TO STDOUT` — това е оцелял код от boilaDB епохата и трябва да
-смени на обхождане на KV редовете. `dev.sh` вече му подава `LSMPATH` /
-`DROCK_PORT`, а не PG env — значи самият скрипт е следващата стъпка.
+**Не се ползва за drock:** `scripts/py/dump.py` (Python sidecar) говори PG
+wire и прави `COPY TO STDOUT` — това е останал код от boilaDB епохата. При
+`ORM_BACKEND=drock` sidecar-ът вече избира `kvdump.py` (RESP2 SCAN), таче
+`dump.py` е само резервен път за PG-wire източник и buchnative го не достига.
 
 ## SAF-T номенклатури
 
