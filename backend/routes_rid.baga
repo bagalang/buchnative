@@ -202,3 +202,8 @@ fn RID_MI_UPDATE() -> i64 { return 282 }
 fn RID_MI_DELETE() -> i64 { return 283 }
 fn RID_MI_CONFIRM() -> i64 { return 284 }
 fn RID_MI_UNPOST() -> i64 { return 285 }
+
+// Профил: име, парола, имейл.
+fn RID_ME_NAME() -> i64 { return 286 }
+fn RID_ME_PASSWORD() -> i64 { return 287 }
+fn RID_ME_EMAIL() -> i64 { return 288 }

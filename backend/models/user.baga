@@ -108,3 +108,31 @@ fn user_list_json(q: OrmQuery) -> JObj {
     o = jobj_i64(o, "count", orm_nrows(q))
     return o
 }
+
+// Смяна на парола: хешът зависи от имейла, затова се преизчислява.
+fn user_set_password(db: OrmDb, id: i64, email: str, password: str) -> OrmExec !IO !Net {
+    let cols: Vec<str> = vec_new()
+    vec_push(cols, "password_hash")
+    let vals: Vec<str> = vec_new()
+    vec_push(vals, user_hash_password(email, password))
+    return orm_update_by_id(db, user_table(), id, cols, vals)?
+}
+
+// Смяна на имейл: паролата се прехешира с новия имейл.
+fn user_set_email(db: OrmDb, id: i64, new_email: str, password: str) -> OrmExec !IO !Net {
+    let cols: Vec<str> = vec_new()
+    vec_push(cols, "email")
+    vec_push(cols, "password_hash")
+    let vals: Vec<str> = vec_new()
+    vec_push(vals, new_email)
+    vec_push(vals, user_hash_password(new_email, password))
+    return orm_update_by_id(db, user_table(), id, cols, vals)?
+}
+
+fn user_set_name(db: OrmDb, id: i64, name: str) -> OrmExec !IO !Net {
+    let cols: Vec<str> = vec_new()
+    vec_push(cols, "name")
+    let vals: Vec<str> = vec_new()
+    vec_push(vals, name)
+    return orm_update_by_id(db, user_table(), id, cols, vals)?
+}

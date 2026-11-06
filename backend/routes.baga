@@ -23,6 +23,7 @@ import "actions/invoices_ubl.baga"
 import "actions/invoices_post.baga"
 import "actions/invoices_special.baga"
 import "actions/material_issue.baga"
+import "actions/profile.baga"
 import "actions/journal.baga"
 import "actions/vat.baga"
 import "actions/saft.baga"
@@ -154,6 +155,9 @@ fn fmr_build_app() -> FmrApp !IO {
     app = fmr_route_meta(app, "POST", "/v1/material-issues/{id}/unpost", RID_MI_UNPOST(), "", "material-issues", 0, "", "MaterialIssue", "200", "")
     app = fmr_route_meta(app, "POST", "/v1/invoices/{id}/issue-protocol", RID_INVOICES_ISSUE_PROTOCOL(), "", "invoices", 0, "IssueProtocol", "Invoice", "201", "")
     app = fmr_route_meta(app, "POST", "/v1/invoices/{id}/issue-customs", RID_INVOICES_ISSUE_CUSTOMS(), "", "invoices", 0, "IssueCustoms", "Invoice", "201", "")
+    app = fmr_route_meta(app, "POST", "/v1/me/name", RID_ME_NAME(), "", "profile", 0, "ProfileName", "Message", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/me/password", RID_ME_PASSWORD(), "", "profile", 0, "ProfilePassword", "TokenResponse", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/me/email", RID_ME_EMAIL(), "", "profile", 0, "ProfileEmail", "TokenResponse", "200", "")
     app = fmr_route_meta(app, "GET", "/v1/vat/registers", RID_VAT_REGISTERS(), "", "vat", 0, "", "VatRegisters", "200", "period")
     app = fmr_route_meta(app, "GET", "/v1/vat/return", RID_VAT_RETURN(), "", "vat", 0, "", "VatReturn", "200", "period")
     app = fmr_route_meta(app, "GET", "/v1/vat/export", RID_VAT_EXPORT(), "", "vat", 0, "", "-", "200", "period,type:s")
@@ -370,6 +374,9 @@ fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     if id == RID_MI_UNPOST() { return act_mi_unpost(ctx, db)? }
     if id == RID_INVOICES_ISSUE_PROTOCOL() { return act_invoices_issue_protocol(ctx, db)? }
     if id == RID_INVOICES_ISSUE_CUSTOMS() { return act_invoices_issue_customs(ctx, db)? }
+    if id == RID_ME_NAME() { return act_me_name(ctx, db)? }
+    if id == RID_ME_PASSWORD() { return act_me_password(ctx, db)? }
+    if id == RID_ME_EMAIL() { return act_me_email(ctx, db)? }
     if id == RID_VAT_REGISTERS() { return act_vat_registers(ctx, db)? }
     if id == RID_VAT_RETURN() { return act_vat_return(ctx, db)? }
     if id == RID_VAT_EXPORT() { return act_vat_export(ctx, db)? }

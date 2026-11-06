@@ -46,6 +46,7 @@ const NAV_ITEMS = [
   { href: "/fixed-assets", key: "nav.fixed_assets" },
   { href: "/admin", key: "nav.admin" },
   { href: "/security", key: "nav.security" },
+  { href: "/profile", key: "nav.profile" },
   { href: "/users", key: "nav.users" },
   { href: "/roles", key: "nav.roles" },
 ];

@@ -1,0 +1,143 @@
+// actions/profile.baga — профил на текущия потребител: име, парола, имейл.
+//
+// Паролата се проверява с текущия хеш (хешът зависи от имейла), а при смяна
+// на имейла паролата се прехешира с новия имейл. След смяна се връща нов токен.
+
+import "../models/user.baga"
+import "auth.baga"
+import "acl.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+fn act_me_name(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let f = jreq_str(b.doc, b.root, "name")
+    if f.ok == 0 || str_trim(f.val) == "" {
+        return act_422_field(db, "name", f)
+    }
+    let uq = user_by_email(db, auth.ctx.user_sub)?
+    if orm_ok_q(uq) == 0 || orm_nrows(uq) < 1 {
+        return act_err(orm_db_q(uq), 404, "потребителят не е намерен")
+    }
+    let up = user_set_name(orm_db_q(uq), orm_cell_by_i64(uq, 0, "id"), str_trim(f.val))?
+    if orm_ok(up) == 0 {
+        return act_err(orm_db_exec(up), 500, orm_err_exec(up))
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "message", "Името е записано")
+    o = jobj_str(o, "name", str_trim(f.val))
+    return act_ok(orm_db_exec(up), o)
+}
+
+// Текущата парола се сверява с хеша (хешът е с текущия имейл).
+fn act_me_password(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let cur = jreq_str(b.doc, b.root, "current_password")
+    let newp = jreq_str(b.doc, b.root, "new_password")
+    if cur.ok == 0 || str_trim(cur.val) == "" {
+        return act_422_field(db, "current_password", cur)
+    }
+    if newp.ok == 0 || str_trim(newp.val) == "" {
+        return act_422_field(db, "new_password", newp)
+    }
+    if len(str_trim(newp.val)) < 8 {
+        return act_err(db, 422, "паролата трябва да е поне 8 символа")
+    }
+    let uq = user_by_email(db, auth.ctx.user_sub)?
+    if orm_ok_q(uq) == 0 || orm_nrows(uq) < 1 {
+        return act_err(orm_db_q(uq), 404, "потребителят не е намерен")
+    }
+    let email = orm_cell_by(uq, 0, "email")
+    let hash = orm_cell_by(uq, 0, "password_hash")
+    if user_hash_password(email, str_trim(cur.val)) != hash {
+        return act_err(orm_db_q(uq), 401, "грешна парола")
+    }
+    let up = user_set_password(orm_db_q(uq), orm_cell_by_i64(uq, 0, "id"), email, str_trim(newp.val))?
+    if orm_ok(up) == 0 {
+        return act_err(orm_db_exec(up), 500, orm_err_exec(up))
+    }
+    // Нов токен след смяна (старият остава валиден — няма версии на сесиите).
+    return auth_issue(auth.ctx, orm_db_exec(up), email)
+}
+
+fn act_me_email(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let f = jreq_str(b.doc, b.root, "email")
+    if f.ok == 0 || str_trim(f.val) == "" {
+        return act_422_field(db, "email", f)
+    }
+    let em = str_trim(f.val)
+    // auth_default_sub() е идентификатор без '@' (напр. "superadmin") — валиден е.
+    if (str_find(em, "@") < 1 && em != auth_default_sub()) || str_find(em, " ") >= 0 || len(em) > 200 {
+        return act_err(db, 422, "имейлът е невалиден")
+    }
+    let cur = jreq_str(b.doc, b.root, "current_password")
+    if cur.ok == 0 || str_trim(cur.val) == "" {
+        return act_422_field(db, "current_password", cur)
+    }
+    let uq = user_by_email(db, auth.ctx.user_sub)?
+    if orm_ok_q(uq) == 0 || orm_nrows(uq) < 1 {
+        return act_err(orm_db_q(uq), 404, "потребителят не е намерен")
+    }
+    let old_email = orm_cell_by(uq, 0, "email")
+    let hash = orm_cell_by(uq, 0, "password_hash")
+    if user_hash_password(old_email, str_trim(cur.val)) != hash {
+        return act_err(orm_db_q(uq), 401, "грешна парола")
+    }
+    let taken = user_by_email(orm_db_q(uq), em)?
+    if orm_ok_q(taken) == 1 && orm_nrows(taken) > 0 {
+        return act_err(orm_db_q(taken), 409, "имейлът вече се ползва")
+    }
+    let up = user_set_email(orm_db_q(taken), orm_cell_by_i64(uq, 0, "id"), em, str_trim(cur.val))?
+    if orm_ok(up) == 0 {
+        return act_err(orm_db_exec(up), 500, orm_err_exec(up))
+    }
+    // Имейлът е в токена — връщаме нов.
+    return auth_issue(auth.ctx, orm_db_exec(up), em)
+}
