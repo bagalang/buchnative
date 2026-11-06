@@ -40,6 +40,7 @@ function AuditInner() {
   const [from, setFrom] = useState(monthAgo());
   const [to, setTo] = useState(todayIso());
   const [entity, setEntity] = useState("");
+  const [entityId, setEntityId] = useState("");
   const [items, setItems] = useState<AuditRow[]>([]);
   const [offset, setOffset] = useState(0);
   const [limit] = useState(50);
@@ -53,6 +54,7 @@ function AuditInner() {
       try {
         const q = new URLSearchParams({ from, to, limit: String(limit), offset: String(off) });
         if (entity) q.set("entity", entity);
+        if (entityId) q.set("entity_id", entityId);
         const data = await api.get<ListResponse<AuditRow>>(`/v1/audit?${q.toString()}`);
         setItems(data.items ?? []);
         setOffset(off);
@@ -62,7 +64,7 @@ function AuditInner() {
         setLoading(false);
       }
     },
-    [from, to, entity, limit]
+    [from, to, entity, entityId, limit]
   );
 
   useEffect(() => {
@@ -111,6 +113,16 @@ function AuditInner() {
           </select>
         </div>
         <div className="field">
+          <label className="label">{t("audit.entity_id")}</label>
+          <input
+            className="input"
+            type="number"
+            min={0}
+            value={entityId}
+            onChange={(e) => setEntityId(e.target.value)}
+          />
+        </div>
+        <div className="field">
           <label className="label">&nbsp;</label>
           <button className="btn btn-primary" type="button" onClick={() => load(0)}>
             {t("audit.apply")}
@@ -146,7 +158,21 @@ function AuditInner() {
                   ) : null}
                 </td>
                 <td>{t(`audit.entity.${r.entity_type}`)}</td>
-                <td>{r.entity_number}</td>
+                <td>
+                  <a
+                    href="#"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setEntityId(String(r.entity_id));
+                      setEntity(r.entity_type);
+                      setFrom("2000-01-01");
+                      setTo("2100-01-01");
+                    }}
+                    title={t("audit.filter_entity")}
+                  >
+                    {r.entity_number}
+                  </a>
+                </td>
                 <td>
                   <span className="badge">{r.action}</span>
                 </td>

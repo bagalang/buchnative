@@ -500,3 +500,82 @@ fn act_journal_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     audit_record(orm_db_exec(cmt), ac.id, auth.ctx.user_sub, "journal", id, "", "delete", "Изтрит запис от дневника", "", "", "")
     return act_no_content(orm_db_exec(cmt))
 }
+
+// Масово изтриване на записи от дневника. Всеки запис се проверява отделно —
+// неуспелят на един не спира останалите.
+fn act_journal_bulk_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    let auth = act_require_perm(ctx, db, "accounting:write")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let ids = json_get(b.doc, b.root, "ids")
+    if ids < 0 || json_tag(b.doc, ids) != 5 {
+        return act_err(db, 400, "ids е задължителен масив")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let ac = active_company_id(db, auth.ctx.user_sub)
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let mut d = ac.db
+    let n = json_count(b.doc, ids)
+    let mut arr = jarr_new()
+    let mut done: i64 = 0
+    let mut failed: i64 = 0
+    let mut i: i64 = 0
+    while i < n {
+        let el = json_at(b.doc, ids, i)
+        let id = parse_int(json_str(b.doc, el))
+        let mut item_ok: i64 = 0
+        if id > 0 {
+            let q = journal_find(d, id)?
+            d = orm_db_q(q)
+            if orm_ok_q(q) == 1 && orm_nrows(q) > 0 {
+                if orm_cell_by_i64(q, 0, "company_id") == 0 || orm_cell_by_i64(q, 0, "company_id") == ac.id {
+                    let bgn = bb_begin(d)?
+                    if orm_ok(bgn) == 1 {
+                        let del = journal_delete_entry(orm_db_exec(bgn), id)?
+                        if orm_ok(del) == 1 {
+                            let cmt = bb_commit(orm_db_exec(del))?
+                            if orm_ok(cmt) == 1 {
+                                d = orm_db_exec(cmt)
+                                item_ok = 1
+                                done = done + 1
+                                audit_record(d, ac.id, auth.ctx.user_sub, "journal", id, "", "delete", "Изтрит запис от дневника", "", "", "")
+                            } else {
+                                d = orm_db_exec(cmt)
+                            }
+                        } else {
+                            d = orm_db_exec(del)
+                        }
+                    } else {
+                        d = orm_db_exec(bgn)
+                    }
+                }
+            }
+        }
+        if item_ok == 0 {
+            failed = failed + 1
+        }
+        let mut o = jobj_new()
+        o = jobj_i64(o, "id", id)
+        o = jobj_i64(o, "ok", item_ok)
+        arr = jarr_obj(arr, o)
+        i = i + 1
+    }
+    let mut out = jobj_new()
+    out = jobj_i64(out, "deleted", done)
+    out = jobj_i64(out, "failed", failed)
+    out = jobj_raw(out, "items", jarr_encode(arr))
+    return act_ok(d, out)
+}

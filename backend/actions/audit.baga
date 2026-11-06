@@ -64,9 +64,10 @@ fn act_audit_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     let from = audit_q(ctx, "from", "2000-01-01")
     let to = audit_q(ctx, "to", "2100-01-01")
     let et = fmr_query(ctx, "entity")
+    let eid = parse_int(fmr_query(ctx, "entity_id"))
     let limit = parse_int(audit_q(ctx, "limit", "50"))
     let offset = parse_int(audit_q(ctx, "offset", "0"))
-    let q = audit_by_company(d, ac.id, from, to, et, limit, offset)?
+    let q = audit_by_company(d, ac.id, from, to, et, eid, limit, offset)?
     if orm_ok_q(q) == 0 {
         return act_err(orm_db_q(q), 500, orm_err_q(q))
     }

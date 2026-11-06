@@ -124,7 +124,7 @@ fn audit_day_le(a: str, b: str) -> i64 {
 
 // Редове на фирмата (индекс по company_id), филтрирани по дати и вид обект.
 // Редът е по id (ред на запис).
-fn audit_by_company(db: OrmDb, company_id: i64, from: str, to: str, entity_type: str, limit: i64, offset: i64) -> OrmQuery !IO !Net {
+fn audit_by_company(db: OrmDb, company_id: i64, from: str, to: str, entity_type: str, entity_id: i64, limit: i64, offset: i64) -> OrmQuery !IO !Net {
     let q = kv_select_where(db, audit_table(), "company_id", int_to_str(company_id), audit_cols())?
     if orm_ok_q(q) == 0 {
         return q
@@ -137,18 +137,21 @@ fn audit_by_company(db: OrmDb, company_id: i64, from: str, to: str, entity_type:
     while i < orm_nrows(q) {
         let day = orm_cell_by(q, i, "created_at")
         let et = orm_cell_by(q, i, "entity_type")
+        let eid = orm_cell_by_i64(q, i, "entity_id")
         if audit_day_ge(day, from) == 1 && audit_day_le(day, to) == 1 {
             if entity_type == "" || et == entity_type {
-                if matched >= offset && (limit <= 0 || pushed < limit) {
-                    let mut c: i64 = 0
-                    while c < vec_len(audit_cols()) {
-                        vec_push(cells, orm_cell(q, i, c))
-                        vec_push(nulls, 0)
-                        c = c + 1
+                if entity_id <= 0 || eid == entity_id {
+                    if matched >= offset && (limit <= 0 || pushed < limit) {
+                        let mut c: i64 = 0
+                        while c < vec_len(audit_cols()) {
+                            vec_push(cells, orm_cell(q, i, c))
+                            vec_push(nulls, 0)
+                            c = c + 1
+                        }
+                        pushed = pushed + 1
                     }
-                    pushed = pushed + 1
+                    matched = matched + 1
                 }
-                matched = matched + 1
             }
         }
         i = i + 1

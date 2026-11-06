@@ -9,11 +9,17 @@ import { useI18n } from "../../components/I18nProvider";
 import { api, ListResponse } from "../../lib/api";
 import { IconButton } from "../../components/IconButton";
 
-type Tab = "app" | "smtp" | "s3" | "auth";
+type Tab = "app" | "smtp" | "s3" | "auth" | "db";
 
 interface Setting {
   key: string;
   value: string;
+}
+
+interface DbCheck {
+  id: string;
+  ok: number;
+  detail: string;
 }
 
 interface Backup {
@@ -73,6 +79,8 @@ function AdminInner() {
   const [error, setError] = useState("");
   const [testTo, setTestTo] = useState("");
   const [backups, setBackups] = useState<Backup[]>([]);
+  const [dbChecks, setDbChecks] = useState<DbCheck[]>([]);
+  const [dbOk, setDbOk] = useState(1);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -164,6 +172,22 @@ function AdminInner() {
     }
   };
 
+  const runDbCheck = async () => {
+    setBusy("db");
+    setError("");
+    try {
+      const r = await api.get<{ ok: number; checks?: DbCheck[] }>("/v1/system-settings/db-check");
+      setDbChecks(r.checks ?? []);
+      setDbOk(r.ok);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setDbChecks([]);
+      setDbOk(0);
+    } finally {
+      setBusy("");
+    }
+  };
+
   const loadBackups = async () => {
     try {
       const r = await api.get<{ items?: Backup[] }>("/v1/system-settings/s3-backups");
@@ -212,7 +236,7 @@ function AdminInner() {
         {t("admin.hint")}
       </p>
       <div className="tabs">
-        {(["app", "smtp", "s3", "auth"] as Tab[]).map((k) => (
+        {(["app", "smtp", "s3", "auth", "db"] as Tab[]).map((k) => (
           <button
             key={k}
             type="button"
@@ -292,6 +316,44 @@ function AdminInner() {
             </button>
           </div>
         </form>
+      )}
+
+      {tab === "db" && (
+        <div className="card content">
+          <p className="muted">{t("admin.db.hint")}</p>
+          <div className="form-actions">
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={busy === "db"}
+              onClick={() => void runDbCheck()}
+            >
+              {busy === "db" ? t("common.loading") : t("admin.db.run")}
+            </button>
+          </div>
+          {dbChecks.length > 0 && (
+            <table className="table" style={{ marginTop: 12 }}>
+              <thead>
+                <tr>
+                  <th>{t("admin.db.check")}</th>
+                  <th>{t("admin.db.result")}</th>
+                  <th>{t("admin.db.detail")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dbChecks.map((c) => (
+                  <tr key={c.id}>
+                    <td>{c.id}</td>
+                    <td>
+                      <span className="badge">{c.ok === 1 ? t("admin.db.ok") : t("admin.db.failed")}</span>
+                    </td>
+                    <td>{c.detail}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
       )}
 
       {tab === "auth" && (

@@ -102,6 +102,8 @@ function JournalInner() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [q, setQ] = useState("");
+  const [selected, setSelected] = useState<number[]>([]);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   // модал
   const [modalOpen, setModalOpen] = useState(false);
@@ -117,6 +119,34 @@ function JournalInner() {
   const [lines, setLines] = useState<LineDraft[]>([emptyLine()]);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
+
+  const toggleOne = (id: number, on: boolean) => {
+    setSelected((prev) => (on ? [...prev, id] : prev.filter((x) => x !== id)));
+  };
+
+  const toggleAll = (on: boolean) => {
+    setSelected(on ? filteredEntries.map((e) => e.id) : []);
+  };
+
+  const bulkDelete = async () => {
+    if (!window.confirm(t("journal.bulk_delete_confirm"))) return;
+    setBulkBusy(true);
+    setError("");
+    try {
+      const r = await api.post<{ deleted: number; failed: number }>("/v1/journal/bulk/delete", {
+        ids: selected,
+      });
+      setSelected([]);
+      await load();
+      if (r.failed > 0) {
+        setError(`${t("journal.bulk_delete_partial")}: ${r.deleted} / ${r.failed}`);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBulkBusy(false);
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -308,6 +338,29 @@ function JournalInner() {
         />
       </div>
 
+      {selected.length > 0 && (
+        <div className="card content" style={{ marginBottom: 12 }}>
+          <span className="muted">{t("journal.selected")}: {selected.length}</span>
+          <div className="btn-row" style={{ marginTop: 8 }}>
+            <button
+              className="btn btn-danger"
+              type="button"
+              disabled={bulkBusy}
+              onClick={() => void bulkDelete()}
+            >
+              {t("journal.bulk_delete")}
+            </button>
+            <button
+              className="btn"
+              type="button"
+              onClick={() => setSelected([])}
+            >
+              {t("journal.clear_selection")}
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="card">
         {loading ? (
           <div className="content muted">{t("common.loading")}</div>
@@ -318,6 +371,13 @@ function JournalInner() {
             <table className="table">
               <thead>
                 <tr>
+                  <th style={{ width: 32 }}>
+                    <input
+                      type="checkbox"
+                      checked={filteredEntries.length > 0 && selected.length === filteredEntries.length}
+                      onChange={(e) => toggleAll(e.target.checked)}
+                    />
+                  </th>
                   <th>{t("journal.entry_date")}</th>
                   <th>{t("journal.document")}</th>
                   <th>{t("journal.description")}</th>
@@ -333,6 +393,13 @@ function JournalInner() {
                     onClick={() => void openEdit(en)}
                     style={{ cursor: "pointer" }}
                   >
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={selected.includes(en.id)}
+                        onChange={(e) => toggleOne(en.id, e.target.checked)}
+                      />
+                    </td>
                     <td>{formatBgDate(en.entry_date)}</td>
                     <td>{docLabel(en)}</td>
                     <td>{en.description}</td>

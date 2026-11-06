@@ -207,3 +207,12 @@ fn RID_MI_UNPOST() -> i64 { return 285 }
 fn RID_ME_NAME() -> i64 { return 286 }
 fn RID_ME_PASSWORD() -> i64 { return 287 }
 fn RID_ME_EMAIL() -> i64 { return 288 }
+
+// Склад: справка.
+fn RID_STOCK_REPORT() -> i64 { return 289 }
+
+// Интегритет на базата.
+fn RID_DB_CHECK() -> i64 { return 290 }
+
+// Масово изтриване на записи в дневника.
+fn RID_JOURNAL_BULK_DELETE() -> i64 { return 291 }

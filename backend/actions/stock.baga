@@ -1,0 +1,53 @@
+// actions/stock.baga — складова справка (приход, разход, наличности).
+//
+// Справката е четена: не пише в склада. Приходите са партидите, разходите са
+// документите в текущо състояние, наличността е преиграване според метода на
+// фирмата. Методът се взема от активната фирма, не от първата в списъка.
+
+import "../models/stock_report.baga"
+import "../models/company.baga"
+import "active_company.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+fn stock_q(ctx: FmrCtx, key: str, def: str) -> str {
+    let v = fmr_query(ctx, key)
+    if v == "" {
+        return def
+    }
+    return v
+}
+
+fn act_stock_report(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let ac = active_company_id(db, auth.ctx.user_sub)
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let cq = company_find(ac.db, ac.id)?
+    if orm_ok_q(cq) == 0 {
+        return act_err(orm_db_q(cq), 500, orm_err_q(cq))
+    }
+    let mut method = "WAC"
+    if orm_nrows(cq) > 0 {
+        let m = orm_cell_by(cq, 0, "inventory_valuation_method")
+        if m != "" {
+            method = m
+        }
+    }
+    let from = stock_q(ctx, "from", "0001-01-01")
+    let to = stock_q(ctx, "to", "9999-12-31")
+    let loc = parse_int(stock_q(ctx, "location_id", "0"))
+    let o = stk_report(orm_db_q(cq), ac.id, from, to, loc, method)?
+    return act_ok(orm_db_q(cq), o)
+}

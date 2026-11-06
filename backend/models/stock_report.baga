@@ -1,0 +1,373 @@
+// models/stock_report.baga — складова справка: приход, разход, наличности.
+//
+// Приходите са партидите (inventory_lots): те са точният запис на всяко
+// заприхождаване — покупка, производство, трансфер или начално салдо. Разходите
+// са документите в текущо състояние (потвърден/осчетоводен), защото отмяната
+// връща количеството в партидите и документът се връща в чернова.
+//
+// Наличността към дата е преиграване на разходите върху партидите според метода
+// на фирмата (WAC/FIFO/LIFO). Себестойността на разхода се взима от същото
+// преиграване, за да е съгласувана с наличността. Самото преиграване е в
+// stock_replay.baga.
+
+import "ormbaga/orm.baga"
+import "fmrbaga/jsonx.baga"
+import "bagadecimal/src/decimal.baga"
+import "std/str/str.baga"
+import "stock_replay.baga"
+import "inventory.baga"
+import "product.baga"
+import "invoice.baga"
+import "production.baga"
+import "material_issue.baga"
+import "internal_doc.baga"
+
+fn stk_report(db: OrmDb, company_id: i64, from: str, to: str, location_id: i64, method: str) -> JObj !IO !Net {
+    let mut warnings: Vec<str> = vec_new()
+    let mut flows: Vec<StkFlow> = vec_new()
+    let mut states: Map<i64, StkState> = map_new()
+    let mut names: Map<i64, str> = map_new()
+    let mut inv_set: Map<i64, i64> = map_new()
+    let mut ids: Vec<i64> = vec_new()
+    let mut seq: i64 = 0
+    let mut hi = to
+    if hi == "" || stk_date_cmp(hi, "9999-01-01") >= 0 {
+        hi = "9999-12-31"
+    }
+    let mut lo = from
+    if lo == "" {
+        lo = "0001-01-01"
+    }
+
+    // Артикулите на фирмата.
+    let pq = product_all(db)?
+    let mut d = orm_db_q(pq)
+    let mut i: i64 = 0
+    while i < orm_nrows(pq) {
+        if orm_cell_by_i64(pq, i, "company_id") == company_id {
+            let pid = orm_cell_by_i64(pq, i, "id")
+            map_set(names, pid, orm_cell_by(pq, i, "name"))
+            if orm_cell_by_i64(pq, i, "is_inventory") == 1 {
+                map_set(inv_set, pid, 1)
+                map_set(states, pid, StkState { qty: dec_zero(), val: dec_zero(), lots: vec_new() })
+                vec_push(ids, pid)
+            }
+        }
+        i = i + 1
+    }
+
+    // Документите за етикети: фактури и производствени поръчки.
+    let iq = invoice_all(d)?
+    d = orm_db_q(iq)
+    let mut inv_dir: Map<i64, str> = map_new()
+    let mut inv_num: Map<i64, str> = map_new()
+    let mut inv_day: Map<i64, str> = map_new()
+    i = 0
+    while i < orm_nrows(iq) {
+        let id = orm_cell_by_i64(iq, i, "id")
+        map_set(inv_dir, id, orm_cell_by(iq, i, "direction"))
+        map_set(inv_num, id, orm_cell_by(iq, i, "number"))
+        map_set(inv_day, id, orm_cell_by(iq, i, "issue_date"))
+        i = i + 1
+    }
+    let prq = pord_by_company(d, company_id)?
+    d = orm_db_q(prq)
+    let mut pord_num: Map<i64, str> = map_new()
+    let mut pord_day: Map<i64, str> = map_new()
+    i = 0
+    while i < orm_nrows(prq) {
+        let pid = orm_cell_by_i64(prq, i, "id")
+        map_set(pord_num, pid, orm_cell_by(prq, i, "number"))
+        map_set(pord_day, pid, orm_cell_by(prq, i, "order_date"))
+        i = i + 1
+    }
+    let miq0 = mi_by_company(d, company_id)?
+    d = orm_db_q(miq0)
+    let mut mi_num: Map<i64, str> = map_new()
+    let mut mi_day: Map<i64, str> = map_new()
+    i = 0
+    while i < orm_nrows(miq0) {
+        let pid = orm_cell_by_i64(miq0, i, "id")
+        map_set(mi_num, pid, orm_cell_by(miq0, i, "number"))
+        map_set(mi_day, pid, orm_cell_by(miq0, i, "doc_date"))
+        i = i + 1
+    }
+
+    // Партидите: състояние + приходи.
+    let lq = lot_all(d)?
+    d = orm_db_q(lq)
+    let mut lot_rem: Map<i64, Decimal> = map_new()
+    let mut lot_val: Map<i64, Decimal> = map_new()
+    i = 0
+    while i < orm_nrows(lq) {
+        let pid = orm_cell_by_i64(lq, i, "product_id")
+        if map_has(inv_set, pid) == 1 {
+            let qty = stk_dec(orm_cell_by(lq, i, "quantity"))
+            let rem = stk_dec(orm_cell_by(lq, i, "quantity_remaining"))
+            let unit = stk_dec(orm_cell_by(lq, i, "unit_cost"))
+            let loc = orm_cell_by_i64(lq, i, "location_id")
+            let day = orm_cell_by(lq, i, "received_date")
+            // Партидата след `to` още не е била приета към тази дата.
+            let past = day == "" || stk_date_cmp(day, hi) <= 0
+            if past == 1 {
+                map_set(lot_rem, pid, stk_add(map_get(lot_rem, pid), rem))
+                map_set(lot_val, pid, stk_add(map_get(lot_val, pid), stk_mul(rem, unit)))
+                let mut st = map_get(states, pid)
+                st.val = stk_add(st.val, stk_mul(qty, unit))
+                st.qty = stk_add(st.qty, qty)
+                vec_push(st.lots, StkLot { loc: loc, rem: qty, unit: unit })
+                map_set(states, pid, st)
+            }
+            if past == 1 && day != "" && stk_in_range(day, lo, hi) == 1 && stk_loc_ok(loc, location_id) == 1 {
+                let pname = map_get(names, pid)
+                let mut reason = "transfer"
+                let mut doc = ""
+                let iid = orm_cell_by_i64(lq, i, "invoice_id")
+                if iid > 0 {
+                    // invoice_id се ползва и за поръчка, и за изписване —
+                    // различава се по датата на документа.
+                    if map_has(inv_dir, iid) == 1 && map_get(inv_day, iid) == day {
+                        doc = map_get(inv_num, iid)
+                        if map_get(inv_dir, iid) == "in" {
+                            reason = "purchase"
+                        } else {
+                            reason = "sale_return"
+                        }
+                    } else {
+                        if map_has(pord_num, iid) == 1 && map_get(pord_day, iid) == day {
+                            doc = map_get(pord_num, iid)
+                            reason = "production"
+                        } else {
+                            if map_has(mi_num, iid) == 1 {
+                                doc = map_get(mi_num, iid)
+                                reason = "material_return"
+                            }
+                        }
+                    }
+                }
+                flows = stk_push_receipt(flows, day, doc, reason, seq, pid, pname, loc, stk_qty(qty), stk_money(stk_mul(qty, unit)))
+                seq = seq + 1
+            }
+        }
+        i = i + 1
+    }
+
+    // Разходи: изписване на материали.
+    let miq = mi_by_company(d, company_id)?
+    d = orm_db_q(miq)
+    i = 0
+    while i < orm_nrows(miq) {
+        if orm_cell_by(miq, i, "status") == "confirmed" {
+            let day = orm_cell_by(miq, i, "doc_date")
+            let doc = orm_cell_by(miq, i, "number")
+            let loc = orm_cell_by_i64(miq, i, "location_id")
+            let id = orm_cell_by_i64(miq, i, "id")
+            if stk_in_range(day, lo, hi) == 1 && stk_loc_ok(loc, location_id) == 1 {
+                let lq2 = mi_lines_by_doc(d, id)?
+                d = orm_db_q(lq2)
+                let mut j: i64 = 0
+                while j < orm_nrows(lq2) {
+                    let pid = orm_cell_by_i64(lq2, j, "product_id")
+                    if map_has(inv_set, pid) == 1 {
+                        flows = stk_push_issue(flows, day, doc, "material", 2, seq, pid, map_get(names, pid), loc, orm_cell_by(lq2, j, "quantity"), orm_cell_by(lq2, j, "unit_cost"))
+                        seq = seq + 1
+                    }
+                    j = j + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+
+    // Разходи: материали от производствени поръчки.
+    i = 0
+    while i < orm_nrows(prq) {
+        if orm_cell_by(prq, i, "status") == "completed" {
+            let day = orm_cell_by(prq, i, "order_date")
+            let doc = orm_cell_by(prq, i, "number")
+            let loc = orm_cell_by_i64(prq, i, "location_id")
+            let id = orm_cell_by_i64(prq, i, "id")
+            if stk_in_range(day, lo, hi) == 1 && stk_loc_ok(loc, location_id) == 1 {
+                let lq2 = pline_by_order(d, id)?
+                d = orm_db_q(lq2)
+                let mut j: i64 = 0
+                while j < orm_nrows(lq2) {
+                    let pid = orm_cell_by_i64(lq2, j, "product_id")
+                    if map_has(inv_set, pid) == 1 {
+                        flows = stk_push_issue(flows, day, doc, "production", 1, seq, pid, map_get(names, pid), loc, orm_cell_by(lq2, j, "quantity"), orm_cell_by(lq2, j, "unit_cost"))
+                        seq = seq + 1
+                    }
+                    j = j + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+
+    // Трансфер между обекти: разход в източника, приход в приемника.
+    let dq = idoc_all(d)?
+    d = orm_db_q(dq)
+    i = 0
+    while i < orm_nrows(dq) {
+        if orm_cell_by_i64(dq, i, "company_id") == company_id && orm_cell_by(dq, i, "status") == "confirmed" {
+            let day = orm_cell_by(dq, i, "doc_date")
+            let doc = orm_cell_by(dq, i, "number")
+            let from_loc = orm_cell_by_i64(dq, i, "from_location_id")
+            let to_loc = orm_cell_by_i64(dq, i, "to_location_id")
+            let id = orm_cell_by_i64(dq, i, "id")
+            if stk_in_range(day, lo, hi) == 1 && (stk_loc_ok(from_loc, location_id) == 1 || stk_loc_ok(to_loc, location_id) == 1) {
+                let lq2 = idoc_lines_by_doc(d, id)?
+                d = orm_db_q(lq2)
+                let mut j: i64 = 0
+                while j < orm_nrows(lq2) {
+                    if orm_cell_by(lq2, j, "line_kind") == "product" {
+                        let pid = orm_cell_by_i64(lq2, j, "product_id")
+                        if map_has(inv_set, pid) == 1 {
+                            let qty = orm_cell_by(lq2, j, "quantity")
+                            let uc = orm_cell_by(lq2, j, "unit_cost")
+                            if stk_loc_ok(from_loc, location_id) == 1 {
+                                flows = stk_push_issue(flows, day, doc, "transfer", 0, seq, pid, map_get(names, pid), from_loc, qty, uc)
+                                seq = seq + 1
+                            }
+                            if stk_loc_ok(to_loc, location_id) == 1 {
+                                flows = stk_push_receipt(flows, day, doc, "transfer", seq, pid, map_get(names, pid), to_loc, qty, uc)
+                                seq = seq + 1
+                            }
+                        }
+                    }
+                    j = j + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+
+    // Разходи: продажби от осчетоводени изходящи фактури.
+    i = 0
+    while i < orm_nrows(iq) {
+        if orm_cell_by_i64(iq, i, "company_id") == company_id && orm_cell_by(iq, i, "status") == "posted" && orm_cell_by(iq, i, "direction") == "out" {
+            let day = orm_cell_by(iq, i, "issue_date")
+            let doc = orm_cell_by(iq, i, "number")
+            let loc = orm_cell_by_i64(iq, i, "location_id")
+            let id = orm_cell_by_i64(iq, i, "id")
+            if stk_in_range(day, lo, hi) == 1 && stk_loc_ok(loc, location_id) == 1 {
+                let lq2 = invoice_lines_by_invoice(d, id)?
+                d = orm_db_q(lq2)
+                let mut j: i64 = 0
+                while j < orm_nrows(lq2) {
+                    let pid = orm_cell_by_i64(lq2, j, "product_id")
+                    if pid > 0 && map_has(inv_set, pid) == 1 {
+                        flows = stk_push_issue(flows, day, doc, "sale", 3, seq, pid, map_get(names, pid), loc, orm_cell_by(lq2, j, "quantity"), "0")
+                        seq = seq + 1
+                    }
+                    j = j + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+
+    // Преиграване: разходите в хронологичен ред върху партидите.
+    let sorted = stk_sort_flows(flows)
+    let mut k: i64 = 0
+    while k < vec_len(sorted) {
+        let f = vec_get(sorted, k)
+        if f.kind == "out" {
+            let st = map_get(states, f.product_id)
+            let t = stk_issue(st, stk_dec(f.quantity), f.location_id, method)
+            map_set(states, f.product_id, t.state)
+            let mut nf = f
+            nf.value = stk_money(t.cost)
+            vec_set(sorted, k, nf)
+            if dec_cmp(t.cost, dec_zero()) == 0 && dec_cmp(stk_dec(f.quantity), dec_zero()) != 0 && f.reason != "transfer" {
+                vec_push(warnings, concat(f.product_name, concat(": няма наличност за ", f.quantity)))
+            }
+        }
+        k = k + 1
+    }
+
+    // Съгласуваност с партидната книга: ако преиграването се различава от
+    // остатъка в партидите, данните са несъгласувани (напр. стара грешка) —
+    // потребителят трябва да го знае, вместо да го приеме за точно.
+    i = 0
+    while i < vec_len(ids) {
+        let pid = vec_get(ids, i)
+        let st = map_get(states, pid)
+        if dec_cmp(st.qty, map_get(lot_rem, pid)) != 0 {
+            let w1 = concat(map_get(names, pid), ": справката ")
+            let w2 = concat(w1, stk_qty(st.qty))
+            let w3 = concat(w2, " се различава от партидната книга ")
+            let w4 = concat(w3, stk_qty(map_get(lot_rem, pid)))
+            vec_push(warnings, concat(w4, " — проверени са дати на документи и движения"))
+        }
+        i = i + 1
+    }
+
+    // Наличности по артикул и обект.
+    let mut bals: Vec<StkBal> = vec_new()
+    i = 0
+    while i < vec_len(ids) {
+        let pid = vec_get(ids, i)
+        let st = map_get(states, pid)
+        let mut locs: Vec<i64> = vec_new()
+        let mut j: i64 = 0
+        while j < vec_len(st.lots) {
+            let l = vec_get(st.lots, j)
+            if dec_cmp(l.rem, dec_zero()) > 0 && stk_loc_ok(l.loc, location_id) == 1 && stk_vec_has_i64(locs, l.loc) == 0 {
+                vec_push(locs, l.loc)
+            }
+            j = j + 1
+        }
+        j = 0
+        while j < vec_len(locs) {
+            let loc = vec_get(locs, j)
+            let mut b = StkBal { product_id: pid, product_name: map_get(names, pid), location_id: loc, quantity: "0", value: "0" }
+            let mut m: i64 = 0
+            while m < vec_len(st.lots) {
+                let l = vec_get(st.lots, m)
+                if l.loc == loc && dec_cmp(l.rem, dec_zero()) > 0 {
+                    b.quantity = stk_qty(stk_add(stk_dec(b.quantity), l.rem))
+                    b.value = stk_money(stk_add(stk_dec(b.value), stk_mul(l.rem, l.unit)))
+                }
+                m = m + 1
+            }
+            vec_push(bals, b)
+            j = j + 1
+        }
+        i = i + 1
+    }
+
+    let mut out_receipts = jarr_new()
+    let mut out_issues = jarr_new()
+    let mut k2: i64 = 0
+    while k2 < vec_len(sorted) {
+        let f = vec_get(sorted, k2)
+        if f.kind == "in" {
+            out_receipts = jarr_obj(out_receipts, stk_flow_json(f))
+        } else {
+            out_issues = jarr_obj(out_issues, stk_flow_json(f))
+        }
+        k2 = k2 + 1
+    }
+    let mut out_bals = jarr_new()
+    i = 0
+    while i < vec_len(bals) {
+        out_bals = jarr_obj(out_bals, stk_bal_json(vec_get(bals, i)))
+        i = i + 1
+    }
+    let mut ow = jarr_new()
+    i = 0
+    while i < vec_len(warnings) {
+        ow = jarr_str(ow, vec_get(warnings, i))
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "from", from)
+    o = jobj_str(o, "to", to)
+    o = jobj_raw(o, "receipts", jarr_encode(out_receipts))
+    o = jobj_raw(o, "issues", jarr_encode(out_issues))
+    o = jobj_raw(o, "balances", jarr_encode(out_bals))
+    o = jobj_raw(o, "warnings", jarr_encode(ow))
+    return o
+}
+

@@ -32,6 +32,7 @@ const NAV_ITEMS = [
   { href: "/internal-docs", key: "nav.internal_docs" },
   { href: "/production", key: "nav.production" },
   { href: "/material-issues", key: "nav.material_issues" },
+  { href: "/stock", key: "nav.stock" },
   { href: "/journal", key: "nav.journal" },
   { href: "/reports", key: "nav.reports" },
   { href: "/opening-balances", key: "nav.opening_balances" },

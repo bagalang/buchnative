@@ -1,0 +1,331 @@
+// models/stock_replay.baga — преиграване на складовите движения върху партиди.
+//
+// Това е само изчислителният слой: десетични  helpers, сравнение на дати,
+// сортировка на движенията и себестойност на изписването (WAC/FIFO/LIFO).
+// Данните и сборянето на справката са в stock_report.baga.
+
+import "fmrbaga/jsonx.baga"
+import "bagadecimal/src/decimal.baga"
+import "std/str/str.baga"
+
+struct StkFlow {
+    date: str,
+    doc: str,
+    kind: str,
+    reason: str,
+    product_id: i64,
+    product_name: str,
+    location_id: i64,
+    quantity: str,
+    value: str,
+    rank: i64,
+    seq: i64
+}
+
+struct StkBal {
+    product_id: i64,
+    product_name: str,
+    location_id: i64,
+    quantity: str,
+    value: str
+}
+
+struct StkLot {
+    loc: i64,
+    rem: Decimal,
+    unit: Decimal
+}
+
+struct StkState {
+    qty: Decimal,
+    val: Decimal,
+    lots: Vec<StkLot>
+}
+
+struct StkTake {
+    state: StkState,
+    cost: Decimal
+}
+
+fn stk_dec(s: str) -> Decimal {
+    let p = dec_parse(s)
+    if p.ok == 0 {
+        return dec_zero()
+    }
+    return p.value
+}
+
+fn stk_money(d: Decimal) -> str {
+    let r = dec_round_dp(d, 2)
+    if r.ok == 0 {
+        return dec_to_string(d)
+    }
+    return dec_to_string(r.value)
+}
+
+fn stk_qty(d: Decimal) -> str {
+    let r = dec_round_dp(d, 4)
+    if r.ok == 0 {
+        return dec_to_string(d)
+    }
+    return dec_to_string(r.value)
+}
+
+fn stk_add(a: Decimal, b: Decimal) -> Decimal {
+    let r = dec_add(a, b)
+    if r.ok == 0 {
+        return a
+    }
+    return r.value
+}
+
+fn stk_sub(a: Decimal, b: Decimal) -> Decimal {
+    let r = dec_sub(a, b)
+    if r.ok == 0 {
+        return a
+    }
+    return r.value
+}
+
+fn stk_mul(a: Decimal, b: Decimal) -> Decimal {
+    let r = dec_mul(a, b)
+    if r.ok == 0 {
+        return dec_zero()
+    }
+    return r.value
+}
+
+// Лексикографско сравнение на дати (ISO датите са с равна дължина).
+fn stk_date_cmp(a: str, b: str) -> i64 {
+    let mut n = len(a)
+    if len(b) < n {
+        n = len(b)
+    }
+    let mut i: i64 = 0
+    while i < n {
+        let ca = char_at(a, i)
+        let cb = char_at(b, i)
+        if ca < cb {
+            return 0 - 1
+        }
+        if ca > cb {
+            return 1
+        }
+        i = i + 1
+    }
+    if len(a) < len(b) {
+        return 0 - 1
+    }
+    if len(a) > len(b) {
+        return 1
+    }
+    return 0
+}
+
+fn stk_in_range(day: str, from: str, to: str) -> i64 {
+    if stk_date_cmp(day, from) < 0 {
+        return 0
+    }
+    if stk_date_cmp(day, to) > 0 {
+        return 0
+    }
+    return 1
+}
+
+fn stk_loc_ok(loc: i64, want: i64) -> i64 {
+    if want <= 0 {
+        return 1
+    }
+    if loc == want {
+        return 1
+    }
+    return 0
+}
+
+fn stk_flow_json(f: StkFlow) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_str(o, "date", f.date)
+    o = jobj_str(o, "doc", f.doc)
+    o = jobj_str(o, "kind", f.kind)
+    o = jobj_str(o, "reason", f.reason)
+    o = jobj_i64(o, "product_id", f.product_id)
+    o = jobj_str(o, "product_name", f.product_name)
+    o = jobj_i64(o, "location_id", f.location_id)
+    o = jobj_str(o, "quantity", f.quantity)
+    o = jobj_str(o, "value", f.value)
+    return o
+}
+
+fn stk_bal_json(b: StkBal) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "product_id", b.product_id)
+    o = jobj_str(o, "product_name", b.product_name)
+    o = jobj_i64(o, "location_id", b.location_id)
+    o = jobj_str(o, "quantity", b.quantity)
+    o = jobj_str(o, "value", b.value)
+    return o
+}
+
+// Сортировка по дата, после ранг, после ред на запис.
+fn stk_sort_flows(v: Vec<StkFlow>) -> Vec<StkFlow> {
+    let mut out = v
+    let mut i: i64 = 1
+    while i < vec_len(out) {
+        let cur = vec_get(out, i)
+        let mut j = i - 1
+        let mut done = 0
+        while j >= 0 && done == 0 {
+            let prev = vec_get(out, j)
+            let mut move = 0
+            if stk_date_cmp(prev.date, cur.date) > 0 {
+                move = 1
+            }
+            if stk_date_cmp(prev.date, cur.date) == 0 && prev.rank > cur.rank {
+                move = 1
+            }
+            if stk_date_cmp(prev.date, cur.date) == 0 && prev.rank == cur.rank && prev.seq > cur.seq {
+                move = 1
+            }
+            if move == 1 {
+                vec_set(out, j + 1, prev)
+                j = j - 1
+            } else {
+                done = 1
+            }
+        }
+        vec_set(out, j + 1, cur)
+        i = i + 1
+    }
+    return out
+}
+
+// Изписване по партиди (FIFO или LIFO). Връща състоянието и себестойността.
+fn stk_take(state: StkState, qty: Decimal, loc: i64, lifo: i64) -> StkTake {
+    let mut st = state
+    let mut need = qty
+    let mut cost = dec_zero()
+    if dec_cmp(need, dec_zero()) <= 0 {
+        return StkTake { state: st, cost: cost }
+    }
+    let mut i: i64 = 0
+    while i < vec_len(st.lots) {
+        let mut take = dec_zero()
+        let mut unit = dec_zero()
+        let mut at = i
+        if lifo == 1 {
+            at = vec_len(st.lots) - 1 - i
+        }
+        let l = vec_get(st.lots, at)
+        if l.loc == loc && dec_cmp(l.rem, dec_zero()) > 0 {
+            take = l.rem
+            unit = l.unit
+            if dec_cmp(l.rem, need) > 0 {
+                take = need
+            }
+            let mut nl = l
+            nl.rem = stk_sub(l.rem, take)
+            vec_set(st.lots, at, nl)
+        }
+        if dec_cmp(take, dec_zero()) > 0 {
+            cost = stk_add(cost, stk_mul(take, unit))
+            need = stk_sub(need, take)
+        }
+        i = i + 1
+    }
+    let covered = stk_sub(qty, need)
+    if dec_cmp(covered, dec_zero()) > 0 {
+        if dec_cmp(stk_sub(st.qty, covered), dec_zero()) <= 0 {
+            st.qty = dec_zero()
+            st.val = dec_zero()
+        } else {
+            st.qty = stk_sub(st.qty, covered)
+            st.val = stk_sub(st.val, cost)
+        }
+    }
+    return StkTake { state: st, cost: cost }
+}
+
+// WAC: себестойността е количеството по текущата средна цена.
+fn stk_take_wac(state: StkState, qty: Decimal, loc: i64) -> StkTake {
+    let mut st = state
+    if dec_cmp(qty, dec_zero()) <= 0 {
+        return StkTake { state: st, cost: dec_zero() }
+    }
+    let mut covered = qty
+    if dec_cmp(st.qty, qty) < 0 {
+        covered = st.qty
+    }
+    if dec_cmp(covered, dec_zero()) <= 0 {
+        return StkTake { state: st, cost: dec_zero() }
+    }
+    let mut unit = dec_zero()
+    if dec_cmp(st.qty, dec_zero()) > 0 {
+        let d = dec_div(st.val, st.qty)
+        if d.ok == 1 {
+            unit = d.value
+        }
+    }
+    let mut cost = stk_mul(covered, unit)
+    if dec_cmp(stk_sub(st.qty, covered), dec_zero()) <= 0 {
+        cost = st.val
+        st.qty = dec_zero()
+        st.val = dec_zero()
+    } else {
+        st.qty = stk_sub(st.qty, covered)
+        st.val = stk_sub(st.val, cost)
+    }
+    let mut need = covered
+    let mut i: i64 = 0
+    while i < vec_len(st.lots) && dec_cmp(need, dec_zero()) > 0 {
+        let l = vec_get(st.lots, i)
+        if l.loc == loc && dec_cmp(l.rem, dec_zero()) > 0 {
+            let mut take = l.rem
+            if dec_cmp(l.rem, need) > 0 {
+                take = need
+            }
+            let mut nl = l
+            nl.rem = stk_sub(l.rem, take)
+            vec_set(st.lots, i, nl)
+            need = stk_sub(need, take)
+        }
+        i = i + 1
+    }
+    return StkTake { state: st, cost: cost }
+}
+
+// Изписване според метода на фирмата. Само една от двете функции се вика:
+// партидите са reference type и второто изписване ще пипне вече променени.
+fn stk_issue(state: StkState, qty: Decimal, loc: i64, method: str) -> StkTake {
+    if method == "FIFO" || method == "LIFO" {
+        let mut lifo = 0
+        if method == "LIFO" { lifo = 1 }
+        return stk_take(state, qty, loc, lifo)
+    }
+    return stk_take_wac(state, qty, loc)
+}
+
+// Справката: приходи от партидите, разходи от документите, наличности след
+// преиграване. `to` е включително; празна или 9999 дата — без горна граница.
+
+fn stk_vec_has_i64(v: Vec<i64>, x: i64) -> i64 {
+    let mut i: i64 = 0
+    while i < vec_len(v) {
+        if vec_get(v, i) == x {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+fn stk_push_issue(v: Vec<StkFlow>, day: str, doc: str, reason: str, rank: i64, seq: i64, pid: i64, pname: str, loc: i64, qty: str, value: str) -> Vec<StkFlow> {
+    let f = StkFlow { date: day, doc: doc, kind: "out", reason: reason, product_id: pid, product_name: pname, location_id: loc, quantity: qty, value: value, rank: rank, seq: seq }
+    vec_push(v, f)
+    return v
+}
+
+fn stk_push_receipt(v: Vec<StkFlow>, day: str, doc: str, reason: str, seq: i64, pid: i64, pname: str, loc: i64, qty: str, value: str) -> Vec<StkFlow> {
+    let f = StkFlow { date: day, doc: doc, kind: "in", reason: reason, product_id: pid, product_name: pname, location_id: loc, quantity: qty, value: value, rank: 0, seq: seq }
+    vec_push(v, f)
+    return v
+}
