@@ -216,3 +216,6 @@ fn RID_DB_CHECK() -> i64 { return 290 }
 
 // Масово изтриване на записи в дневника.
 fn RID_JOURNAL_BULK_DELETE() -> i64 { return 291 }
+
+// Предложение на код по КН8.
+fn RID_CN8_SUGGEST() -> i64 { return 292 }

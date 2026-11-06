@@ -1,0 +1,54 @@
+// actions/cn8.baga — предложение на код по КН8 при създаване на артикул.
+//
+// Търси се по търговска дума (лаптоп, хартия, кафе) и по самия код. Каталогът
+// е намеритичен — резултатът е за подсказка, не за деклариране.
+
+import "../models/cn8.baga"
+import "acl.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+fn act_cn8_suggest(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:read")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let f = jreq_str(b.doc, b.root, "q")
+    let q = str_trim(f.val)
+    if q == "" {
+        let mut o = jobj_new()
+        o = jobj_raw(o, "items", "[]")
+        o = jobj_i64(o, "count", 0)
+        return act_ok(db, o)
+    }
+    let rows = cn8_search(q)
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < vec_len(rows) {
+        let line = vec_get(rows, i)
+        let bar = str_find(line, "|")
+        let code = substr(line, 0, bar)
+        let name = substr(line, bar + 1, len(line))
+        let mut o = jobj_new()
+        o = jobj_str(o, "code", code)
+        o = jobj_str(o, "name", name)
+        arr = jarr_obj(arr, o)
+        i = i + 1
+    }
+    let mut out = jobj_new()
+    out = jobj_raw(out, "items", jarr_encode(arr))
+    out = jobj_i64(out, "count", vec_len(rows))
+    return act_ok(db, out)
+}

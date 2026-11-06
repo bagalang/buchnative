@@ -224,5 +224,7 @@ fn buchnative_boila_migrations_c() -> MigrationSet {
     set = migrate_add(set, 20260921109, "add_counterparts_address_building", "ALTER TABLE counterparts ADD COLUMN address_building TEXT", "ALTER TABLE counterparts DROP COLUMN address_building")
     set = migrate_add(set, 20260921110, "add_counterparts_additional_address_detail", "ALTER TABLE counterparts ADD COLUMN additional_address_detail TEXT", "ALTER TABLE counterparts DROP COLUMN additional_address_detail")
     set = migrate_add(set, 20260921111, "add_counterparts_address_type", "ALTER TABLE counterparts ADD COLUMN address_type TEXT", "ALTER TABLE counterparts DROP COLUMN address_type")
+    set = migrate_add(set, 20261106001, "add_products_cn8_code", "ALTER TABLE products ADD COLUMN cn8_code TEXT", "ALTER TABLE products DROP COLUMN cn8_code")
+    set = migrate_add(set, 20261106002, "add_products_cn8_name", "ALTER TABLE products ADD COLUMN cn8_name TEXT", "ALTER TABLE products DROP COLUMN cn8_name")
     return set
 }

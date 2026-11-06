@@ -149,6 +149,8 @@ fn act_products_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         return act_422_field(db, "revenue_account_id", racc)
     }
     let stock_quantity = jopt_str(b.doc, b.root, "stock_quantity", "0")
+    let cn8_code = jopt_str(b.doc, b.root, "cn8_code", "")
+    let cn8_name = jopt_str(b.doc, b.root, "cn8_name", "")
     let mut is_service = sv.num
     let mut is_inventory = invf.num
     if is_service == 1 {
@@ -162,7 +164,7 @@ fn act_products_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         return act_err(db, 503, "database unavailable")
     }
     let acp = active_company_id(db, auth.ctx.user_sub)?
-    let ins = product_create(acp.db, name.val, code.val, description.val, unit.val, price.val, cost_price.val, vat_rate.val, is_service, is_inventory, iacc.num, racc.num, stock_quantity.val, stock_value, actf.num, acp.id)?
+    let ins = product_create(acp.db, name.val, code.val, description.val, unit.val, price.val, cost_price.val, vat_rate.val, is_service, is_inventory, iacc.num, racc.num, stock_quantity.val, stock_value, actf.num, acp.id, cn8_code.val, cn8_name.val)?
     if orm_ok(ins) == 0 {
         return act_err(orm_db_exec(ins), 409, orm_err_exec(ins))
     }
@@ -241,6 +243,18 @@ fn act_products_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         if code.ok == 0 { return act_422_field(db, "code", code) }
         vec_push(cols, "code")
         vec_push(vals, code.val)
+    }
+    let cn8_code = jreq_str(b.doc, b.root, "cn8_code")
+    if cn8_code.present == 1 {
+        if cn8_code.ok == 0 { return act_422_field(db, "cn8_code", cn8_code) }
+        vec_push(cols, "cn8_code")
+        vec_push(vals, cn8_code.val)
+    }
+    let cn8_name = jreq_str(b.doc, b.root, "cn8_name")
+    if cn8_name.present == 1 {
+        if cn8_name.ok == 0 { return act_422_field(db, "cn8_name", cn8_name) }
+        vec_push(cols, "cn8_name")
+        vec_push(vals, cn8_name.val)
     }
     let description = jreq_str(b.doc, b.root, "description")
     if description.present == 1 {

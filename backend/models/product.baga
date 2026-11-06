@@ -38,6 +38,8 @@ fn product_to_json(q: OrmQuery, row: i64) -> JObj {
     }
     o = jobj_i64(o, "is_active", act)
     o = jobj_i64(o, "company_id", orm_cell_by_i64(q, row, "company_id"))
+    o = jobj_str(o, "cn8_code", orm_cell_by(q, row, "cn8_code"))
+    o = jobj_str(o, "cn8_name", orm_cell_by(q, row, "cn8_name"))
     let ca = orm_cell_by(q, row, "created_at")
     if ca != "" {
         o = jobj_str(o, "created_at", ca)
@@ -64,6 +66,8 @@ fn product_cols() -> Vec<str> {
     vec_push(c, "stock_value")
     vec_push(c, "is_active")
     vec_push(c, "company_id")
+    vec_push(c, "cn8_code")
+    vec_push(c, "cn8_name")
     vec_push(c, "created_at")
     return c
 }
@@ -93,10 +97,12 @@ fn product_ins_cols() -> Vec<str> {
     vec_push(cols, "stock_value")
     vec_push(cols, "is_active")
     vec_push(cols, "company_id")
+    vec_push(cols, "cn8_code")
+    vec_push(cols, "cn8_name")
     return cols
 }
 
-fn product_vals(name: str, code: str, description: str, unit: str, price: str, cost_price: str, vat_rate: str, is_service: i64, is_inventory: i64, inventory_account_id: i64, revenue_account_id: i64, stock_quantity: str, stock_value: str, is_active: i64, company_id: i64) -> Vec<str> {
+fn product_vals(name: str, code: str, description: str, unit: str, price: str, cost_price: str, vat_rate: str, is_service: i64, is_inventory: i64, inventory_account_id: i64, revenue_account_id: i64, stock_quantity: str, stock_value: str, is_active: i64, company_id: i64, cn8_code: str, cn8_name: str) -> Vec<str> {
     let vals = vec_new()
     vec_push(vals, name)
     vec_push(vals, code)
@@ -113,13 +119,15 @@ fn product_vals(name: str, code: str, description: str, unit: str, price: str, c
     vec_push(vals, stock_value)
     vec_push(vals, int_to_str(is_active))
     vec_push(vals, int_to_str(company_id))
+    vec_push(vals, cn8_code)
+    vec_push(vals, cn8_name)
     return vals
 }
 
-fn product_create(db: OrmDb, name: str, code: str, description: str, unit: str, price: str, cost_price: str, vat_rate: str, is_service: i64, is_inventory: i64, inventory_account_id: i64, revenue_account_id: i64, stock_quantity: str, stock_value: str, is_active: i64, company_id: i64) -> OrmExec !IO !Net !Time {
+fn product_create(db: OrmDb, name: str, code: str, description: str, unit: str, price: str, cost_price: str, vat_rate: str, is_service: i64, is_inventory: i64, inventory_account_id: i64, revenue_account_id: i64, stock_quantity: str, stock_value: str, is_active: i64, company_id: i64, cn8_code: str, cn8_name: str) -> OrmExec !IO !Net !Time {
     let cols = product_ins_cols()
     vec_push(cols, "created_at")
-    let vals = product_vals(name, code, description, unit, price, cost_price, vat_rate, is_service, is_inventory, inventory_account_id, revenue_account_id, stock_quantity, stock_value, is_active, company_id)
+    let vals = product_vals(name, code, description, unit, price, cost_price, vat_rate, is_service, is_inventory, inventory_account_id, revenue_account_id, stock_quantity, stock_value, is_active, company_id, cn8_code, cn8_name)
     vec_push(vals, kv_now_iso()?)
     let nulls: Vec<i64> = vec_new()
     let mut i: i64 = 0

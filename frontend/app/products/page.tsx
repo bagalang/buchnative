@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { RequireAuth } from "../../components/RequireAuth";
 import { UnitPicker } from "../../components/UnitPicker";
+import { Cn8Picker } from "../../components/Cn8Picker";
 import { useI18n } from "../../components/I18nProvider";
 import { api, ListResponse } from "../../lib/api";
 import { UnitOfMeasure } from "../../lib/units";
@@ -30,6 +31,8 @@ interface Product {
   stock_quantity: string;
   stock_value: string;
   is_active: number;
+  cn8_code?: string;
+  cn8_name?: string;
 }
 
 const emptyForm = {
@@ -46,6 +49,8 @@ const emptyForm = {
   revenue_account_id: 0,
   stock_quantity: "0",
   is_active: true,
+  cn8_code: "",
+  cn8_name: "",
 };
 
 function accLabel(a: Account): string {
@@ -108,6 +113,8 @@ function ProductsInner() {
     setForm({
       name: p.name ?? "",
       code: p.code ?? "",
+      cn8_code: p.cn8_code ?? "",
+      cn8_name: p.cn8_name ?? "",
       description: p.description ?? "",
       unit: p.unit || "C62",
       price: p.price || "0",
@@ -133,6 +140,8 @@ function ProductsInner() {
       const payload = {
         name: form.name,
         code: form.code,
+        cn8_code: form.cn8_code,
+        cn8_name: form.cn8_name,
         description: form.description,
         unit: form.unit,
         price: form.price,
@@ -280,6 +289,17 @@ function ProductsInner() {
                     className="input"
                     value={form.code}
                     onChange={(e) => setForm({ ...form, code: e.target.value })}
+                  />
+                </div>
+                <div className="field" style={{ gridColumn: "1 / -1" }}>
+                  <label className="label">{t("products.cn8_label")}</label>
+                  <Cn8Picker
+                    code={form.cn8_code ?? ""}
+                    name={form.cn8_name ?? ""}
+                    productName={form.name}
+                    onChange={(code, name) =>
+                      setForm({ ...form, cn8_code: code, cn8_name: name })
+                    }
                   />
                 </div>
                 <div className="field" style={{ gridColumn: "1 / -1" }}>
