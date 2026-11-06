@@ -23,7 +23,7 @@ interface AuditRow {
   created_at: string;
 }
 
-const ENTITIES = ["journal", "invoice", "bank", "period", "closing", "internal_doc", "production", "fixed_asset", "dividend"];
+const ENTITIES = ["journal", "invoice", "bank", "period", "closing", "material_issue", "internal_doc", "production", "fixed_asset", "dividend"];
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);

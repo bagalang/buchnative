@@ -1,0 +1,521 @@
+// actions/material_issue.baga — изписване на материали от склад.
+//
+// Документът е чернова → потвърден. Потвърждението:
+//   1) проверява склада и периодите;
+//   2) изважда количеството от склада (WAC/FIFO/LIFO) и взима себестойността;
+//   3) прави запис Дт <разходна сметка> / Кт <складова сметка на артикула>.
+// Отмяната връща количеството в склада и изтрива записа.
+
+import "../models/material_issue.baga"
+import "../models/journal.baga"
+import "../models/product.baga"
+import "inventory.baga"
+import "invoices_post.baga"
+import "audit.baga"
+import "acl.baga"
+import "active_company.baga"
+import "vat_fmt.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+fn jopt_i64(doc: JsonDoc, obj: i64, key: str, def: i64) -> JField {
+    if json_get(doc, obj, key) < 0 {
+        return jfield_ok_i64(def, int_to_str(def))
+    }
+    return jreq_i64(doc, obj, key)
+}
+
+fn mi_json(q: OrmQuery, db: OrmDb) -> JObj !IO !Net {
+    let mut o = mi_to_json(q, 0)
+    let lq = mi_lines_by_doc(db, orm_cell_by_i64(q, 0, "id"))?
+    o = jobj_arr(o, "lines", mi_lines_json(lq))
+    return o
+}
+
+fn act_mi_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:read")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let ac = active_company_id(db, auth.ctx.user_sub)
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let q = mi_by_company(ac.db, ac.id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let mut o = mi_list_json(q)
+    let mut i: i64 = 0
+    let mut confirmed: i64 = 0
+    while i < orm_nrows(q) {
+        if orm_cell_by(q, i, "status") == "confirmed" {
+            confirmed = confirmed + 1
+        }
+        i = i + 1
+    }
+    o = jobj_i64(o, "confirmed_count", confirmed)
+    return act_ok(orm_db_q(q), o)
+}
+
+fn act_mi_show(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:read")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let q = mi_find(db, id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "Material issue not found")
+    }
+    let o = mi_json(q, orm_db_q(q))?
+    return act_ok(orm_db_q(q), o)
+}
+
+// Редовете от тялото на заявката (масив от обекти).
+fn mi_parse_lines(doc: JsonDoc, root: i64) -> Vec<str> {
+    let out: Vec<str> = vec_new()
+    let arr = json_get(doc, root, "lines")
+    if arr < 0 {
+        return out
+    }
+    let cnt = json_count(doc, arr)
+    let mut i: i64 = 0
+    while i < cnt {
+        let el = json_at(doc, arr, i)
+        let pid = jopt_i64(doc, el, "product_id", 0)
+        let qty = jopt_str(doc, el, "quantity", "")
+        if pid.num > 0 && qty.val != "" {
+            vec_push(out, int_to_str(pid.num))
+            vec_push(out, qty.val)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn act_mi_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    let auth = act_require_perm(ctx, db, "accounting:write")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let ac = active_company_id(db, auth.ctx.user_sub)
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let d0 = ac.db
+    let number = jopt_str(b.doc, b.root, "number", "")
+    let doc_date = jopt_str(b.doc, b.root, "doc_date", "")
+    let location = jopt_i64(b.doc, b.root, "location_id", 0)
+    let notes = jopt_str(b.doc, b.root, "notes", "")
+    let hq = mi_create(d0, ac.id, number.val, doc_date.val, location.num, notes.val)?
+    if orm_ok_q(hq) == 0 || orm_nrows(hq) < 1 {
+        return act_err(orm_db_q(hq), 500, orm_err_q(hq))
+    }
+    let id = orm_cell_by_i64(hq, 0, "id")
+    let mut d1 = orm_db_q(hq)
+    let lines = mi_parse_lines(b.doc, b.root)
+    let mut i: i64 = 0
+    let mut n: i64 = 1
+    while i + 1 < vec_len(lines) {
+        let pid = parse_int(vec_get(lines, i))
+        let qty = vec_get(lines, i + 1)
+        let acc = mi_line_account(b.doc, b.root, n)
+        let inv = mi_line_inventory(b.doc, b.root, n)
+        let ins = mi_line_insert(d1, id, pid, qty, "0", "0", acc, inv, n)?
+        if orm_ok(ins) == 0 {
+            return act_err(orm_db_exec(ins), 500, orm_err_exec(ins))
+        }
+        d1 = orm_db_exec(ins)
+        i = i + 2
+        n = n + 1
+    }
+    let q = mi_find(d1, id)?
+    let o = mi_json(q, d1)?
+    return act_created(orm_db_q(q), o)
+}
+
+// Разходна сметка на ред n (полетата са масив от обекти).
+fn mi_line_account(doc: JsonDoc, root: i64, n: i64) -> i64 {
+    let arr = json_get(doc, root, "lines")
+    if arr < 0 {
+        return 0
+    }
+    let cnt = json_count(doc, arr)
+    let mut i: i64 = 0
+    let mut k: i64 = 0
+    while i < cnt {
+        let el = json_at(doc, arr, i)
+        let pid = jopt_i64(doc, el, "product_id", 0)
+        if pid.num > 0 {
+            if k + 1 == n {
+                return jopt_i64(doc, el, "account_id", 0).num
+            }
+            k = k + 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+fn mi_line_inventory(doc: JsonDoc, root: i64, n: i64) -> i64 {
+    let arr = json_get(doc, root, "lines")
+    if arr < 0 {
+        return 0
+    }
+    let cnt = json_count(doc, arr)
+    let mut i: i64 = 0
+    let mut k: i64 = 0
+    while i < cnt {
+        let el = json_at(doc, arr, i)
+        let pid = jopt_i64(doc, el, "product_id", 0)
+        if pid.num > 0 {
+            if k + 1 == n {
+                return jopt_i64(doc, el, "inventory_account_id", 0).num
+            }
+            k = k + 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+fn act_mi_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:write")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let q0 = mi_find(db, id)?
+    if orm_ok_q(q0) == 0 || orm_nrows(q0) < 1 {
+        return act_404(orm_db_q(q0), "Material issue not found")
+    }
+    if orm_cell_by(q0, 0, "status") != "draft" {
+        return act_err(orm_db_q(q0), 409, "потвърден документ не се редактира")
+    }
+    let d = orm_db_q(q0)
+    let number = jopt_str(b.doc, b.root, "number", orm_cell_by(q0, 0, "number"))
+    let doc_date = jopt_str(b.doc, b.root, "doc_date", orm_cell_by(q0, 0, "doc_date"))
+    let location = jopt_i64(b.doc, b.root, "location_id", orm_cell_by_i64(q0, 0, "location_id"))
+    let notes = jopt_str(b.doc, b.root, "notes", orm_cell_by(q0, 0, "notes"))
+    let up = mi_update(d, id, number.val, doc_date.val, location.num, notes.val)?
+    if orm_ok(up) == 0 {
+        return act_err(orm_db_exec(up), 500, orm_err_exec(up))
+    }
+    let dl = mi_line_delete(orm_db_exec(up), id)?
+    if orm_ok(dl) == 0 {
+        return act_err(orm_db_exec(dl), 500, orm_err_exec(dl))
+    }
+    let mut d1 = orm_db_exec(dl)
+    let lines = mi_parse_lines(b.doc, b.root)
+    let mut i: i64 = 0
+    let mut n: i64 = 1
+    while i + 1 < vec_len(lines) {
+        let pid = parse_int(vec_get(lines, i))
+        let qty = vec_get(lines, i + 1)
+        let acc = mi_line_account(b.doc, b.root, n)
+        let inv = mi_line_inventory(b.doc, b.root, n)
+        let ins = mi_line_insert(d1, id, pid, qty, "0", "0", acc, inv, n)?
+        if orm_ok(ins) == 0 {
+            return act_err(orm_db_exec(ins), 500, orm_err_exec(ins))
+        }
+        d1 = orm_db_exec(ins)
+        i = i + 2
+        n = n + 1
+    }
+    let q = mi_find(d1, id)?
+    let o = mi_json(q, d1)?
+    return act_ok(orm_db_q(q), o)
+}
+
+fn act_mi_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:write")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let q0 = mi_find(db, id)?
+    if orm_ok_q(q0) == 0 || orm_nrows(q0) < 1 {
+        return act_404(orm_db_q(q0), "Material issue not found")
+    }
+    if orm_cell_by(q0, 0, "status") == "confirmed" {
+        return act_err(orm_db_q(q0), 409, "потвърден документ се отмяна първо")
+    }
+    let d = orm_db_q(q0)
+    let dl = mi_line_delete(d, id)?
+    if orm_ok(dl) == 0 {
+        return act_err(orm_db_exec(dl), 500, orm_err_exec(dl))
+    }
+    let dd = mi_delete(orm_db_exec(dl), id)?
+    if orm_ok(dd) == 0 {
+        return act_err(orm_db_exec(dd), 500, orm_err_exec(dd))
+    }
+    return act_no_content(orm_db_exec(dd))
+}
+
+// Потвърждаване: изважда от склада и прави запис Дт разход / Кт складова.
+fn act_mi_confirm(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    let auth = act_require_perm(ctx, db, "accounting:write")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let iq = mi_find(db, id)?
+    if orm_ok_q(iq) == 0 || orm_nrows(iq) < 1 {
+        return act_404(orm_db_q(iq), "Material issue not found")
+    }
+    let d = orm_db_q(iq)
+    if orm_cell_by(iq, 0, "status") != "draft" {
+        return act_err(d, 409, "документът не е чернова")
+    }
+    let loc = orm_cell_by_i64(iq, 0, "location_id")
+    if loc <= 0 {
+        return act_err(d, 422, "нужен е складов обект")
+    }
+    let doc_date = orm_cell_by(iq, 0, "doc_date")
+    let period = substr(doc_date, 0, 7)
+    let pc = period_assert_open(d, period)?
+    if pc.ok == 0 {
+        return act_err(pc.db, 422, pc.err)
+    }
+    let ac = active_company_id(pc.db, auth.ctx.user_sub)
+    let cid = ac.id
+    let lq = mi_lines_by_doc(ac.db, id)?
+    if orm_ok_q(lq) == 0 || orm_nrows(lq) < 1 {
+        return act_err(orm_db_q(lq), 422, "документът няма редове")
+    }
+    let vm = company_valuation_method(orm_db_q(lq))?
+    if vm.ok == 0 {
+        return act_err(vm.db, 500, vm.err)
+    }
+    let method = vm.cost
+    let number = orm_cell_by(iq, 0, "number")
+    let desc = concat("Изписване на материали № ", number)
+    let mut total = dec_zero()
+    let mut i: i64 = 0
+    let bgn = bb_begin(orm_db_q(lq))?
+    if orm_ok(bgn) == 0 {
+        return act_err(orm_db_exec(bgn), 500, orm_err_exec(bgn))
+    }
+    let mut db2 = orm_db_exec(bgn)
+    while i < orm_nrows(lq) {
+        let pid = orm_cell_by_i64(lq, i, "product_id")
+        let qty = orm_cell_by(lq, i, "quantity")
+        let acct = orm_cell_by_i64(lq, i, "account_id")
+        if pid <= 0 || qty == "" {
+            return act_err_rb(db2, 422, "ред без артикул или количество")
+        }
+        if acct <= 0 {
+            return act_err_rb(db2, 422, "ред без разходна сметка")
+        }
+        let pq = product_find(db2, pid)?
+        if orm_ok_q(pq) == 0 || orm_nrows(pq) < 1 {
+            return act_err_rb(orm_db_q(pq), 422, "артикулът не е намерен")
+        }
+        db2 = orm_db_q(pq)
+        if orm_cell_by_i64(pq, 0, "is_inventory") == 0 {
+            return act_err_rb(db2, 422, "артикулът не е складов")
+        }
+        let inv_acc = orm_cell_by_i64(pq, 0, "inventory_account_id")
+        if inv_acc <= 0 {
+            return act_err_rb(db2, 422, "артикулът няма складова сметка")
+        }
+        let pname = orm_cell_by(pq, 0, "name")
+        let r = inv_issue(db2, pid, qty, method, pname, loc)?
+        if r.ok == 0 {
+            return act_err_rb(r.db, 422, r.err)
+        }
+        db2 = r.db
+        let cost = vat_parse_amt(r.cost)
+        let cr = dec_add(total, cost)
+        if cr.ok == 1 {
+            total = cr.value
+        }
+        let ucols: Vec<str> = vec_new()
+        vec_push(ucols, "unit_cost")
+        vec_push(ucols, "amount")
+        vec_push(ucols, "inventory_account_id")
+        let uvals: Vec<str> = vec_new()
+        vec_push(uvals, r.cost)
+        vec_push(uvals, r.cost)
+        vec_push(uvals, int_to_str(inv_acc))
+        let uu = orm_update_by_id(db2, mi_line_table(), orm_cell_by_i64(lq, i, "id"), ucols, uvals)?
+        if orm_ok(uu) == 0 {
+            return act_err_rb(orm_db_exec(uu), 500, orm_err_exec(uu))
+        }
+        db2 = orm_db_exec(uu)
+        i = i + 1
+    }
+    let total_s = vat_money(total)
+    let eq = journal_entry_insert(db2, doc_date, "material_issue", id, desc, "no_vat", 0, "", "", number, doc_date, period, total_s, "0", cid)?
+    if orm_ok_q(eq) == 0 || orm_nrows(eq) < 1 {
+        return act_err_rb(orm_db_q(eq), 500, "journal entry insert failed")
+    }
+    let entry_id = orm_cell_by_i64(eq, 0, "id")
+    db2 = orm_db_q(eq)
+    // Себестойностите се записаха в редовете — четем ги отново за записа.
+    let lf = mi_lines_by_doc(db2, id)?
+    if orm_ok_q(lf) == 0 {
+        return act_err_rb(orm_db_q(lf), 500, orm_err_q(lf))
+    }
+    db2 = orm_db_q(lf)
+    i = 0
+    while i < orm_nrows(lf) {
+        let acct = orm_cell_by_i64(lf, i, "account_id")
+        let pid = orm_cell_by_i64(lf, i, "product_id")
+        let lcost = orm_cell_by(lf, i, "amount")
+        let p1 = post_jl(db2, entry_id, acct, "debit", lcost, "0", 0, pid, loc)?
+        if p1.ok == 0 {
+            return act_err_rb(p1.db, 500, p1.err)
+        }
+        db2 = p1.db
+        i = i + 1
+    }
+    i = 0
+    while i < orm_nrows(lf) {
+        let pid = orm_cell_by_i64(lf, i, "product_id")
+        let lcost = orm_cell_by(lf, i, "amount")
+        let pq = product_find(db2, pid)?
+        let inv_acc = orm_cell_by_i64(pq, 0, "inventory_account_id")
+        let p2 = post_jl(db2, entry_id, inv_acc, "credit", lcost, "0", 0, pid, loc)?
+        if p2.ok == 0 {
+            return act_err_rb(p2.db, 500, p2.err)
+        }
+        db2 = p2.db
+        i = i + 1
+    }
+    let ss = mi_set_status(db2, id, "confirmed", entry_id)?
+    if orm_ok(ss) == 0 {
+        return act_err_rb(orm_db_exec(ss), 500, orm_err_exec(ss))
+    }
+    db2 = orm_db_exec(ss)
+    let cmt = bb_commit(db2)?
+    if orm_ok(cmt) == 0 {
+        return act_err(orm_db_exec(cmt), 500, orm_err_exec(cmt))
+    }
+    let aq = mi_find(orm_db_exec(cmt), id)?
+    let lq2 = mi_lines_by_doc(orm_db_q(aq), id)?
+    let after = jobj_arr(mi_to_json(aq, 0), "lines", mi_lines_json(lq2))
+    audit_record(orm_db_q(lq2), cid, auth.ctx.user_sub, "material_issue", id, number, "post", concat("Потвърдено изписване на материали ", number), "0.00", mi_total(lq2), jobj_encode(after))
+    let o = mi_json(aq, orm_db_exec(cmt))?
+    return act_ok(orm_db_q(aq), o)
+}
+
+// Отмяна: връща количеството в склада и изтрива записа.
+fn act_mi_unpost(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    let auth = act_require_perm(ctx, db, "accounting:write")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let iq = mi_find(db, id)?
+    if orm_ok_q(iq) == 0 || orm_nrows(iq) < 1 {
+        return act_404(orm_db_q(iq), "Material issue not found")
+    }
+    let d = orm_db_q(iq)
+    if orm_cell_by(iq, 0, "status") != "confirmed" {
+        return act_err(d, 409, "документът не е потвърден")
+    }
+    let entry_id = orm_cell_by_i64(iq, 0, "journal_entry_id")
+    let doc_date = orm_cell_by(iq, 0, "doc_date")
+    let loc = orm_cell_by_i64(iq, 0, "location_id")
+    let number = orm_cell_by(iq, 0, "number")
+    let lq = mi_lines_by_doc(d, id)?
+    if orm_ok_q(lq) == 0 || orm_nrows(lq) < 1 {
+        return act_err(orm_db_q(lq), 422, "документът няма редове")
+    }
+    let bgn = bb_begin(orm_db_q(lq))?
+    if orm_ok(bgn) == 0 {
+        return act_err(orm_db_exec(bgn), 500, orm_err_exec(bgn))
+    }
+    let mut db2 = orm_db_exec(bgn)
+    let mut i: i64 = 0
+    while i < orm_nrows(lq) {
+        let pid = orm_cell_by_i64(lq, i, "product_id")
+        let qty = orm_cell_by(lq, i, "quantity")
+        let uc = orm_cell_by(lq, i, "unit_cost")
+        let line_id = orm_cell_by_i64(lq, i, "id")
+        let r = inv_receive(db2, pid, id, line_id, doc_date, qty, uc, loc)?
+        if r.ok == 0 {
+            return act_err_rb(r.db, 500, r.err)
+        }
+        db2 = r.db
+        i = i + 1
+    }
+    let jd = journal_delete_entry(db2, entry_id)?
+    if orm_ok(jd) == 0 {
+        return act_err_rb(orm_db_exec(jd), 500, orm_err_exec(jd))
+    }
+    db2 = orm_db_exec(jd)
+    let ss = mi_set_status(db2, id, "draft", 0)?
+    if orm_ok(ss) == 0 {
+        return act_err_rb(orm_db_exec(ss), 500, orm_err_exec(ss))
+    }
+    db2 = orm_db_exec(ss)
+    let cmt = bb_commit(db2)?
+    if orm_ok(cmt) == 0 {
+        return act_err(orm_db_exec(cmt), 500, orm_err_exec(cmt))
+    }
+    let aq = mi_find(orm_db_exec(cmt), id)?
+    let lq2 = mi_lines_by_doc(orm_db_q(aq), id)?
+    let after = jobj_arr(mi_to_json(aq, 0), "lines", mi_lines_json(lq2))
+    audit_record(orm_db_q(lq2), 0, auth.ctx.user_sub, "material_issue", id, number, "unpost", concat("Отменено изписване на материали ", number), "0.00", "0.00", jobj_encode(after))
+    let o = mi_json(aq, orm_db_exec(cmt))?
+    return act_ok(orm_db_q(aq), o)
+}

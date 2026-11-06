@@ -1,6 +1,6 @@
 [package]
 name = "buchnative-backend"
-version = "0.9.5"
+version = "0.9.6"
 entry = "start.baga"
 kind = "bin"
 

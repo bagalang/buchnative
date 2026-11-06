@@ -1,0 +1,241 @@
+// models/material_issue.baga — изписване на материали от склад.
+//
+// Документ (чернова → потвърден) с редове: артикул, количество, себестойност,
+// дебитна (разходна) сметка и кредитна (складова) сметка. Потвърждението
+// изважда количеството от склада (WAC/FIFO/LIFO) и прави запис
+// Дт разход / Кт складова сметка. Отмяната връща количеството в склада.
+
+import "ormbaga/orm.baga"
+import "fmrbaga/jsonx.baga"
+import "bagadecimal/src/decimal.baga"
+import "kvtime.baga"
+import "std/str/str.baga"
+
+fn mi_table() -> str {
+    return "material_issues"
+}
+
+fn mi_line_table() -> str {
+    return "material_issue_lines"
+}
+
+fn mi_cols() -> Vec<str> {
+    let c: Vec<str> = vec_new()
+    vec_push(c, "id")
+    vec_push(c, "company_id")
+    vec_push(c, "number")
+    vec_push(c, "doc_date")
+    vec_push(c, "location_id")
+    vec_push(c, "status")
+    vec_push(c, "notes")
+    vec_push(c, "journal_entry_id")
+    vec_push(c, "created_at")
+    return c
+}
+
+fn mi_line_cols() -> Vec<str> {
+    let c: Vec<str> = vec_new()
+    vec_push(c, "id")
+    vec_push(c, "doc_id")
+    vec_push(c, "product_id")
+    vec_push(c, "quantity")
+    vec_push(c, "unit_cost")
+    vec_push(c, "amount")
+    vec_push(c, "account_id")
+    vec_push(c, "inventory_account_id")
+    vec_push(c, "line_no")
+    return c
+}
+
+fn mi_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return kv_count_sql(db, "SELECT MAX(id) AS count FROM material_issues")?
+}
+
+fn mi_line_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return kv_count_sql(db, "SELECT MAX(id) AS count FROM material_issue_lines")?
+}
+
+fn mi_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
+    return kv_select_by_id(db, mi_table(), id, mi_cols())?
+}
+
+fn mi_by_company(db: OrmDb, company_id: i64) -> OrmQuery !IO !Net {
+    let sc: Vec<str> = vec_new()
+    vec_push(sc, "doc_date")
+    vec_push(sc, "id")
+    let dirs: Vec<i64> = vec_new()
+    vec_push(dirs, 1)
+    vec_push(dirs, 1)
+    return kv_where_dir(db, mi_table(), "company_id", int_to_str(company_id), mi_cols(), sc, dirs)?
+}
+
+fn mi_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_i64(o, "company_id", orm_cell_by_i64(q, row, "company_id"))
+    o = jobj_str(o, "number", orm_cell_by(q, row, "number"))
+    o = jobj_str(o, "doc_date", orm_cell_by(q, row, "doc_date"))
+    o = jobj_i64(o, "location_id", orm_cell_by_i64(q, row, "location_id"))
+    o = jobj_str(o, "status", orm_cell_by(q, row, "status"))
+    o = jobj_str(o, "notes", orm_cell_by(q, row, "notes"))
+    o = jobj_i64(o, "journal_entry_id", orm_cell_by_i64(q, row, "journal_entry_id"))
+    let ca = orm_cell_by(q, row, "created_at")
+    if ca != "" {
+        o = jobj_str(o, "created_at", ca)
+    }
+    return o
+}
+
+fn mi_line_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_i64(o, "doc_id", orm_cell_by_i64(q, row, "doc_id"))
+    o = jobj_i64(o, "product_id", orm_cell_by_i64(q, row, "product_id"))
+    o = jobj_str(o, "quantity", orm_cell_by(q, row, "quantity"))
+    o = jobj_str(o, "unit_cost", orm_cell_by(q, row, "unit_cost"))
+    o = jobj_str(o, "amount", orm_cell_by(q, row, "amount"))
+    o = jobj_i64(o, "account_id", orm_cell_by_i64(q, row, "account_id"))
+    o = jobj_i64(o, "inventory_account_id", orm_cell_by_i64(q, row, "inventory_account_id"))
+    o = jobj_i64(o, "line_no", orm_cell_by_i64(q, row, "line_no"))
+    return o
+}
+
+// Нов чернова документ; id-то идва от брояча на таблицата.
+fn mi_create(db: OrmDb, company_id: i64, number: str, doc_date: str, location_id: i64, notes: str) -> OrmQuery !IO !Net !Time {
+    let cols: Vec<str> = vec_new()
+    vec_push(cols, "company_id")
+    vec_push(cols, "number")
+    vec_push(cols, "doc_date")
+    vec_push(cols, "location_id")
+    vec_push(cols, "status")
+    vec_push(cols, "notes")
+    vec_push(cols, "journal_entry_id")
+    vec_push(cols, "created_at")
+    let vals: Vec<str> = vec_new()
+    vec_push(vals, int_to_str(company_id))
+    vec_push(vals, number)
+    vec_push(vals, doc_date)
+    vec_push(vals, int_to_str(location_id))
+    vec_push(vals, "draft")
+    vec_push(vals, notes)
+    vec_push(vals, "0")
+    vec_push(vals, kv_now_iso()?)
+    return orm_insert_returning_strs(db, mi_table(), cols, vals)?
+}
+
+fn mi_line_insert(db: OrmDb, doc_id: i64, product_id: i64, quantity: str, unit_cost: str, amount: str, account_id: i64, inventory_account_id: i64, line_no: i64) -> OrmExec !IO !Net {
+    let cols: Vec<str> = vec_new()
+    vec_push(cols, "doc_id")
+    vec_push(cols, "product_id")
+    vec_push(cols, "quantity")
+    vec_push(cols, "unit_cost")
+    vec_push(cols, "amount")
+    vec_push(cols, "account_id")
+    vec_push(cols, "inventory_account_id")
+    vec_push(cols, "line_no")
+    let vals: Vec<str> = vec_new()
+    vec_push(vals, int_to_str(doc_id))
+    vec_push(vals, int_to_str(product_id))
+    vec_push(vals, quantity)
+    vec_push(vals, unit_cost)
+    vec_push(vals, amount)
+    vec_push(vals, int_to_str(account_id))
+    vec_push(vals, int_to_str(inventory_account_id))
+    vec_push(vals, int_to_str(line_no))
+    return orm_insert_strs(db, mi_line_table(), cols, vals)?
+}
+
+fn mi_lines_by_doc(db: OrmDb, doc_id: i64) -> OrmQuery !IO !Net {
+    return kv_where_order(db, mi_line_table(), "doc_id", int_to_str(doc_id), "line_no", mi_line_cols())?
+}
+
+fn mi_update(db: OrmDb, id: i64, number: str, doc_date: str, location_id: i64, notes: str) -> OrmExec !IO !Net {
+    let cols: Vec<str> = vec_new()
+    vec_push(cols, "number")
+    vec_push(cols, "doc_date")
+    vec_push(cols, "location_id")
+    vec_push(cols, "notes")
+    let vals: Vec<str> = vec_new()
+    vec_push(vals, number)
+    vec_push(vals, doc_date)
+    vec_push(vals, int_to_str(location_id))
+    vec_push(vals, notes)
+    return orm_update_by_id(db, mi_table(), id, cols, vals)?
+}
+
+fn mi_set_status(db: OrmDb, id: i64, status: str, entry_id: i64) -> OrmExec !IO !Net {
+    let cols: Vec<str> = vec_new()
+    vec_push(cols, "status")
+    vec_push(cols, "journal_entry_id")
+    let vals: Vec<str> = vec_new()
+    vec_push(vals, status)
+    vec_push(vals, int_to_str(entry_id))
+    return orm_update_by_id(db, mi_table(), id, cols, vals)?
+}
+
+fn mi_delete(db: OrmDb, id: i64) -> OrmExec !IO !Net {
+    return kv_delete_by_id(db, mi_table(), id)?
+}
+
+fn mi_line_delete(db: OrmDb, doc_id: i64) -> OrmExec !IO !Net {
+    return kv_delete_where(db, mi_line_table(), "doc_id", int_to_str(doc_id))?
+}
+
+fn mi_list_json(q: OrmQuery) -> JObj {
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        arr = jarr_obj(arr, mi_to_json(q, i))
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", orm_nrows(q))
+    return o
+}
+
+fn mi_lines_json(q: OrmQuery) -> JArr {
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        arr = jarr_obj(arr, mi_line_to_json(q, i))
+        i = i + 1
+    }
+    return arr
+}
+
+// Сума като NUMERIC(18,2): закръглено на 2 знака, винаги с десетичен разделител.
+fn mi_money(d: Decimal) -> str {
+    let r = dec_round_dp(d, 2)
+    let mut v = d
+    if r.ok == 1 {
+        v = r.value
+    }
+    let s = dec_to_string(v)
+    let dot = str_find(s, ".")
+    if dot < 0 {
+        return concat(s, ".00")
+    }
+    if len(s) - dot - 1 == 1 {
+        return concat(s, "0")
+    }
+    return s
+}
+
+// Сума на редовете (за таблото и одита).
+fn mi_total(q: OrmQuery) -> str {
+    let mut sum = dec_zero()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        let a = orm_cell_by(q, i, "amount")
+        let p = dec_parse(a)
+        if p.ok == 1 {
+            let r = dec_add(sum, p.value)
+            if r.ok == 1 {
+                sum = r.value
+            }
+        }
+        i = i + 1
+    }
+    return mi_money(sum)
+}

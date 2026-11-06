@@ -193,3 +193,12 @@ fn RID_INVOICES_ISSUE_CUSTOMS() -> i64 { return 277 }
 
 // Ръчно въведени ДДС клетки за период.
 fn RID_VAT_MANUAL() -> i64 { return 278 }
+
+// Изписване на материали от склад.
+fn RID_MI_INDEX() -> i64 { return 279 }
+fn RID_MI_CREATE() -> i64 { return 280 }
+fn RID_MI_SHOW() -> i64 { return 281 }
+fn RID_MI_UPDATE() -> i64 { return 282 }
+fn RID_MI_DELETE() -> i64 { return 283 }
+fn RID_MI_CONFIRM() -> i64 { return 284 }
+fn RID_MI_UNPOST() -> i64 { return 285 }
