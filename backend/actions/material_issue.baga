@@ -315,6 +315,13 @@ fn act_mi_confirm(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         return act_404(orm_db_q(iq), "Material issue not found")
     }
     let d = orm_db_q(iq)
+    let ac0 = active_company_id(d, auth.ctx.user_sub)
+    if ac0.id <= 0 {
+        return act_err(ac0.db, 422, "няма избрана активна фирма")
+    }
+    if orm_cell_by_i64(iq, 0, "company_id") != ac0.id {
+        return act_404(ac0.db, "Material issue not found")
+    }
     if orm_cell_by(iq, 0, "status") != "draft" {
         return act_err(d, 409, "документът не е чернова")
     }
@@ -334,7 +341,7 @@ fn act_mi_confirm(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if orm_ok_q(lq) == 0 || orm_nrows(lq) < 1 {
         return act_err(orm_db_q(lq), 422, "документът няма редове")
     }
-    let vm = company_valuation_method(orm_db_q(lq))?
+    let vm = company_valuation_method(orm_db_q(lq), cid)?
     if vm.ok == 0 {
         return act_err(vm.db, 500, vm.err)
     }
@@ -469,6 +476,13 @@ fn act_mi_unpost(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         return act_404(orm_db_q(iq), "Material issue not found")
     }
     let d = orm_db_q(iq)
+    let ac0 = active_company_id(d, auth.ctx.user_sub)
+    if ac0.id <= 0 {
+        return act_err(ac0.db, 422, "няма избрана активна фирма")
+    }
+    if orm_cell_by_i64(iq, 0, "company_id") != ac0.id {
+        return act_404(ac0.db, "Material issue not found")
+    }
     if orm_cell_by(iq, 0, "status") != "confirmed" {
         return act_err(d, 409, "документът не е потвърден")
     }

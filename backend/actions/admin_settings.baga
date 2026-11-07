@@ -1,6 +1,7 @@
 // actions/admin_settings.baga — глобални настройки + SMTP/S3 през Python sidecar.
 
 import "../models/setting.baga"
+import "acl.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
 import "fmrbaga/action.baga"
@@ -67,7 +68,7 @@ fn sidecar_result(db: OrmDb, resp: HttpResponse) -> FmrOut {
 }
 
 fn act_system_settings_get(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
-    let auth = act_require_auth(ctx, db)
+    let auth = act_require_perm(ctx, db, "settings:read")
     if auth.ok == 0 {
         return auth.out
     }
@@ -82,7 +83,7 @@ fn act_system_settings_get(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
 }
 
 fn act_system_settings_put(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
-    let auth = act_require_auth(ctx, db)
+    let auth = act_require_perm(ctx, db, "settings:write")
     if auth.ok == 0 {
         return auth.out
     }
@@ -176,7 +177,7 @@ fn s3_cfg_from_settings(q: OrmQuery) -> JObj {
 }
 
 fn act_smtp_test(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
-    let auth = act_require_auth(ctx, db)
+    let auth = act_require_perm(ctx, db, "settings:write")
     if auth.ok == 0 {
         return auth.out
     }
@@ -210,7 +211,7 @@ fn act_smtp_test(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
 }
 
 fn act_s3_test(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
-    let auth = act_require_auth(ctx, db)
+    let auth = act_require_perm(ctx, db, "settings:write")
     if auth.ok == 0 {
         return auth.out
     }
@@ -223,7 +224,7 @@ fn act_s3_test(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
 }
 
 fn act_s3_backup(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
-    let auth = act_require_auth(ctx, db)
+    let auth = act_require_perm(ctx, db, "settings:write")
     if auth.ok == 0 {
         return auth.out
     }
@@ -239,7 +240,7 @@ fn act_s3_backup(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
 }
 
 fn act_s3_list(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
-    let auth = act_require_auth(ctx, db)
+    let auth = act_require_perm(ctx, db, "settings:read")
     if auth.ok == 0 {
         return auth.out
     }
@@ -252,7 +253,7 @@ fn act_s3_list(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
 }
 
 fn act_s3_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
-    let auth = act_require_auth(ctx, db)
+    let auth = act_require_perm(ctx, db, "settings:write")
     if auth.ok == 0 {
         return auth.out
     }
@@ -282,7 +283,7 @@ fn act_s3_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
 // Пускането на rocksbaga с LSMPATH сочеща там е ръчна стъпка (контейнерът
 // се рестартира), защото LSM  store-ът се отваря само при старт.
 fn act_s3_restore(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
-    let auth = act_require_auth(ctx, db)
+    let auth = act_require_perm(ctx, db, "settings:write")
     if auth.ok == 0 {
         return auth.out
     }

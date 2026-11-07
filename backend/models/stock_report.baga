@@ -97,7 +97,6 @@ fn stk_report(db: OrmDb, company_id: i64, from: str, to: str, location_id: i64, 
     let lq = lot_all(d)?
     d = orm_db_q(lq)
     let mut lot_rem: Map<i64, Decimal> = map_new()
-    let mut lot_val: Map<i64, Decimal> = map_new()
     i = 0
     while i < orm_nrows(lq) {
         let pid = orm_cell_by_i64(lq, i, "product_id")
@@ -111,7 +110,6 @@ fn stk_report(db: OrmDb, company_id: i64, from: str, to: str, location_id: i64, 
             let past = day == "" || stk_date_cmp(day, hi) <= 0
             if past == 1 {
                 map_set(lot_rem, pid, stk_add(map_get(lot_rem, pid), rem))
-                map_set(lot_val, pid, stk_add(map_get(lot_val, pid), stk_mul(rem, unit)))
                 let mut st = map_get(states, pid)
                 st.val = stk_add(st.val, stk_mul(qty, unit))
                 st.qty = stk_add(st.qty, qty)

@@ -40,8 +40,8 @@ fn mfg_post_jl(db: OrmDb, entry_id: i64, account_id: i64, direction: str, amount
     return inv_ok(orm_db_exec(li), "")
 }
 
-fn mfg_valuation(db: OrmDb) -> InvResult !IO !Net {
-    let cq = company_all(db)?
+fn mfg_valuation(db: OrmDb, company_id: i64) -> InvResult !IO !Net {
+    let cq = company_find(db, company_id)?
     if orm_ok_q(cq) == 0 {
         return inv_err(orm_db_q(cq), orm_err_q(cq))
     }
@@ -90,7 +90,7 @@ fn act_pord_confirm(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if pc.ok == 0 {
         return act_err(pc.db, 422, pc.err)
     }
-    let vm = mfg_valuation(pc.db)?
+    let vm = mfg_valuation(pc.db, ac.id)?
     if vm.ok == 0 {
         return act_err(vm.db, 500, vm.err)
     }

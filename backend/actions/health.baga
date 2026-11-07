@@ -61,12 +61,15 @@ fn act_db_check(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         d = orm_db_q(lq)
         let mut deb: Map<i64, Decimal> = map_new()
         let mut cre: Map<i64, Decimal> = map_new()
+        let mut seen: Map<i64, i64> = map_new()
         let mut order: Vec<i64> = vec_new()
         let mut i: i64 = 0
         while i < orm_nrows(lq) {
             let e = orm_cell_by_i64(lq, i, "entry_id")
             let a = health_dec(orm_cell_by(lq, i, "amount"))
-            if map_has(deb, e) == 0 {
+            // seen, не deb: запис, започващ с кредит, иначе влизаше два пъти.
+            if map_has(seen, e) == 0 {
+                map_set(seen, e, 1)
                 vec_push(order, e)
             }
             if orm_cell_by(lq, i, "direction") == "debit" {
