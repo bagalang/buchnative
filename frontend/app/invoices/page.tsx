@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, ListResponse } from "../../lib/api";
 import { Invoice, docTypesFor, formatBgDate } from "../../lib/invoice";
 import { useI18n } from "../../components/I18nProvider";
+import { Pager } from "../../components/Pager";
 import { RequireAuth } from "../../components/RequireAuth";
 import { IconButton } from "../../components/IconButton";
 
@@ -35,6 +36,9 @@ function InvoicesInner() {
   const [statusFilter, setStatusFilter] = useState("");
   const [selected, setSelected] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
+  const [offset, setOffset] = useState(0);
+  const [total, setTotal] = useState(0);
+  const [limit] = useState(50);
 
   // Филтри от адреса (/invoices?status=draft) — така таблото може да води
   // право към чернови или вземания. Пазено в URL, не в Suspense.
@@ -44,19 +48,30 @@ function InvoicesInner() {
     setStatusFilter(q.get("status") ?? "");
   }, []);
 
+  // Филтрите и търсенето са на сървъра — клиентът иначе филтрира само
+  // свалената страница. offset/limit идват от Пager-а.
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const data = await api.get<ListResponse<Invoice>>("/v1/invoices");
+      const p = new URLSearchParams({
+        limit: String(limit),
+        offset: String(offset),
+        q: search,
+        type: typeFilter,
+        direction: dirFilter,
+        status: statusFilter,
+      });
+      const data = await api.get<ListResponse<Invoice>>(`/v1/invoices?${p.toString()}`);
       setRows(data.items ?? []);
+      setTotal(data.total ?? 0);
       setSelected([]);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [limit, offset, search, typeFilter, dirFilter, statusFilter]);
 
   useEffect(() => {
     load();
@@ -71,21 +86,7 @@ function InvoicesInner() {
     counterparts.find((c) => c.id === inv.counterpart_id)?.name ||
     String(inv.counterpart_id);
 
-  const filtered = useMemo(() => {
-    const q = search.toLowerCase();
-    return rows.filter((inv) => {
-      if (typeFilter && inv.document_type !== typeFilter) return false;
-      if (dirFilter && inv.direction !== dirFilter) return false;
-      if (statusFilter && inv.status !== statusFilter) return false;
-      if (!q) return true;
-      const name = (
-        inv.counterpart_name ||
-        counterparts.find((c) => c.id === inv.counterpart_id)?.name ||
-        ""
-      ).toLowerCase();
-      return inv.number.toLowerCase().includes(q) || name.includes(q);
-    });
-  }, [rows, search, typeFilter, dirFilter, statusFilter, counterparts]);
+
 
   const statusClass = (s: string) => {
     if (s === "posted" || s === "paid") return "badge-success";
@@ -100,10 +101,10 @@ function InvoicesInner() {
   };
 
   const allSelected =
-    filtered.length > 0 && filtered.every((inv) => selected.includes(inv.id));
+    rows.length > 0 && rows.every((inv) => selected.includes(inv.id));
 
   const toggleAll = () => {
-    setSelected(allSelected ? [] : filtered.map((inv) => inv.id));
+    setSelected(allSelected ? [] : rows.map((inv) => inv.id));
   };
 
   const handleDelete = async (inv: Invoice) => {
@@ -254,7 +255,7 @@ function InvoicesInner() {
       <div className="card">
         {loading ? (
           <div className="content muted">{t("common.loading")}</div>
-        ) : filtered.length === 0 ? (
+        ) : rows.length === 0 ? (
           <div className="content muted">{t("common.empty")}</div>
         ) : (
           <div className="table-wrap">
@@ -279,7 +280,7 @@ function InvoicesInner() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((inv) => (
+              {rows.map((inv) => (
                 <tr key={inv.id}>
                   <td>
                     <input
@@ -335,6 +336,14 @@ function InvoicesInner() {
           </div>
         )}
       </div>
+
+      <Pager
+        offset={offset}
+        limit={limit}
+        total={total}
+        loading={loading}
+        onPage={setOffset}
+      />
     </div>
   );
 }

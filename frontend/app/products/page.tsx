@@ -1,9 +1,10 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 import { RequireAuth } from "../../components/RequireAuth";
 import { UnitPicker } from "../../components/UnitPicker";
 import { Cn8Picker } from "../../components/Cn8Picker";
+import { Pager } from "../../components/Pager";
 import { useI18n } from "../../components/I18nProvider";
 import { api, ListResponse } from "../../lib/api";
 import { UnitOfMeasure } from "../../lib/units";
@@ -70,37 +71,40 @@ function ProductsInner() {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
   const [q, setQ] = useState("");
+  const [offset, setOffset] = useState(0);
+  const [total, setTotal] = useState(0);
+  const [limit] = useState(50);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const [p, a, u] = await Promise.all([
-        api.get<ListResponse<Product>>("/v1/products"),
-        api.get<ListResponse<Account>>("/v1/accounts"),
-        api.get<ListResponse<UnitOfMeasure>>("/v1/units"),
-      ]);
-      setRows(p.items ?? []);
-      setAccounts(a.items ?? []);
-      setUnits(u.items ?? []);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  // Търсенето и страниците са на сървъра — иначе се търси само в свалената
+  // страница и списъкът мълча се обреже на 50 реда.
+  const load = useCallback(
+    async (query: string, off: number) => {
+      setLoading(true);
+      setError("");
+      try {
+        const [p, a, u] = await Promise.all([
+          api.get<ListResponse<Product>>(
+            `/v1/products?limit=${limit}&offset=${off}&q=${encodeURIComponent(query)}`
+          ),
+          api.get<ListResponse<Account>>("/v1/accounts?limit=1000"),
+          api.get<ListResponse<UnitOfMeasure>>("/v1/units"),
+        ]);
+        setRows(p.items ?? []);
+        setTotal(p.total ?? 0);
+        setAccounts(a.items ?? []);
+        setUnits(u.items ?? []);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setLoading(false);
+      }
+    },
+    [limit]
+  );
 
   useEffect(() => {
-    load();
-  }, [load]);
-
-  const filtered = useMemo(() => {
-    const s = q.trim().toLowerCase();
-    if (!s) return rows;
-    return rows.filter((p) =>
-      `${p.name} ${p.code} ${p.unit} ${p.description}`.toLowerCase().includes(s)
-    );
-  }, [rows, q]);
+    load(q, offset);
+  }, [load, q, offset]);
 
   const openCreate = () => {
     setForm(emptyForm);
@@ -160,7 +164,7 @@ function ProductsInner() {
         await api.post("/v1/products", payload);
       }
       setModalOpen(false);
-      await load();
+      await load(q, offset);
     } catch (err) {
       setFormError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -172,7 +176,7 @@ function ProductsInner() {
     if (!window.confirm(t("common.confirmDelete"))) return;
     try {
       await api.del(`/v1/products/${p.id}`);
-      await load();
+      await load(q, offset);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -203,7 +207,7 @@ function ProductsInner() {
       <div className="card">
         {loading ? (
           <div className="content muted">{t("common.loading")}</div>
-        ) : filtered.length === 0 ? (
+        ) : rows.length === 0 ? (
           <div className="content muted">{t("common.empty")}</div>
         ) : (
           <table className="table">
@@ -220,7 +224,7 @@ function ProductsInner() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((p) => (
+              {rows.map((p) => (
                 <tr key={p.id}>
                   <td>
                     {p.name}
@@ -261,6 +265,14 @@ function ProductsInner() {
           </table>
         )}
       </div>
+
+      <Pager
+        offset={offset}
+        limit={limit}
+        total={total}
+        loading={loading}
+        onPage={setOffset}
+      />
 
       {modalOpen && (
         <div className="modal-backdrop" onClick={() => setModalOpen(false)}>

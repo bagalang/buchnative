@@ -117,7 +117,10 @@ export function CrudPage({ config }: { config: CrudConfig }) {
     setLoading(true);
     setError("");
     try {
-      const data = await api.get<ListResponse<Record_>>(config.endpoint);
+      // Тези таблици са малки (фирми, контрагенти, ДМА) — сиваме ги цялите,
+      // за да не се реже списъкът на 50 реда от сървъра.
+      const sep = config.endpoint.includes("?") ? "&" : "?";
+      const data = await api.get<ListResponse<Record_>>(`${config.endpoint}${sep}limit=1000`);
       setRows(data.items ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

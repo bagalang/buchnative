@@ -3,7 +3,8 @@
 // Дневник — счетоводни записи. Нов запис / редакция: голям модал с три
 // таба (Покупки / Продажби / Без ДДС). Клик върху ред зарежда записа.
 
-import { useCallback, useEffect, useMemo, useState, FormEvent, MouseEvent } from "react";
+import { useCallback, useEffect, useState, FormEvent, MouseEvent } from "react";
+import { Pager } from "../../components/Pager";
 import { api, ListResponse } from "../../lib/api";
 import { formatBgDate, todayIso } from "../../lib/dates";
 import { useI18n } from "../../components/I18nProvider";
@@ -104,6 +105,9 @@ function JournalInner() {
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<number[]>([]);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [offset, setOffset] = useState(0);
+  const [total, setTotal] = useState(0);
+  const [limit] = useState(50);
 
   // модал
   const [modalOpen, setModalOpen] = useState(false);
@@ -125,7 +129,7 @@ function JournalInner() {
   };
 
   const toggleAll = (on: boolean) => {
-    setSelected(on ? filteredEntries.map((e) => e.id) : []);
+    setSelected(on ? entries.map((e) => e.id) : []);
   };
 
   const bulkDelete = async () => {
@@ -148,18 +152,27 @@ function JournalInner() {
     }
   };
 
+  // Търсенето е на сървъра — локалното филтриране иначе търси само в
+  // свалената страница и списъкът мълча се обреже на 50 реда.
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const data = await api.get<ListResponse<JournalEntry>>("/v1/journal");
+      const p = new URLSearchParams({
+        limit: String(limit),
+        offset: String(offset),
+        q,
+      });
+      const data = await api.get<ListResponse<JournalEntry>>(`/v1/journal?${p.toString()}`);
       setEntries(data.items ?? []);
+      setTotal(data.total ?? 0);
+      setSelected([]);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [limit, offset, q]);
 
   const loadRefs = useCallback(async () => {
     try {
@@ -257,15 +270,7 @@ function JournalInner() {
     .reduce((acc, l) => acc + (parseFloat(l.amount) || 0), 0);
   const balanced = Math.abs(debitSum - creditSum) < 0.0001;
 
-  const filteredEntries = useMemo(() => {
-    const s = q.trim().toLowerCase();
-    if (!s) return entries;
-    return entries.filter((en) =>
-      `${en.entry_date} ${en.document_type} ${en.document_id} ${en.document_number ?? ""} ${en.description} ${en.counterpart_name}`
-        .toLowerCase()
-        .includes(s)
-    );
-  }, [entries, q]);
+
 
   const filteredCounterparts = counterparts.filter((c) => {
     if (String(c.id) === counterpartId) return true;
@@ -364,7 +369,7 @@ function JournalInner() {
       <div className="card">
         {loading ? (
           <div className="content muted">{t("common.loading")}</div>
-        ) : filteredEntries.length === 0 ? (
+        ) : entries.length === 0 ? (
           <div className="content muted">{t("common.empty")}</div>
         ) : (
           <div className="table-wrap">
@@ -374,7 +379,7 @@ function JournalInner() {
                   <th style={{ width: 32 }}>
                     <input
                       type="checkbox"
-                      checked={filteredEntries.length > 0 && selected.length === filteredEntries.length}
+                      checked={entries.length > 0 && selected.length === entries.length}
                       onChange={(e) => toggleAll(e.target.checked)}
                     />
                   </th>
@@ -387,7 +392,7 @@ function JournalInner() {
                 </tr>
               </thead>
               <tbody>
-                {filteredEntries.map((en) => (
+                {entries.map((en) => (
                   <tr
                     key={en.id}
                     onClick={() => void openEdit(en)}
@@ -433,6 +438,14 @@ function JournalInner() {
           </div>
         )}
       </div>
+
+      <Pager
+        offset={offset}
+        limit={limit}
+        total={total}
+        loading={loading}
+        onPage={setOffset}
+      />
 
       {modalOpen && (
         <div className="modal-backdrop" onClick={() => setModalOpen(false)}>

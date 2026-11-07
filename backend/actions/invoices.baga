@@ -1,4 +1,5 @@
 import "../models/invoice.baga"
+import "../models/kvpage.baga"
 import "../models/counterpart.baga"
 import "../models/company.baga"
 import "../models/setting.baga"
@@ -26,11 +27,16 @@ fn act_invoices_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     }
     let page = act_page(ctx, 50, 200)
     let ac = active_company_id(db, auth.ctx.user_sub)?
-    let q = invoice_all(ac.db)?
+    let qs = str_trim(fmr_query(ctx, "q"))
+    let typ = fmr_query(ctx, "type")
+    let dir = fmr_query(ctx, "direction")
+    let st = fmr_query(ctx, "status")
+    let q = kvpage_invoices(ac.db, invoice_table(), "company_id", int_to_str(ac.id), invoice_cols(), page.limit, page.offset, typ, dir, st, qs)?
     if orm_ok_q(q) == 0 {
         return act_err(orm_db_q(q), 500, orm_err_q(q))
     }
     let mut o = invoice_list_json_co(q, ac.id)
+    o = jobj_i64(o, "total", kvpage_invoices_count(ac.db, invoice_table(), "company_id", int_to_str(ac.id), invoice_cols(), typ, dir, st, qs)?)
     o = jobj_i64(o, "limit", page.limit)
     o = jobj_i64(o, "offset", page.offset)
     return act_ok(orm_db_q(q), o)

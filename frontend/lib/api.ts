@@ -179,6 +179,9 @@ export function logout(): void {
 export interface ListResponse<T> {
   items: T[];
   count: number;
+  total?: number;
+  limit?: number;
+  offset?: number;
 }
 
 // фирма

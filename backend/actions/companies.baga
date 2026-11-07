@@ -1,6 +1,7 @@
 // actions/companies.baga — фирми: CRUD handlers.
 
 import "../models/company.baga"
+import "../models/kvpage.baga"
 import "../models/addr_saft.baga"
 import "acl.baga"
 import "accounts_seed.baga"
@@ -18,12 +19,13 @@ fn act_companies_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if orm_ok_db(db) == 0 {
         return act_err(db, 503, "database unavailable")
     }
-    let page = act_page(ctx, 50, 200)
-    let q = company_all(db)?
+    let page = act_page(ctx, 50, 1000)
+    let q = kvpage_all(db, company_table(), company_cols(), page.limit, page.offset)?
     if orm_ok_q(q) == 0 {
         return act_err(orm_db_q(q), 500, orm_err_q(q))
     }
     let mut o = company_list_json(q)
+    o = jobj_i64(o, "total", kvpage_total(db, company_table())?)
     o = jobj_i64(o, "limit", page.limit)
     o = jobj_i64(o, "offset", page.offset)
     return act_ok(orm_db_q(q), o)

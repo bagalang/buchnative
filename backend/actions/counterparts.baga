@@ -1,6 +1,7 @@
 // actions/counterparts.baga — контрагенти: CRUD handlers.
 
 import "../models/counterpart.baga"
+import "../models/kvpage.baga"
 import "../models/addr_saft.baga"
 import "mistral.baga"
 import "acl.baga"
@@ -31,13 +32,14 @@ fn act_counterparts_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if orm_ok_db(db) == 0 {
         return act_err(db, 503, "database unavailable")
     }
-    let page = act_page(ctx, 50, 200)
+    let page = act_page(ctx, 50, 1000)
     let ac = active_company_id(db, auth.ctx.user_sub)?
-    let q = counterpart_all(ac.db)?
+    let q = kvpage_where(ac.db, counterpart_table(), "company_id", int_to_str(ac.id), counterpart_cols(), page.limit, page.offset)?
     if orm_ok_q(q) == 0 {
         return act_err(orm_db_q(q), 500, orm_err_q(q))
     }
     let mut o = counterpart_list_json_co(q, ac.id)
+    o = jobj_i64(o, "total", kvpage_count(ac.db, counterpart_table(), "company_id", int_to_str(ac.id))?)
     o = jobj_i64(o, "limit", page.limit)
     o = jobj_i64(o, "offset", page.offset)
     return act_ok(orm_db_q(q), o)

@@ -1,0 +1,346 @@
+// models/kvpage.baga — странициране върху KV индекси.
+//
+// Проблемът, който решава: списъците досега зареждат ВСИЧКИ редове на таблицата
+// и сериализират всички, след което клиентът показва първата страница. При
+// 100k+ документи това е O(N) памет и време на всяка заявка.
+//
+// Тук редовете се търсят по вторичен индекс (една колона) и се вземат само
+// тези от страницата — сегмента от индексния списък, после MGET само на него.
+// Този файл е в buchnative, не в ormbaga: това е начин на работа на приложението.
+
+import "ormbaga/orm.baga"
+import "ormbaga/session/kv.baga"
+import "std/str/str.baga"
+import "counterpart.baga"
+
+// Брой редове по индекс (колона = стойност). 0 при грешка.
+fn kvpage_count(db: OrmDb, table: str, col: str, val: str) -> i64 !IO !Net {
+    let ids = kv_ix_ids(db, table, col, val)?
+    return vec_len(ids)
+}
+
+// Страница от индекс (col = val), сортирана по id възходящо — реда на
+// вмъкване. Връща заявка само с редовете на страницата.
+fn kvpage_where(db: OrmDb, table: str, col: str, val: str, cols: Vec<str>, limit: i64, offset: i64) -> OrmQuery !IO !Net {
+    let ids = kv_ix_ids(db, table, col, val)?
+    let n = vec_len(ids)
+    let page: Vec<str> = vec_new()
+    let mut i = offset
+    if i < 0 {
+        i = 0
+    }
+    let mut taken: i64 = 0
+    while i < n {
+        if limit > 0 && taken >= limit {
+            i = n
+        } else {
+            vec_push(page, vec_get(ids, i))
+            taken = taken + 1
+            i = i + 1
+        }
+    }
+    return kv_rows_to_query(db, table, page, cols)
+}
+
+// Страница от цялата таблица (без филтър), по реда на вмъкване.
+fn kvpage_all(db: OrmDb, table: str, cols: Vec<str>, limit: i64, offset: i64) -> OrmQuery !IO !Net {
+    let ids = kv_all_ids(db, table)?
+    let n = vec_len(ids)
+    let page: Vec<str> = vec_new()
+    let mut i = offset
+    if i < 0 {
+        i = 0
+    }
+    let mut taken: i64 = 0
+    while i < n {
+        if limit > 0 && taken >= limit {
+            i = n
+        } else {
+            vec_push(page, vec_get(ids, i))
+            taken = taken + 1
+            i = i + 1
+        }
+    }
+    return kv_rows_to_query(db, table, page, cols)
+}
+
+// Брой редове в цялата таблица. MAX(id) НЕ е брой редове — след изтриване
+// остава старата стойност на брояча. Броим индексните id-та (само id, не редове).
+fn kvpage_total(db: OrmDb, table: str) -> i64 !IO !Net {
+    let c = kv_row_count(db, table)?
+    if orm_ok_c(c) == 0 {
+        return 0
+    }
+    return orm_count_n(c)
+}
+
+// Безрегистрово търсене: ASCII и кирилски главни букви се понижават.
+// Крилицата е 2-байтов UTF-8, затова се декодира по кодова точка и се
+// кодира обратно с chr() (chr приема кодова точка, не байт).
+fn kvpage_lower(s: str) -> str {
+    let mut out = ""
+    let mut i: i64 = 0
+    let n = len(s)
+    while i < n {
+        let b = char_at(s, i)
+        if b < 128 {
+            let mut c = b
+            if c >= 65 && c <= 90 {
+                c = c + 32
+            }
+            out = concat(out, chr(c))
+            i = i + 1
+        } else if b >= 192 && b <= 223 && i + 1 < n {
+            let b2 = char_at(s, i + 1)
+            let mut cp = ((b - 192) << 6) + (b2 - 128)
+            // кирилски главни А–Я (0x0410–0x042F) и Ё (0x0401)
+            if cp >= 1040 && cp <= 1071 {
+                cp = cp + 32
+            }
+            if cp == 1025 {
+                cp = 1105
+            }
+            out = concat(out, chr(cp))
+            i = i + 2
+        } else {
+            out = concat(out, substr(s, i, i + 1))
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// Страница с търсене по подниз в дадени колони. Търсенето е в паметта — KV
+// няма текстови индекси — но се филтрира преди страницата и връща само нея.
+fn kvpage_search(db: OrmDb, table: str, col: str, val: str, cols: Vec<str>, limit: i64, offset: i64, needle: str, match_cols: Vec<i64>) -> OrmQuery !IO !Net {
+    let q = kvpage_where(db, table, col, val, cols, 0, 0)?
+    if orm_ok_q(q) == 0 {
+        return q
+    }
+    let s = kvpage_lower(str_trim(needle))
+    if s == "" {
+        // без търсене — но страницата се прилага винаги
+        let ei: Vec<i64> = vec_new()
+        let ev: Vec<str> = vec_new()
+        let mi: Vec<i64> = vec_new()
+        let cm: Map<i64, str> = map_new()
+        return kvpage_apply(q, cols, limit, offset, ei, ev, "", mi, 0, cm)
+    }
+    let cells: Vec<str> = vec_new()
+    let nulls: Vec<i64> = vec_new()
+    let mut matched: i64 = 0
+    let mut pushed: i64 = 0
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        let mut hit = 0
+        let mut c: i64 = 0
+        while c < vec_len(match_cols) {
+            if str_find(kvpage_lower(orm_cell(q, i, vec_get(match_cols, c))), s) >= 0 {
+                hit = 1
+            }
+            c = c + 1
+        }
+        if hit == 1 {
+            if matched >= offset && (limit <= 0 || pushed < limit) {
+                let mut c2: i64 = 0
+                while c2 < vec_len(cols) {
+                    vec_push(cells, orm_cell(q, i, c2))
+                    vec_push(nulls, 0)
+                    c2 = c2 + 1
+                }
+                pushed = pushed + 1
+            }
+            matched = matched + 1
+        }
+        i = i + 1
+    }
+    return kv_query_ok(orm_db_q(q), cols, cells, nulls, pushed)
+}
+
+// Брой съвпадения за същото търсене — за общия брой страници.
+fn kvpage_search_count(db: OrmDb, table: str, col: str, val: str, cols: Vec<str>, needle: str, match_cols: Vec<i64>) -> i64 !IO !Net {
+    let q = kvpage_where(db, table, col, val, cols, 0, 0)?
+    if orm_ok_q(q) == 0 {
+        return 0
+    }
+    let s = kvpage_lower(str_trim(needle))
+    if s == "" {
+        let c = kvpage_count(db, table, col, val)?
+        return c
+    }
+    let mut n: i64 = 0
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        let mut hit = 0
+        let mut c: i64 = 0
+        while c < vec_len(match_cols) {
+            if str_find(kvpage_lower(orm_cell(q, i, vec_get(match_cols, c))), s) >= 0 {
+                hit = 1
+            }
+            c = c + 1
+        }
+        if hit == 1 {
+            n = n + 1
+        }
+        i = i + 1
+    }
+    return n
+}
+
+// ── Фактури: филтри по колони + търсене по номер или име на контрагент ──────
+// document_type=3, direction=1, status=15, number=2, counterpart_id=9.
+
+fn kvpage_counterparts(db: OrmDb) -> OrmQuery !IO !Net {
+    return counterpart_all(db)?
+}
+
+fn kvpage_name_map(db: OrmDb, needle: str) -> Map<i64, str> !IO !Net {
+    let cm: Map<i64, str> = map_new()
+    let s = kvpage_lower(str_trim(needle))
+    if s == "" {
+        return cm
+    }
+    let cq = kvpage_counterparts(db)?
+    if orm_ok_q(cq) == 1 {
+        let mut i: i64 = 0
+        while i < orm_nrows(cq) {
+            if str_find(kvpage_lower(orm_cell_by(cq, i, "name")), s) >= 0 {
+                map_set(cm, orm_cell_by_i64(cq, i, "id"), orm_cell_by(cq, i, "name"))
+            }
+            i = i + 1
+        }
+    }
+    return cm
+}
+
+// Общ филтър: точни стойности (паралелни вектори), подниз в match_idx колони
+// и име на контрагент (cm по name_idx колона с id-то).
+fn kvpage_apply(q: OrmQuery, cols: Vec<str>, limit: i64, offset: i64, exact_idx: Vec<i64>, exact_val: Vec<str>, needle: str, match_idx: Vec<i64>, name_idx: i64, cm: Map<i64, str>) -> OrmQuery !IO !Net {
+    if orm_ok_q(q) == 0 {
+        return q
+    }
+    let cells: Vec<str> = vec_new()
+    let nulls: Vec<i64> = vec_new()
+    let mut matched: i64 = 0
+    let mut pushed: i64 = 0
+    let s = kvpage_lower(str_trim(needle))
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        let mut ok = 1
+        let mut c: i64 = 0
+        while c < vec_len(exact_idx) {
+            if vec_get(exact_val, c) != "" && orm_cell(q, i, vec_get(exact_idx, c)) != vec_get(exact_val, c) {
+                ok = 0
+            }
+            c = c + 1
+        }
+        if ok == 1 && s != "" {
+            let mut hit = 0
+            let mut c2: i64 = 0
+            while c2 < vec_len(match_idx) {
+                if str_find(kvpage_lower(orm_cell(q, i, vec_get(match_idx, c2))), s) >= 0 {
+                    hit = 1
+                }
+                c2 = c2 + 1
+            }
+            if hit == 0 && map_len(cm) > 0 && map_has(cm, parse_int(orm_cell(q, i, name_idx))) == 1 {
+                hit = 1
+            }
+            if hit == 0 {
+                ok = 0
+            }
+        }
+        if ok == 1 {
+            if matched >= offset && (limit <= 0 || pushed < limit) {
+                let mut c3: i64 = 0
+                while c3 < vec_len(cols) {
+                    vec_push(cells, orm_cell(q, i, c3))
+                    vec_push(nulls, 0)
+                    c3 = c3 + 1
+                }
+                pushed = pushed + 1
+            }
+            matched = matched + 1
+        }
+        i = i + 1
+    }
+    return kv_query_ok(orm_db_q(q), cols, cells, nulls, pushed)
+}
+
+fn kvpage_apply_count(q: OrmQuery, exact_idx: Vec<i64>, exact_val: Vec<str>, needle: str, match_idx: Vec<i64>, name_idx: i64, cm: Map<i64, str>) -> i64 !IO !Net {
+    if orm_ok_q(q) == 0 {
+        return 0
+    }
+    let s = kvpage_lower(str_trim(needle))
+    let mut n: i64 = 0
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        let mut ok = 1
+        let mut c: i64 = 0
+        while c < vec_len(exact_idx) {
+            if vec_get(exact_val, c) != "" && orm_cell(q, i, vec_get(exact_idx, c)) != vec_get(exact_val, c) {
+                ok = 0
+            }
+            c = c + 1
+        }
+        if ok == 1 && s != "" {
+            let mut hit = 0
+            let mut c2: i64 = 0
+            while c2 < vec_len(match_idx) {
+                if str_find(kvpage_lower(orm_cell(q, i, vec_get(match_idx, c2))), s) >= 0 {
+                    hit = 1
+                }
+                c2 = c2 + 1
+            }
+            if hit == 0 && map_len(cm) > 0 && map_has(cm, parse_int(orm_cell(q, i, name_idx))) == 1 {
+                hit = 1
+            }
+            if hit == 0 {
+                ok = 0
+            }
+        }
+        if ok == 1 {
+            n = n + 1
+        }
+        i = i + 1
+    }
+    return n
+}
+
+fn kvpage_invoices(db: OrmDb, table: str, col: str, val: str, cols: Vec<str>, limit: i64, offset: i64, typ: str, dir: str, st: str, needle: str) -> OrmQuery !IO !Net {
+    let q = kvpage_where(db, table, col, val, cols, 0, 0)?
+    if orm_ok_q(q) == 0 {
+        return q
+    }
+    let cm = kvpage_name_map(db, needle)
+    let ei: Vec<i64> = vec_new()
+    vec_push(ei, 3)
+    vec_push(ei, 1)
+    vec_push(ei, 15)
+    let ev: Vec<str> = vec_new()
+    vec_push(ev, typ)
+    vec_push(ev, dir)
+    vec_push(ev, st)
+    let mi: Vec<i64> = vec_new()
+    vec_push(mi, 2)
+    return kvpage_apply(q, cols, limit, offset, ei, ev, needle, mi, 9, cm)
+}
+
+fn kvpage_invoices_count(db: OrmDb, table: str, col: str, val: str, cols: Vec<str>, typ: str, dir: str, st: str, needle: str) -> i64 !IO !Net {
+    let q = kvpage_where(db, table, col, val, cols, 0, 0)?
+    if orm_ok_q(q) == 0 {
+        return 0
+    }
+    let cm = kvpage_name_map(db, needle)
+    let ei: Vec<i64> = vec_new()
+    vec_push(ei, 3)
+    vec_push(ei, 1)
+    vec_push(ei, 15)
+    let ev: Vec<str> = vec_new()
+    vec_push(ev, typ)
+    vec_push(ev, dir)
+    vec_push(ev, st)
+    let mi: Vec<i64> = vec_new()
+    vec_push(mi, 2)
+    return kvpage_apply_count(q, ei, ev, needle, mi, 9, cm)
+}

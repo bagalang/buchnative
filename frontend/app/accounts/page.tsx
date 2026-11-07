@@ -45,7 +45,7 @@ function AccountsInner() {
     setError("");
     try {
       const [a, n] = await Promise.all([
-        api.get<ListResponse<Account>>("/v1/accounts"),
+        api.get<ListResponse<Account>>("/v1/accounts?limit=1000"),
         api.get<ListResponse<SaftNomAccount>>(
           "/v1/saft/nomenclatures?kind=accounts"
         ),
