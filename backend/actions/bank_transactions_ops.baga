@@ -147,7 +147,7 @@ fn act_bank_transactions_book(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         cp_vat = orm_cell_by(cq, 0, "vat_number")
         d0 = orm_db_q(cq)
     }
-    let pc = period_assert_open(d0, tx_date)?
+    let pc = period_assert_open(d0, ac.id, tx_date)?
     if pc.ok == 0 {
         return act_err(pc.db, 422, pc.err)
     }

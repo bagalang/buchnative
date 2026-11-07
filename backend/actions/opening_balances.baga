@@ -6,6 +6,7 @@ import "../models/account.baga"
 import "../models/counterpart.baga"
 import "../models/product.baga"
 import "periods.baga"
+import "active_company.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
 import "fmrbaga/action.baga"
@@ -145,6 +146,10 @@ fn act_ob_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if auth.ok == 0 {
         return auth.out
     }
+    let ac = active_company_id(db, auth.ctx.user_sub)
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
     let body = jbody_parse_str(fmr_body(ctx))
     if body.ok == 0 {
         return act_err(db, 400, body.err)
@@ -191,7 +196,7 @@ fn act_ob_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         return act_err(db, 503, "database unavailable")
     }
     let key = ob_year_start_key(yf.num)
-    let pc = period_assert_open(db, key)?
+    let pc = period_assert_open(db, ac.id, key)?
     if pc.ok == 0 {
         return act_err(pc.db, 422, pc.err)
     }
@@ -233,6 +238,10 @@ fn act_ob_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if auth.ok == 0 {
         return auth.out
     }
+    let ac = active_company_id(db, auth.ctx.user_sub)
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
     let id = fmr_param_i64(ctx, "id")
     if id <= 0 {
         return act_err(db, 400, "invalid id")
@@ -257,7 +266,7 @@ fn act_ob_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     }
     let year = orm_cell_by_i64(q0, 0, "fiscal_year")
     let key = ob_year_start_key(year)
-    let pc = period_assert_open(orm_db_q(q0), key)?
+    let pc = period_assert_open(orm_db_q(q0), ac.id, key)?
     if pc.ok == 0 {
         return act_err(pc.db, 422, pc.err)
     }
@@ -327,6 +336,10 @@ fn act_ob_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if auth.ok == 0 {
         return auth.out
     }
+    let ac = active_company_id(db, auth.ctx.user_sub)
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
     let id = fmr_param_i64(ctx, "id")
     if id <= 0 {
         return act_err(db, 400, "invalid id")
@@ -343,7 +356,7 @@ fn act_ob_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     }
     let year = orm_cell_by_i64(q0, 0, "fiscal_year")
     let key = ob_year_start_key(year)
-    let pc = period_assert_open(orm_db_q(q0), key)?
+    let pc = period_assert_open(orm_db_q(q0), ac.id, key)?
     if pc.ok == 0 {
         return act_err(pc.db, 422, pc.err)
     }

@@ -331,7 +331,7 @@ fn act_mi_confirm(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     }
     let doc_date = orm_cell_by(iq, 0, "doc_date")
     let period = substr(doc_date, 0, 7)
-    let pc = period_assert_open(d, period)?
+    let pc = period_assert_open(d, ac0.id, period)?
     if pc.ok == 0 {
         return act_err(pc.db, 422, pc.err)
     }

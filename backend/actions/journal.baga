@@ -72,6 +72,10 @@ fn act_journal_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if auth.ok == 0 {
         return auth.out
     }
+    let ac = active_company_id(db, auth.ctx.user_sub)
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
     let body = jbody_parse_str(fmr_body(ctx))
     if body.ok == 0 {
         return act_err(db, 400, body.err)
@@ -110,7 +114,7 @@ fn act_journal_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if orm_ok_db(db) == 0 {
         return act_err(db, 503, "database unavailable")
     }
-    let pc = period_assert_open(db, entry_date.val)?
+    let pc = period_assert_open(db, ac.id, entry_date.val)?
     if pc.ok == 0 {
         return act_err(pc.db, 422, pc.err)
     }
@@ -305,11 +309,11 @@ fn act_journal_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         return act_404(orm_db_q(q0), "Journal entry not found")
     }
     let old_date = orm_cell_by(q0, 0, "entry_date")
-    let pc_old = period_assert_open(orm_db_q(q0), old_date)?
+    let pc_old = period_assert_open(orm_db_q(q0), ac.id, old_date)?
     if pc_old.ok == 0 {
         return act_err(pc_old.db, 422, pc_old.err)
     }
-    let pc = period_assert_open(pc_old.db, entry_date.val)?
+    let pc = period_assert_open(pc_old.db, ac.id, entry_date.val)?
     if pc.ok == 0 {
         return act_err(pc.db, 422, pc.err)
     }

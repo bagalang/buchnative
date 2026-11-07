@@ -113,7 +113,7 @@ fn invoice_post_one(db: OrmDb, id: i64, user_sub: str) -> FmrOut !IO !Net !Time 
         return act_404(acp.db, "Invoice not found")
     }
     db2 = acp.db
-    let pc = period_assert_open(db2, orm_cell_by(iq, 0, "accounting_month"))?
+    let pc = period_assert_open(db2, acp.id, orm_cell_by(iq, 0, "accounting_month"))?
     if pc.ok == 0 {
         return act_err(pc.db, 422, pc.err)
     }

@@ -7,6 +7,7 @@ import "../models/company.baga"
 import "../models/setting.baga"
 import "../models/product.baga"
 import "inventory.baga"
+import "active_company.baga"
 import "periods.baga"
 import "txn.baga"
 import "fmrbaga/app.baga"
@@ -35,6 +36,10 @@ fn act_idoc_confirm(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if auth.ok == 0 {
         return auth.out
     }
+    let ac = active_company_id(db, auth.ctx.user_sub)
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
     let id = fmr_param_i64(ctx, "id")
     if id <= 0 {
         return act_err(db, 400, "invalid id")
@@ -52,7 +57,7 @@ fn act_idoc_confirm(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if orm_cell_by(q, 0, "status") != "draft" {
         return act_err(orm_db_q(q), 409, "протоколът е вече потвърден")
     }
-    let pc = period_assert_open(orm_db_q(q), orm_cell_by(q, 0, "doc_date"))?
+    let pc = period_assert_open(orm_db_q(q), ac.id, orm_cell_by(q, 0, "doc_date"))?
     if pc.ok == 0 {
         return act_err(pc.db, 422, pc.err)
     }

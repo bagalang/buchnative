@@ -218,7 +218,7 @@ fn act_bank_transactions_import(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time
                 }
                 // period check при авто-осчетоводяване.
                 if auto_journal == 1 {
-                    let pc = period_assert_open(db2, tx.date)?
+                    let pc = period_assert_open(db2, ac.id, tx.date)?
                     if pc.ok == 0 {
                         return act_err_rb(pc.db, 422, pc.err)
                     }

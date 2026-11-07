@@ -13,6 +13,7 @@ import "fmrbaga/jsonx.baga"
 import "ormbaga/orm.baga"
 import "bagadecimal/src/decimal.baga"
 import "fixed_assets_ops.baga"
+import "active_company.baga"
 import "periods.baga"
 import "std/str/str.baga"
 
@@ -476,6 +477,10 @@ fn act_fa_depreciation_post(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if auth.ok == 0 {
         return auth.out
     }
+    let ac = active_company_id(db, auth.ctx.user_sub)
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
     let body = jbody_parse_str(fmr_body(ctx))
     if body.ok == 0 {
         return act_err(db, 400, body.err)
@@ -491,7 +496,7 @@ fn act_fa_depreciation_post(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if orm_ok_db(db) == 0 {
         return act_err(db, 503, "database unavailable")
     }
-    let pc = period_assert_open(db, period.val)?
+    let pc = period_assert_open(db, ac.id, period.val)?
     if pc.ok == 0 {
         return act_err(pc.db, 422, pc.err)
     }

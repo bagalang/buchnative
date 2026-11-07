@@ -86,7 +86,7 @@ fn act_pord_confirm(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if out_pid <= 0 {
         return act_err(orm_db_q(q), 422, "липсва изходен артикул")
     }
-    let pc = period_assert_open(orm_db_q(q), order_date)?
+    let pc = period_assert_open(orm_db_q(q), ac.id, order_date)?
     if pc.ok == 0 {
         return act_err(pc.db, 422, pc.err)
     }

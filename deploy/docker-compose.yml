@@ -62,7 +62,7 @@ services:
       FMR_JWT_SECRET: ${FMR_JWT_SECRET:?set FMR_JWT_SECRET in deploy/.env}
       FMR_JWT_TTL_SEC: ${FMR_JWT_TTL_SEC:-604800}
       FMR_TITLE: buchnative
-      FMR_VERSION: "0.9.12"
+      FMR_VERSION: "0.9.13"
       BUCHNATIVE_SIDECAR: http://127.0.0.1:5050
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/127.0.0.1/8080'"]

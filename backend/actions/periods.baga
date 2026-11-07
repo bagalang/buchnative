@@ -46,14 +46,14 @@ fn period_parse_month(key: str) -> i64 {
     return 0
 }
 
-fn period_assert_open(db: OrmDb, date_or_month: str) -> PeriodChk !IO !Net {
+fn period_assert_open(db: OrmDb, company_id: i64, date_or_month: str) -> PeriodChk !IO !Net {
     let key = period_from_date(date_or_month)
     let year = period_parse_year(key)
     let month = period_parse_month(key)
     if year < 1 || month < 1 || month > 12 {
         return period_chk_ok(db)
     }
-    let q = aper_by_year(db, year)?
+    let q = aper_by_company_year(db, company_id, year)?
     if orm_ok_q(q) == 0 {
         return period_chk_err(orm_db_q(q), orm_err_q(q))
     }
@@ -82,11 +82,15 @@ fn act_periods_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if year < 2000 {
         year = 2026
     }
-    let q = aper_by_year(db, year)?
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let q = aper_by_company_year(db, ac.id, year)?
     if orm_ok_q(q) == 0 {
         return act_err(orm_db_q(q), 500, orm_err_q(q))
     }
-    return act_ok(orm_db_q(q), aper_list_json(q, year))
+    return act_ok(orm_db_q(q), aper_list_json(q, ac.id, year))
 }
 
 fn act_period_close(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
@@ -118,7 +122,11 @@ fn act_period_close(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if orm_ok_db(db) == 0 {
         return act_err(db, 503, "database unavailable")
     }
-    let q = aper_by_year(db, yf.num)?
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let q = aper_by_company_year(db, ac.id, yf.num)?
     if orm_ok_q(q) == 0 {
         return act_err(orm_db_q(q), 500, orm_err_q(q))
     }
@@ -148,7 +156,7 @@ fn act_period_close(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         }
         db2 = orm_db_exec(up)
     } else {
-        let ins = aper_insert(db2, yf.num, mf.num, "closed", closed_at.val, notes.val)?
+        let ins = aper_insert(db2, ac.id, yf.num, mf.num, "closed", closed_at.val, notes.val)?
         if orm_ok(ins) == 0 {
             return act_err(orm_db_exec(ins), 500, orm_err_exec(ins))
         }
@@ -157,8 +165,8 @@ fn act_period_close(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let aco = active_company_id(db2, auth.ctx.user_sub)?
     db2 = aco.db
     audit_record(db2, aco.id, auth.ctx.user_sub, "period", rid, concat(int_to_str(yf.num), concat("-", audit_pad2(mf.num))), "close", "Затворен счетоводен период", "", "", "")
-    let q2 = aper_by_year(db2, yf.num)?
-    return act_ok(orm_db_q(q2), aper_list_json(q2, yf.num))
+    let q2 = aper_by_company_year(db2, ac.id, yf.num)?
+    return act_ok(orm_db_q(q2), aper_list_json(q2, ac.id, yf.num))
 }
 
 fn act_period_reopen(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
@@ -185,7 +193,11 @@ fn act_period_reopen(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if orm_ok_db(db) == 0 {
         return act_err(db, 503, "database unavailable")
     }
-    let q = aper_by_year(db, yf.num)?
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let q = aper_by_company_year(db, ac.id, yf.num)?
     if orm_ok_q(q) == 0 {
         return act_err(orm_db_q(q), 500, orm_err_q(q))
     }
@@ -216,8 +228,8 @@ fn act_period_reopen(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let aco = active_company_id(db2, auth.ctx.user_sub)?
     db2 = aco.db
     audit_record(db2, aco.id, auth.ctx.user_sub, "period", rid, concat(int_to_str(yf.num), concat("-", audit_pad2(mf.num))), "reopen", "Отворен счетоводен период", "", "", "")
-    let q2 = aper_by_year(db2, yf.num)?
-    return act_ok(orm_db_q(q2), aper_list_json(q2, yf.num))
+    let q2 = aper_by_company_year(db2, ac.id, yf.num)?
+    return act_ok(orm_db_q(q2), aper_list_json(q2, ac.id, yf.num))
 }
 
 fn audit_pad2(n: i64) -> str {

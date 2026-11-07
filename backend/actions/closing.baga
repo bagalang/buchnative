@@ -270,8 +270,8 @@ fn closing_existing(db: OrmDb, company_id: i64, period: str) -> ClosingExisting 
 }
 
 // Периодът трябва да е отворен (закрит месец не се приключва повторно).
-fn closing_period_open(db: OrmDb, year: i64, month: i64) -> i64 !IO !Net {
-    let q = aper_by_year(db, year)?
+fn closing_period_open(db: OrmDb, company_id: i64, year: i64, month: i64) -> i64 !IO !Net {
+    let q = aper_by_company_year(db, company_id, year)?
     if orm_ok_q(q) == 0 {
         return 0
     }
@@ -552,7 +552,7 @@ fn act_closing_run(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     }
     let d = ac.db
     let period = closing_period(y, m)
-    if closing_period_open(d, y, m) == 0 {
+    if closing_period_open(d, ac.id, y, m) == 0 {
         return act_err(d, 422, "месецът е затворен")
     }
     let ex = closing_existing(d, ac.id, period)?

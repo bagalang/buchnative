@@ -230,5 +230,6 @@ fn buchnative_migrations_c() -> MigrationSet {
     set = migrate_add(set, 20261105004, "add_invoices_customs_vat", "ALTER TABLE invoices ADD COLUMN customs_vat NUMERIC(18,2) NOT NULL DEFAULT 0", "ALTER TABLE invoices DROP COLUMN customs_vat")
     set = migrate_add(set, 20261106001, "add_products_cn8_code", "ALTER TABLE products ADD COLUMN cn8_code TEXT NOT NULL DEFAULT ''", "ALTER TABLE products DROP COLUMN cn8_code")
     set = migrate_add(set, 20261106002, "add_products_cn8_name", "ALTER TABLE products ADD COLUMN cn8_name TEXT NOT NULL DEFAULT ''", "ALTER TABLE products DROP COLUMN cn8_name")
+    set = migrate_add(set, 20261107001, "add_accounting_periods_company_id", "ALTER TABLE accounting_periods ADD COLUMN company_id BIGINT NOT NULL DEFAULT 0", "ALTER TABLE accounting_periods DROP COLUMN company_id")
     return set
 }

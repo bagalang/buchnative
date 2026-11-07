@@ -1,5 +1,6 @@
-// models/accounting_period.baga — счетоводни месеци (open/closed).
-// Липсващ ред = отворен период (като в su-doxis).
+// models/accounting_period.baga — счетоводни месеци (open/closed) по фирма.
+// Липсващ ред = отворен период (като в su-doxis). Затварянето е индивидуално
+// за всяка фирма — една фирма не затваря месеца на друга.
 
 import "ormbaga/orm.baga"
 import "fmrbaga/jsonx.baga"
@@ -14,6 +15,7 @@ fn aper_next_id(db: OrmDb) -> OrmCount !IO !Net {
 fn aper_to_json(q: OrmQuery, row: i64) -> JObj {
     let mut o = jobj_new()
     o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_i64(o, "company_id", orm_cell_by_i64(q, row, "company_id"))
     o = jobj_i64(o, "year", orm_cell_by_i64(q, row, "year"))
     o = jobj_i64(o, "month", orm_cell_by_i64(q, row, "month"))
     o = jobj_str(o, "status", orm_cell_by(q, row, "status"))
@@ -25,6 +27,7 @@ fn aper_to_json(q: OrmQuery, row: i64) -> JObj {
 fn aper_cols() -> Vec<str> {
     let c: Vec<str> = vec_new()
     vec_push(c, "id")
+    vec_push(c, "company_id")
     vec_push(c, "year")
     vec_push(c, "month")
     vec_push(c, "status")
@@ -33,18 +36,24 @@ fn aper_cols() -> Vec<str> {
     return c
 }
 
-fn aper_by_year(db: OrmDb, year: i64) -> OrmQuery !IO !Net {
-    return kv_where_order(db, aper_table(), "year", int_to_str(year), "month", aper_cols())?
+fn aper_by_company_year(db: OrmDb, company_id: i64, year: i64) -> OrmQuery !IO !Net {
+    let sc: Vec<str> = vec_new()
+    vec_push(sc, "month")
+    let dirs: Vec<i64> = vec_new()
+    vec_push(dirs, 0)
+    return kv_where2_dir(db, aper_table(), "company_id", int_to_str(company_id), "year", int_to_str(year), aper_cols(), sc, dirs)?
 }
 
-fn aper_insert(db: OrmDb, year: i64, month: i64, status: str, closed_at: str, notes: str) -> OrmExec !IO !Net {
+fn aper_insert(db: OrmDb, company_id: i64, year: i64, month: i64, status: str, closed_at: str, notes: str) -> OrmExec !IO !Net {
     let cols: Vec<str> = vec_new()
+    vec_push(cols, "company_id")
     vec_push(cols, "year")
     vec_push(cols, "month")
     vec_push(cols, "status")
     vec_push(cols, "closed_at")
     vec_push(cols, "notes")
     let vals: Vec<str> = vec_new()
+    vec_push(vals, int_to_str(company_id))
     vec_push(vals, int_to_str(year))
     vec_push(vals, int_to_str(month))
     vec_push(vals, status)
@@ -59,7 +68,7 @@ fn aper_insert(db: OrmDb, year: i64, month: i64, status: str, closed_at: str, no
     return kv_insert_exec(db, aper_table(), cols, vals, nulls)?
 }
 
-fn aper_list_json(q: OrmQuery, year: i64) -> JObj {
+fn aper_list_json(q: OrmQuery, company_id: i64, year: i64) -> JObj {
     let mut arr = jarr_new()
     let mut m: i64 = 1
     while m <= 12 {
@@ -84,6 +93,7 @@ fn aper_list_json(q: OrmQuery, year: i64) -> JObj {
         if id > 0 {
             o = jobj_i64(o, "id", id)
         }
+        o = jobj_i64(o, "company_id", company_id)
         o = jobj_i64(o, "year", year)
         o = jobj_i64(o, "month", m)
         o = jobj_str(o, "status", status)
