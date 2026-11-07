@@ -94,6 +94,15 @@ async function request<T>(
       data = text;
     }
   }
+  // Изтекъл или невалиден токен: изчистваме го и връщаме към входа.
+  // Без това обвивката държи стария токен и всяка заявка пъда с
+  // „Invalid or expired token" на екрана, вместо да се разлогне.
+  if (res.status === 401) {
+    setToken(null);
+    if (typeof window !== "undefined" && window.location.pathname !== "/login") {
+      window.location.href = "/login";
+    }
+  }
   if (!res.ok) {
     throw new ApiError(res.status, formatApiDetail(data, res.statusText));
   }
