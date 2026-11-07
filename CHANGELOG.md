@@ -1,5 +1,24 @@
 # История на версиите — buchnative
 
+## 0.9.11 — 2026-11-07
+
+Нов файлов архивен систем през S3.
+
+- Архивът е файлов, не логически dump: sidecar-ът вика живата `BACKUP`
+  команда на rocksbaga (checkpoint под mutex: manifest + SST + bloom +
+  BAGABK1 инвентар с размери и crc32c) и кача файловете в S3.
+- Споделен обем `backup-staging` между rocksbaga и sidecar — без него
+  checkpoint-ът е в контейнера на сървъра и sidecar-ът не може да го прочете.
+- Нов `POST /v1/system-settings/s3-restore` — сваля файловете и проверява
+  размерите по инвентара; rocksbaga се пуска с `LSMPATH` сочеща там.
+- Списъкът показва броя файлове; всеки бекъп се възстановява или изтрива
+  по stamp.
+- Изтрити `scripts/py/dump.py` (PG wire, boilaDB епохата) и `kvdump.py`
+  (логически KV dump) — няма SQL и няма нужда от логически dump, когато
+  самият сървър прави checkpoint.
+- Проверено живо: backup → list → restore → свалените файлове се отварят
+  като LSM store с същия `DBSIZE` и същите редове.
+
 ## 0.9.10 — 2026-11-07
 
 Премахване на boilaDB поддържката.

@@ -46,24 +46,32 @@ proxy на VPS.
 
 ## Архив (S3)
 
-Админ → S3 / Архиви качва `buchnative_backup_YYYYMMDD_HHMMSS.json.gz` — логически
-dump на редовете (по ключ `kv:t:<таблица>:<id>`). Sidecar-ът **не** монтира
-`rocks-data` и не тарва LSM файлове — това не е snapshot, докато сървърът пише.
+Архивът е **файлов**. Админ → S3 / Архиви → „Направи бекъп“: sidecar-ът влиза
+през RESP2 в rocksbaga, вика живата `BACKUP <dest>` команда (под mutex:
+`flush` на memtable → SST, копия на всички SST и bloom файлове, `BAGABK1`
+инвентар с размери и crc32c) и кача файловете в S3 под
+`<prefix><stamp>/` заедно с `manifest.json`.
 
-Възстановяване — rocksbaga пуснат към празно (или изтрито) `LSMPATH`, backend
-спрян:
+Споделен обем `backup-staging` (`/backup`) е монтиран едновременно в
+rocksbaga и sidecar — без него файловете са в контейнера на сървъра и
+sidecar-ът не може да ги прочете. Сървърът не се спира.
+
+Възстановяване — админ → S3 / Архиви → „Възстанови“ на бекъпа. Sidecar-ът
+сваля файловете в `/backup/<stamp>` и проверява размерите по инвентара. След
+това rocksbaga се пуска с `LSMPATH=/backup/<stamp>`:
 
 ```bash
-DROCK_PORT=16579 python3 scripts/py/kvdump.py restore бекъп.json.gz
-# [--flush] изтрива съществуващите kv:* ключове преди replay-а
+docker compose stop rocksbaga
+LSMPATH=/backup/<stamp> docker compose up -d rocksbaga
 ```
 
-Ключовете на ormbaga (`kv:t:<таблица>:<id>`, `:all`, `:ix:<колона>:<стойност>`,
-`:seq`, `kv:mig:<таблица>`) са част от dump-а, затова редовете, вторичните
-индекси и PK броячите се възстановяват с един replay — нищо не се преизгражда.
-Същият модул работи и като CLI за ръчен архив: `python3 scripts/py/kvdump.py
-dump изход.json.gz`.
+`LSMPATH` в compose-а се подменя от променливата на средата, таче споделената
+директория на бекъпа става новият жив магазин.
 
-Физическият snapshot е друг път: `tools/backup.baga` на rocksbaga
-(`BACKUP_MODE=create|verify|ship|restore`) върху **спрян** сървър — живият
-`LSMPATH` не се тарва.
+LSM форматът е самоописен (`manifest` + `sst.*` + `bloom.*`), затова не е
+нужно нито SQL, нито да се знае версията на моделите — възстановява се точно
+същото състояние.
+
+Ръчно копие/възстановяване на файлове е описано и в
+`app-product/rocksbaga/tools/backup.baga` (`BACKUP_MODE=create|verify|ship|
+restore`), но за живият път се ползва `BACKUP` командата на сървъра.

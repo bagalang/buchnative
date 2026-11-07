@@ -153,16 +153,23 @@ Baga `<` `>` `<=` `>=` върху `str` сравняват **указатели*
 Python sidecar `scripts/py/sidecar.py` на `:5050` (Flask + boto3). Backend-ът
 говори HTTP (`BUCHNATIVE_SIDECAR`). `dev.sh` го пуска.
 
-S3 архивът е **логически dump**: обхождат се редовете и се събират като JSON.
-Не се тарват файловете под `LSMPATH` — това не е snapshot, докато сървърът
-пише. rocksbaga има свой физически checkpoint (`CHECKPOINT` / `BACKUP` през
-drockb, виж `app-product/drockb`), но той е офлайн/сървърна операция, не
-алтернатива на логическия dump за архив.
+S3 архивът е **файлов**. rocksbaga има жива `BACKUP <dest>` команда: под
+mutex прави checkpoint (`flush` на memtable → SST), копира всички SST и
+bloom файлове и пише `BAGABK1` инвентар с размери и crc32c. Sidecar-ът
+(`scripts/py/lsmbackup.py`) влиза през RESP2, вика `BACKUP` върху споделен
+директорий обем (`backup-staging`, вижен едновременно от rocksbaga и sidecar)
+и кача файловете в S3. Не се тарят живи LSM файлове — checkpoint-ът е един
+консистентен момент.
 
-**Не се ползва за drock:** `scripts/py/dump.py` (Python sidecar) говори PG
-wire и прави `COPY TO STDOUT` — това е останал код от boilaDB епохата. При
-`ORM_BACKEND=drock` sidecar-ът вече избира `kvdump.py` (RESP2 SCAN), таче
-`dump.py` е само резервен път за PG-wire източник и buchnative го не достига.
+Layout в S3: `<prefix><stamp>/` с файловете на checkpoint-а плюс
+`manifest.json` (инвентар + размери). Възстановяването е файлово: сваляш
+файловете в споделената директория и пуснеш rocksbaga с `LSMPATH` сочеща
+там — LSM форматът е самоописен, няма SQL и няма зависимост от версията на
+моделите.
+
+`scripts/py/dump.py` (PG wire COPY dump от boilaDB епохата) и `kvdump.py`
+(логически KV dump през SCAN) са премахнати — няма SQL и няма нужда от
+логически dump, когато самият сървър прави checkpoint.
 
 ## SAF-T номенклатури
 

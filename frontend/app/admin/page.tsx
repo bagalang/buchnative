@@ -24,6 +24,8 @@ interface DbCheck {
 
 interface Backup {
   key: string;
+  stamp: string;
+  files: number;
   filename: string;
   size_human: string;
   last_modified: string;
@@ -197,13 +199,30 @@ function AdminInner() {
     }
   };
 
-  const delBackup = async (key: string) => {
+  const delBackup = async (stamp: string) => {
     if (!window.confirm(t("common.confirmDelete"))) return;
     setBusy("del");
     setError("");
     try {
-      await api.post("/v1/system-settings/s3-delete", { s3_key: key });
+      await api.post("/v1/system-settings/s3-delete", { stamp });
       await loadBackups();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const restoreBackup = async (stamp: string) => {
+    if (!window.confirm(t("admin.s3.restore_confirm"))) return;
+    setBusy("restore");
+    setError("");
+    setMsg("");
+    try {
+      const r = await api.post<{ message?: string }>("/v1/system-settings/s3-restore", {
+        stamp,
+      });
+      setMsg(r.message || t("admin.s3.restore_ok"));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -431,6 +450,7 @@ function AdminInner() {
                   <tr>
                     <th>{t("admin.s3.file")}</th>
                     <th>{t("admin.s3.size")}</th>
+                    <th>{t("admin.s3.files")}</th>
                     <th>{t("admin.s3.when")}</th>
                     <th />
                   </tr>
@@ -440,14 +460,24 @@ function AdminInner() {
                     <tr key={b.key}>
                       <td>{b.filename}</td>
                       <td>{b.size_human}</td>
+                      <td>{b.files}</td>
                       <td>{b.last_modified}</td>
                       <td>
-                        <IconButton
-                          icon="delete"
-                          title={t("common.delete")}
-                          danger
-                          onClick={() => void delBackup(b.key)}
-                        />
+                        <div className="icon-actions">
+                          <IconButton
+                            icon="history"
+                            title={t("admin.s3.restore")}
+                            disabled={busy === "restore"}
+                            onClick={() => void restoreBackup(b.stamp)}
+                          />
+                          <IconButton
+                            icon="delete"
+                            title={t("common.delete")}
+                            danger
+                            disabled={busy === "del"}
+                            onClick={() => void delBackup(b.stamp)}
+                          />
+                        </div>
                       </td>
                     </tr>
                   ))}

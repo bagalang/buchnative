@@ -264,16 +264,46 @@ fn act_s3_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
     if b.ok == 0 {
         return act_err(db, 400, b.err)
     }
-    let key = jreq_str(b.doc, b.root, "s3_key")
-    if key.ok == 0 {
-        return act_422_field(db, "s3_key", key)
+    let stamp = jreq_str(b.doc, b.root, "stamp")
+    if stamp.ok == 0 {
+        return act_422_field(db, "stamp", stamp)
     }
     let q = setting_all(db)?
     if orm_ok_q(q) == 0 {
         return act_err(orm_db_q(q), 500, orm_err_q(q))
     }
     let mut cfg = s3_cfg_from_settings(q)
-    cfg = jobj_str(cfg, "s3_key", key.val)
+    cfg = jobj_str(cfg, "stamp", stamp.val)
     let resp = sidecar_post("/s3/delete", jobj_encode(cfg))?
+    return sidecar_result(orm_db_q(q), resp)
+}
+
+// Възстановяване: sidecar-ът сваля файловете в споделената директория.
+// Пускането на rocksbaga с LSMPATH сочеща там е ръчна стъпка (контейнерът
+// се рестартира), защото LSM  store-ът се отваря само при старт.
+fn act_s3_restore(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let stamp = jreq_str(b.doc, b.root, "stamp")
+    if stamp.ok == 0 {
+        return act_422_field(db, "stamp", stamp)
+    }
+    let q = setting_all(db)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let mut cfg = s3_cfg_from_settings(q)
+    cfg = jobj_str(cfg, "stamp", stamp.val)
+    let resp = sidecar_post("/s3/restore", jobj_encode(cfg))?
     return sidecar_result(orm_db_q(q), resp)
 }

@@ -4,29 +4,25 @@
 Baga talks HTTP here (no process spawn). Same idea as su-doxis:
 smtp_service.py + s3_backup.py, one process.
 
-S3 backup is a logical dump, chosen by ORM_BACKEND: rocksbaga (drock) минава
-през kvdump.py (RESP2 SCAN + JSON lines), Postgres/boilaDB — през dump.py
-(COPY TO STDOUT). Не е tar на живи LSM файлове.
+Архивът е ФАЙЛОВ: rocksbaga има жива BACKUP команда, която под mutex прави
+checkpoint (manifest + SST + bloom + BAGABK1 инвентар). Sidecar-ът кача тези
+файлове в S3 и при нужда ги сваля обратно. Няма SQL — данните са в LSM
+файлове, форматът е самоописен.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import smtplib
 import ssl
-import tempfile
 from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 from flask import Flask, jsonify, request
 
-import kvdump
-from dump import dump_to_path, pg_cfg
-
-def is_kv_backend() -> bool:
-    be = (os.environ.get("ORM_BACKEND") or "").lower()
-    return be.startswith("drock") or be.startswith("rocks")
+import lsmbackup
 
 
 app = Flask(__name__)
@@ -189,45 +185,107 @@ def s3_test():
         return _json_error(str(e))
 
 
+def backup_staging() -> str:
+    """Споделената с rocksbaga директория, където BACKUP пише checkpoint-а."""
+    return os.environ.get("BACKUP_STAGING") or "/backup"
+
+
+def kv_host() -> str:
+    return os.environ.get("DROCK_HOST") or "127.0.0.1"
+
+
+def kv_port() -> int:
+    return int(os.environ.get("DROCK_PORT") or "16579")
+
+
+def human_size(n: int) -> str:
+    if n < 1024:
+        return "%d B" % n
+    if n < 1048576:
+        return "%.1f KB" % (n / 1024)
+    return "%.1f MB" % (n / 1048576)
+
+
+def s3_prefix(c: dict, stamp: str) -> str:
+    base = c["prefix"]
+    if not base.endswith("/"):
+        base += "/"
+    return base + stamp + "/"
+
+
+def remove_staging(staging: str, names: list) -> None:
+    for name in names:
+        try:
+            os.remove(os.path.join(staging, name))
+        except OSError:
+            pass
+
+
 @app.post("/s3/backup")
 def s3_backup():
     data = request.get_json(silent=True) or {}
     c = s3_cfg(data)
     if not c["bucket"]:
         return _json_error("S3 bucket е задължителен")
-    kv = is_kv_backend()
+    staging = backup_staging()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    ext = "json.gz" if kv else "sql.gz"
-    filename = f"buchnative_backup_{stamp}.{ext}"
-    s3_key = f"{c['prefix']}{filename}"
-    tmp = ""
+    names = []
     try:
-        fd, tmp = tempfile.mkstemp(suffix="." + ext)
-        os.close(fd)
-        if kv:
-            st = kvdump.dump_to_path(kvdump.kv_cfg(data), tmp)
-            note = f"{st['keys']} ключа, dump през rocksbaga SCAN"
-            kind = "kv"
-        else:
-            st = dump_to_path(pg_cfg(data), tmp)
-            note = f"{st.get('tables') or 0} таблици, dump през boilaDB COPY"
-            kind = "copy"
+        os.makedirs(staging, exist_ok=True)
         client = s3_client(c["endpoint"], c["access_key"], c["secret_key"], c["region"])
-        client.upload_file(tmp, c["bucket"], s3_key)
-        n = st.get("tables") or 0
+        # Два бекъпа в една и съща секунда да не се презаписват — новият
+        # получава суфикс, старият остане в S3.
+        base = s3_prefix(c, stamp)
+        n = 2
+        while True:
+            try:
+                client.head_object(Bucket=c["bucket"], Key=base + "manifest.json")
+            except Exception:
+                break
+            stamp = "%s_%d" % (
+                datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S"),
+                n,
+            )
+            base = s3_prefix(c, stamp)
+            n = n + 1
+        dest = os.path.join(staging, stamp)
+        # Жив checkpoint от сървъра — под mutex, сървърът не се спира.
+        inv = lsmbackup.checkpoint(kv_host(), kv_port(), dest)
+        names = [f["name"] for f in inv["files"]] + [stamp + ".backup"]
+        for f in inv["files"]:
+            path = os.path.join(staging, f["name"])
+            if not os.path.exists(path):
+                raise lsmbackup.LsmError("липсва файл от checkpoint: %s" % f["name"])
+            client.upload_file(path, c["bucket"], base + f["name"])
+        # Инвентарът (.backup) носи размерите и crc-тата — без него restore не
+        # може да провери целостта на сваленото.
+        client.upload_file(dest + ".backup", c["bucket"], base + stamp + ".backup")
+        manifest = {
+            "format": inv["format"],
+            "version": inv["version"],
+            "stamp": stamp,
+            "created_ms": inv["created_ms"],
+            "nshards": inv["nshards"],
+            "files": inv["files"],
+            "bytes": lsmbackup.total_bytes(inv),
+            "backup": stamp + ".backup",
+        }
+        client.put_object(
+            Bucket=c["bucket"],
+            Key=base + "manifest.json",
+            Body=json.dumps(manifest, ensure_ascii=False).encode("utf-8"),
+        )
         return _ok(
-            f"Бекъп създаден: {filename} ({note})",
-            filename=filename,
-            s3_key=s3_key,
-            size=st.get("size") or 0,
-            tables=n,
-            kind=kind,
+            "Бекъп %s: %d файла, %s"
+            % (stamp, len(inv["files"]), human_size(manifest["bytes"])),
+            stamp=stamp,
+            files=len(inv["files"]),
+            bytes=manifest["bytes"],
         )
     except Exception as e:
         return _json_error(str(e))
     finally:
-        if tmp and os.path.exists(tmp):
-            os.remove(tmp)
+        remove_staging(staging, names)
 
 
 @app.post("/s3/list")
@@ -239,24 +297,33 @@ def s3_list():
     try:
         client = s3_client(c["endpoint"], c["access_key"], c["secret_key"], c["region"])
         resp = client.list_objects_v2(Bucket=c["bucket"], Prefix=c["prefix"])
-        items = []
+        found = {}
         for obj in resp.get("Contents", []):
             key = obj["Key"]
-            filename = key[len(c["prefix"]) :] if key.startswith(c["prefix"]) else key
-            if "buchnative_backup" not in filename:
+            if not key.startswith(c["prefix"]):
                 continue
-            size = obj["Size"]
+            parts = key[len(c["prefix"]) :].split("/")
+            if len(parts) != 2 or parts[1] != "manifest.json":
+                continue
+            body = client.get_object(Bucket=c["bucket"], Key=key)["Body"].read()
+            try:
+                man = json.loads(body.decode("utf-8"))
+            except ValueError:
+                continue
+            found[parts[0]] = (obj["LastModified"].strftime("%Y-%m-%d %H:%M:%S"), man)
+        items = []
+        for stamp, (last_modified, man) in found.items():
+            size = man.get("bytes") or 0
             items.append(
                 {
-                    "key": key,
-                    "filename": filename,
+                    "stamp": stamp,
+                    "key": c["prefix"] + stamp + "/manifest.json",
+                    "filename": stamp,
                     "size": size,
-                    "size_human": (
-                        f"{size / 1024:.1f} KB"
-                        if size < 1048576
-                        else f"{size / 1048576:.1f} MB"
-                    ),
-                    "last_modified": obj["LastModified"].strftime("%Y-%m-%d %H:%M:%S"),
+                    "size_human": human_size(size),
+                    "files": len(man.get("files") or []),
+                    "created_ms": man.get("created_ms") or 0,
+                    "last_modified": last_modified,
                 }
             )
         items.sort(key=lambda x: x["last_modified"], reverse=True)
@@ -265,20 +332,72 @@ def s3_list():
         return _json_error(str(e))
 
 
+@app.post("/s3/restore")
+def s3_restore():
+    """Сваля файловете на бекъп в споделената директория.
+
+    Възстановяването е файлово: rocksbaga се пуска с LSMPATH, сочеща към
+    директорията на бекъпа — LSM форматът е самоописен.
+    """
+    data = request.get_json(silent=True) or {}
+    c = s3_cfg(data)
+    if not c["bucket"]:
+        return _json_error("S3 bucket е задължителен")
+    stamp = (data.get("stamp") or "").strip()
+    if not stamp or stamp.startswith("/") or ".." in stamp:
+        return _json_error("невалиден stamp")
+    staging = backup_staging()
+    dest = os.path.join(staging, stamp)
+    base = s3_prefix(c, stamp)
+    try:
+        os.makedirs(staging, exist_ok=True)
+        client = s3_client(c["endpoint"], c["access_key"], c["secret_key"], c["region"])
+        resp = client.list_objects_v2(Bucket=c["bucket"], Prefix=base)
+        objs = resp.get("Contents", [])
+        if not objs:
+            return _json_error("няма бекъп %s" % stamp)
+        for obj in objs:
+            name = obj["Key"][len(base) :]
+            if not name or name.endswith("/") or name == "manifest.json":
+                continue
+            client.download_file(c["bucket"], obj["Key"], os.path.join(staging, name))
+        with open(dest + ".backup", "r", encoding="utf-8") as f:
+            inv = lsmbackup.parse_inventory(f.read(), dest)
+        bad = lsmbackup.missing(inv, staging)
+        if bad:
+            return _json_error("липсват или повредени файлове: %s" % ", ".join(bad))
+        return _ok(
+            "Файловете са в %s — пусни rocksbaga с LSMPATH=%s" % (dest, dest),
+            stamp=stamp,
+            path=dest,
+        )
+    except Exception as e:
+        return _json_error(str(e))
+
+
 @app.post("/s3/delete")
 def s3_delete():
     data = request.get_json(silent=True) or {}
     c = s3_cfg(data)
-    key = data.get("s3_key") or ""
-    if not key:
-        return _json_error("s3_key е задължителен")
+    if not c["bucket"]:
+        return _json_error("S3 bucket е задължителен")
+    stamp = (data.get("stamp") or "").strip()
+    if not stamp or stamp.startswith("/") or ".." in stamp:
+        return _json_error("невалиден stamp")
+    base = s3_prefix(c, stamp)
     try:
         client = s3_client(c["endpoint"], c["access_key"], c["secret_key"], c["region"])
-        client.delete_object(Bucket=c["bucket"], Key=key)
-        return _ok("Бекъпът е изтрит")
+        resp = client.list_objects_v2(Bucket=c["bucket"], Prefix=base)
+        objs = resp.get("Contents", [])
+        if not objs:
+            return _json_error("няма бекъп %s" % stamp)
+        client.delete_objects(
+            Bucket=c["bucket"],
+            Delete={"Objects": [{"Key": o["Key"]} for o in objs]},
+        )
+        return _ok("Бекъпът %s е изтрит (%d обекта)" % (stamp, len(objs)))
     except Exception as e:
         return _json_error(str(e))
-
 
 @app.get("/health")
 def health():
@@ -286,5 +405,5 @@ def health():
 
 
 if __name__ == "__main__":
-    print(f"buchnative sidecar SMTP+S3+dump on 127.0.0.1:{PORT}")
+    print(f"buchnative sidecar SMTP+S3+backup on 127.0.0.1:{PORT}")
     app.run(host="127.0.0.1", port=PORT, debug=False)

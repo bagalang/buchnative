@@ -198,6 +198,6 @@ KV е безсхематичен, а `ORM_BACKEND=drock` ги пропуска �
 Историческия boilaDB набор (`schema_boila_*`) е премахнат — buchnative не се
 използва с boilaDB.
 
-Жив архив от админа: Python sidecar dump към rocksbaga (`LSMPATH`) → S3.
+Жив файлов архив от админа: `BACKUP` checkpoint на rocksbaga → споделен обем → S3.
 Физическият checkpoint е операция на сървъра (`CHECKPOINT` / `BACKUP` през
 drockb) — не замества логическия dump.

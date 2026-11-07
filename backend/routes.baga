@@ -164,6 +164,7 @@ fn fmr_build_app() -> FmrApp !IO {
     app = fmr_route_meta(app, "GET", "/v1/stock/report", RID_STOCK_REPORT(), "", "stock", 0, "", "StockReport", "200", "from,to,location_id")
     app = fmr_route_meta(app, "POST", "/v1/journal/bulk/delete", RID_JOURNAL_BULK_DELETE(), "", "journal", 0, "", "BulkResult", "200", "")
     app = fmr_route_meta(app, "POST", "/v1/products/cn8-suggest", RID_CN8_SUGGEST(), "", "products", 0, "Cn8Suggest", "Cn8List", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/system-settings/s3-restore", RID_S3_RESTORE(), "", "system-settings", 0, "", "Message", "200", "stamp")
     app = fmr_route_meta(app, "GET", "/v1/system-settings/db-check", RID_DB_CHECK(), "", "system-settings", 0, "", "DbCheck", "200", "")
     app = fmr_route_meta(app, "GET", "/v1/vat/registers", RID_VAT_REGISTERS(), "", "vat", 0, "", "VatRegisters", "200", "period")
     app = fmr_route_meta(app, "GET", "/v1/vat/return", RID_VAT_RETURN(), "", "vat", 0, "", "VatReturn", "200", "period")
@@ -387,6 +388,7 @@ fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     if id == RID_STOCK_REPORT() { return act_stock_report(ctx, db)? }
     if id == RID_JOURNAL_BULK_DELETE() { return act_journal_bulk_delete(ctx, db)? }
     if id == RID_CN8_SUGGEST() { return act_cn8_suggest(ctx, db)? }
+    if id == RID_S3_RESTORE() { return act_s3_restore(ctx, db)? }
     if id == RID_DB_CHECK() { return act_db_check(ctx, db)? }
     if id == RID_VAT_REGISTERS() { return act_vat_registers(ctx, db)? }
     if id == RID_VAT_RETURN() { return act_vat_return(ctx, db)? }

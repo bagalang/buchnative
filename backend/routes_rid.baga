@@ -219,3 +219,6 @@ fn RID_JOURNAL_BULK_DELETE() -> i64 { return 291 }
 
 // Предложение на код по КН8.
 fn RID_CN8_SUGGEST() -> i64 { return 292 }
+
+// Възстановяване на файлов архив от S3.
+fn RID_S3_RESTORE() -> i64 { return 293 }

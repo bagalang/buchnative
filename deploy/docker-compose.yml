@@ -23,9 +23,14 @@ services:
       # rocksbaga ползва LSMPATH като ПРЕФИКС на файл (излиза /data/rocks.wal),
       # не като директория — затова префиксът е вътре във волюма, иначе данните
       # се пишат в контейнерния слой и се губят при всяко рестартиране.
-      LSMPATH: /data/rocks
+      # За възстановяване от файлов архив: LSMPATH=/backup/<stamp> docker compose up -d rocksbaga
+      LSMPATH: ${LSMPATH:-/data/rocks}
     volumes:
       - rocks-data:/data
+      # Споделен с sidecar-а: BACKUP команда пише checkpoint-а тук, sidecar-ът
+      # го кача в S3. Без този обем файловете са в контейнера на сървъра и
+      # sidecar-ът не може да ги прочете.
+      - backup-staging:/backup
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/127.0.0.1/16579'"]
       interval: 10s
@@ -57,7 +62,7 @@ services:
       FMR_JWT_SECRET: ${FMR_JWT_SECRET:?set FMR_JWT_SECRET in deploy/.env}
       FMR_JWT_TTL_SEC: ${FMR_JWT_TTL_SEC:-604800}
       FMR_TITLE: buchnative
-      FMR_VERSION: "0.9.10"
+      FMR_VERSION: "0.9.11"
       BUCHNATIVE_SIDECAR: http://127.0.0.1:5050
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/127.0.0.1/8080'"]
@@ -77,10 +82,12 @@ services:
     working_dir: /app
     volumes:
       - ../scripts/py:/app:ro
+      - backup-staging:/backup
     environment:
       BUCHNATIVE_SIDECAR_PORT: "5050"
-      # ORM_BACKEND избира dump-а: drock/rocks → kvdump.py (RESP2 SCAN),
-      # иначе dump.py (PG wire, boilaDB).
+      BACKUP_STAGING: "/backup"
+      # ORM_BACKEND избира с какво sidecar-ът да работи: drock/rocks —
+      # RESP2 към rocksbaga (BACKUP checkpoint + S3).
       ORM_BACKEND: drock
       DROCK_HOST: "127.0.0.1"
       DROCK_PORT: "16579"
@@ -103,3 +110,4 @@ services:
 
 volumes:
   rocks-data:
+  backup-staging:

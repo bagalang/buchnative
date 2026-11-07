@@ -127,8 +127,9 @@ SQL освен health пинга (`SELECT 1`).
 - транзакция на ниво заявка: `bb_begin` / `bb_commit` / `act_err_rb` с буфер
   (`session/kv_tx.baga`)
 - верзирани KV миграции (`schema_kv.baga`, `kv:mig:<таблица>`) — forward-only
-- S3 архив: `scripts/py/kvdump.py` (SCAN + JSON lines) + същият CLI за restore.
-  Проверявано живо: dump → празно `LSMPATH` → същите бројки по `/v1/*`.
+- S3 архив: файлов, през живата `BACKUP` команда на rocksbaga
+  (`scripts/py/lsmbackup.py` + sidecar). Проверено живо: свалените файлове
+  се отварят като LSM store с същия `DBSIZE` и същите редове.
 
 Отворено и честно:
 - **COMMIT не е атомен.** rocksbaga няма MULTI/EXEC; буферът се изсипва с
