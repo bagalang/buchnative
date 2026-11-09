@@ -91,6 +91,12 @@ a:hover { color: var(--green-2); text-decoration: underline; }
   color: var(--text);
   font-size: clamp(15px, 2.4vw, 19px);
 }
+.subtitle {
+  margin-top: 8px;
+  color: var(--green-2);
+  font-size: clamp(13px, 2vw, 16px);
+  letter-spacing: 2px;
+}
 .tagline .owl-word { color: var(--amber-2); }
 .badges {
   margin-top: 22px;
