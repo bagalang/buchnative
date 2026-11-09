@@ -90,12 +90,15 @@ fn invoice_max_in_types(q: OrmQuery, types_csv: str, direction: str) -> i64 {
     return maxn
 }
 
-fn invoice_next_in_series(q: OrmQuery, types_csv: str, start_number: i64, pad_width: i64) -> str {
+fn invoice_next_in_series(q: OrmQuery, types_csv: str, direction: str, start_number: i64, pad_width: i64) -> str {
     let mut base = start_number - 1
     if base < 0 {
         base = 0
     }
-    let mx = invoice_max_in_types(q, types_csv, "out")
+    // Посоката е част от серията: протоколите (in) не бива да взимат номера
+    // на изходящите фактури и обратно. Преди тук винаги се гледаше "out" и
+    // два протокола получаваха 0000000001.
+    let mx = invoice_max_in_types(q, types_csv, direction)
     if mx > base {
         base = mx
     }
@@ -129,7 +132,7 @@ fn dser_active_list(q: OrmQuery, invq: OrmQuery) -> JArr {
             if pad <= 0 { pad = 10 }
             let mut start = orm_cell_by_i64(q, i, "start_number")
             if start <= 0 { start = 1 }
-            o = jobj_str(o, "next_number", invoice_next_in_series(invq, types, start, pad))
+            o = jobj_str(o, "next_number", invoice_next_in_series(invq, types, "out", start, pad))
             arr = jarr_obj(arr, o)
         }
         i = i + 1

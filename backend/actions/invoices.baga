@@ -127,7 +127,7 @@ fn act_invoices_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         if direction.val == "in" {
             return act_err(db, 422, "номерът на входящия документ е задължителен")
         }
-        number = invoice_auto_number(db, document_type.val)?
+        number = invoice_auto_number(db, document_type.val, direction.val)?
         if number == "" {
             number = "1"
         }

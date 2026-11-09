@@ -235,7 +235,7 @@ fn act_invoices_next_number(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     }
     let mut number = ""
     if direction == "out" {
-        number = invoice_auto_number(db, document_type)?
+        number = invoice_auto_number(db, document_type, direction)?
     }
     let mut o = jobj_new()
     o = jobj_str(o, "number", number)

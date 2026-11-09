@@ -338,7 +338,7 @@ function JournalInner() {
         <input
           className="input"
           value={q}
-          onChange={(e) => setQ(e.target.value)}
+          onChange={(e) => { setQ(e.target.value); setOffset(0); }}
           placeholder={t("common.search")}
         />
       </div>

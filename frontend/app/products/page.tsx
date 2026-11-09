@@ -200,7 +200,12 @@ function ProductsInner() {
         <input
           className="input"
           value={q}
-          onChange={(e) => setQ(e.target.value)}
+          onChange={(e) => {
+            // новата търсене връща към първа страница — иначе на 3-та
+            // страница резултатът може да е празен
+            setQ(e.target.value);
+            setOffset(0);
+          }}
           placeholder={t("common.search")}
         />
       </div>

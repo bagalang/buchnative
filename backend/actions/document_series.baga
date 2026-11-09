@@ -259,7 +259,7 @@ fn dser_company_id(db: OrmDb) -> i64 !IO !Net {
     return orm_cell_by_i64(cq, 0, "id")
 }
 
-fn invoice_auto_number(db: OrmDb, document_type: str) -> str !IO !Net {
+fn invoice_auto_number(db: OrmDb, document_type: str, direction: str) -> str !IO !Net {
     let nq = invoice_numbers_by_type(db)?
     if orm_ok_q(nq) == 0 {
         return invoice_pad(1, 10)
@@ -267,20 +267,20 @@ fn invoice_auto_number(db: OrmDb, document_type: str) -> str !IO !Net {
     let mut d = orm_db_q(nq)
     let cid = dser_company_id(d)?
     if cid <= 0 {
-        return invoice_next_in_series(nq, document_type, 1, 10)
+        return invoice_next_in_series(nq, document_type, direction, 1, 10)
     }
     let sq = dser_by_company(d, cid)?
     if orm_ok_q(sq) == 0 {
-        return invoice_next_in_series(nq, document_type, 1, 10)
+        return invoice_next_in_series(nq, document_type, direction, 1, 10)
     }
     let row = dser_find_for_type(sq, document_type)
     if row < 0 {
-        return invoice_next_in_series(nq, document_type, 1, 10)
+        return invoice_next_in_series(nq, document_type, direction, 1, 10)
     }
     let types = orm_cell_by(sq, row, "document_types")
     let mut pad = orm_cell_by_i64(sq, row, "pad_width")
     if pad <= 0 { pad = 10 }
     let mut start = orm_cell_by_i64(sq, row, "start_number")
     if start <= 0 { start = 1 }
-    return invoice_next_in_series(nq, types, start, pad)
+    return invoice_next_in_series(nq, types, direction, start, pad)
 }

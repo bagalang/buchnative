@@ -1,6 +1,7 @@
 // actions/accounts.baga — сметкоплан: CRUD handlers.
 
 import "../models/account.baga"
+import "std/str/str.baga"
 import "../models/kvpage.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
@@ -66,7 +67,16 @@ fn act_accounts_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if orm_ok_db(db) == 0 {
         return act_err(db, 503, "database unavailable")
     }
-    let ins = account_create(db, number.val, name.val, saft_account_type.val, analytic_type.val, parent_id, parent_null)?
+    // Номерът е идентичността на сметката в отчетите — два реда с един номер
+    // дават две линии в оборотната ведомост и подвеждащ избор при пост.
+    let dup = account_by_number(db, str_trim(number.val))?
+    if orm_ok_q(dup) == 0 {
+        return act_err(orm_db_q(dup), 500, orm_err_q(dup))
+    }
+    if orm_nrows(dup) > 0 {
+        return act_err(orm_db_q(dup), 409, concat("сметка ", concat(number.val, " вече съществува")))
+    }
+    let ins = account_create(orm_db_q(dup), number.val, name.val, saft_account_type.val, analytic_type.val, parent_id, parent_null)?
     if orm_ok_q(ins) == 0 || orm_nrows(ins) < 1 {
         return act_err(orm_db_q(ins), 500, "account insert failed")
     }
@@ -125,6 +135,17 @@ fn act_accounts_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if number.present == 1 {
         if number.ok == 0 {
             return act_422_field(db, "number", number)
+        }
+        let dup = account_by_number(db, str_trim(number.val))?
+        if orm_ok_q(dup) == 0 {
+            return act_err(orm_db_q(dup), 500, orm_err_q(dup))
+        }
+        let mut di: i64 = 0
+        while di < orm_nrows(dup) {
+            if orm_cell_by_i64(dup, di, "id") != id {
+                return act_err(orm_db_q(dup), 409, concat("сметка ", concat(number.val, " вече съществува")))
+            }
+            di = di + 1
         }
         vec_push(cols, "number")
         vec_push(vals, number.val)

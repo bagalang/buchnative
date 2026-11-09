@@ -170,7 +170,7 @@ function InvoicesInner() {
             <input
               className="input"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => { setSearch(e.target.value); setOffset(0); }}
               placeholder={t("invoices.search")}
             />
           </div>
@@ -178,7 +178,7 @@ function InvoicesInner() {
             <select
               className="select"
               value={typeFilter}
-              onChange={(e) => setTypeFilter(e.target.value)}
+              onChange={(e) => { setTypeFilter(e.target.value); setOffset(0); }}
             >
               <option value="">{t("invoices.all_types")}</option>
               {docTypesFor("out").map((dt) => (
@@ -193,7 +193,7 @@ function InvoicesInner() {
             <select
               className="select"
               value={dirFilter}
-              onChange={(e) => setDirFilter(e.target.value)}
+              onChange={(e) => { setDirFilter(e.target.value); setOffset(0); }}
             >
               <option value="">{t("invoices.all_directions")}</option>
               <option value="out">{t("invoices.direction.out")}</option>
@@ -204,7 +204,7 @@ function InvoicesInner() {
             <select
               className="select"
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
+              onChange={(e) => { setStatusFilter(e.target.value); setOffset(0); }}
             >
               <option value="">{t("invoices.all_statuses")}</option>
               <option value="draft">{t("invoices.status.draft")}</option>

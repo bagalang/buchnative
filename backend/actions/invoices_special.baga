@@ -76,7 +76,7 @@ fn act_invoices_issue_protocol(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time 
     if str_trim(issue_raw.val) != "" {
         issue_date = str_trim(issue_raw.val)
     }
-    let mut number = invoice_auto_number(d0, "09")
+    let mut number = invoice_auto_number(d0, "09", "in")
     if str_trim(number_raw.val) != "" {
         number = str_trim(number_raw.val)
     }
