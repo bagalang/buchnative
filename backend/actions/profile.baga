@@ -48,7 +48,7 @@ fn act_me_name(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
 }
 
 // Текущата парола се сверява с хеша (хешът е с текущия имейл).
-fn act_me_password(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+fn act_me_password(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time !Random {
     let auth = act_require_auth(ctx, db)
     if auth.ok == 0 {
         return auth.out
@@ -81,7 +81,7 @@ fn act_me_password(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     }
     let email = orm_cell_by(uq, 0, "email")
     let hash = orm_cell_by(uq, 0, "password_hash")
-    if user_hash_password(email, str_trim(cur.val)) != hash {
+    if user_check_password(email, str_trim(cur.val), hash) == 0 {
         return act_err(orm_db_q(uq), 401, "грешна парола")
     }
     let up = user_set_password(orm_db_q(uq), orm_cell_by_i64(uq, 0, "id"), email, str_trim(newp.val))?
@@ -92,7 +92,7 @@ fn act_me_password(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     return auth_issue(auth.ctx, orm_db_exec(up), email)
 }
 
-fn act_me_email(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+fn act_me_email(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time !Random {
     let auth = act_require_auth(ctx, db)
     if auth.ok == 0 {
         return auth.out
@@ -127,7 +127,7 @@ fn act_me_email(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     }
     let old_email = orm_cell_by(uq, 0, "email")
     let hash = orm_cell_by(uq, 0, "password_hash")
-    if user_hash_password(old_email, str_trim(cur.val)) != hash {
+    if user_check_password(old_email, str_trim(cur.val), hash) == 0 {
         return act_err(orm_db_q(uq), 401, "грешна парола")
     }
     let taken = user_by_email(orm_db_q(uq), em)?

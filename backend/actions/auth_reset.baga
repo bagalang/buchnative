@@ -80,7 +80,7 @@ fn act_forgot_password(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time 
     return act_ok(orm_db_q(sq), o)
 }
 
-fn act_reset_password(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+fn act_reset_password(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time !Random {
     if orm_ok_db(db) == 0 {
         return act_err(db, 503, "database unavailable")
     }

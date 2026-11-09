@@ -55,9 +55,21 @@ fn boot_migrate() -> i64 !Net !IO !Random !Time {
 }
 
 fn main() -> i64 !Net !IO !Par !Random !Time {
-    let secret = env("FMR_JWT_SECRET")?
-    if secret == "" || secret == "dev-secret" || secret == "baga-secret" {
-        print("WARNING: FMR_JWT_SECRET is empty or a known default. Set a long random secret before VPS.")
+    // Ефективният secret е като в fmr_config_load: FMR_JWT_SECRET, а JWT_SECRET го override-ва.
+    let mut secret = env("FMR_JWT_SECRET")?
+    if secret == "" {
+        secret = "baga-secret"
+    }
+    let j2 = env("JWT_SECRET")?
+    if j2 != "" {
+        secret = j2
+    }
+    let allow_weak = env("FMR_ALLOW_WEAK_SECRET")?
+    if (secret == "dev-secret" || secret == "baga-secret") && allow_weak != "1" {
+        print("ERROR: FMR_JWT_SECRET/JWT_SECRET is a known default — anyone can forge tokens.")
+        print("Set a long random secret (e.g. FMR_JWT_SECRET=$(openssl rand -hex 32)) before running.")
+        print("For local dev only: FMR_ALLOW_WEAK_SECRET=1")
+        return 2
     }
     let rc = boot_migrate()?
     if rc != 0 {

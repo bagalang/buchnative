@@ -233,7 +233,7 @@ fn act_totp_disable(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     }
     let email = orm_cell_by(uq, 0, "email")
     let hash = orm_cell_by(uq, 0, "password_hash")
-    if user_hash_password(email, password.val) != hash {
+    if user_check_password(email, password.val, hash) == 0 {
         return act_err(orm_db_q(uq), 401, "грешна парола")
     }
     let uid = orm_cell_by_i64(uq, 0, "id")

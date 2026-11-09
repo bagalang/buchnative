@@ -42,7 +42,7 @@ fn act_reg_status(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     return act_ok(db, o)
 }
 
-fn act_register(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+fn act_register(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time !Random {
     if orm_ok_db(db) == 0 {
         return act_err(db, 503, "database unavailable")
     }

@@ -70,7 +70,7 @@ fn auth_issue_mfa(ctx: FmrCtx, db: OrmDb, sub: str) -> FmrOut !Time !IO {
     return act_ok(db, o)
 }
 
-fn auth_provision_superadmin(db: OrmDb) -> FmrOut !IO !Net !Time {
+fn auth_provision_superadmin(db: OrmDb) -> FmrOut !IO !Net !Time !Random {
     let sub = auth_default_sub()
     let hash = user_hash_password(sub, auth_default_pass())
     let uq = user_by_email(db, sub)?
@@ -100,7 +100,7 @@ fn auth_provision_superadmin(db: OrmDb) -> FmrOut !IO !Net !Time {
     return FmrOut { resp: fmr_json(200, "{}"), db: orm_db_q(ins) }
 }
 
-fn act_token(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+fn act_token(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time !Random {
     let mut sub = fmr_query(ctx, "sub")
     let mut password = fmr_query(ctx, "password")
     if sub == "" || password == "" {
@@ -147,11 +147,15 @@ fn act_token(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         return act_err(orm_db_c(c), 500, orm_err_c(c))
     }
     if orm_count_n(c) < 1 {
+        // Празна users таблица: token само за bootstrap супер-админа с паролата
+        // по подразбиране (тя се сменя веднага). Без това всеки би получил валиден
+        // JWT при празна база — регистрацията на първи потребител минава през
+        // /v1/auth/register.
         if auth_is_default(sub, password) == 1 {
             let p = auth_provision_superadmin(orm_db_c(c))?
             return auth_issue(ctx, p.db, sub)
         }
-        return auth_issue(ctx, orm_db_c(c), sub)
+        return act_err(orm_db_c(c), 401, "грешен потребител или парола")
     }
     let uq = user_by_email(orm_db_c(c), sub)?
     if orm_ok_q(uq) == 0 {
@@ -173,18 +177,31 @@ fn act_token(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     }
     let email = orm_cell_by(uq, 0, "email")
     let hash = orm_cell_by(uq, 0, "password_hash")
-    let want = user_hash_password(email, password)
-    if hash != want {
+    if user_check_password(email, password, hash) == 0 {
         if auth_is_default(sub, password) == 1 {
             let p = auth_provision_superadmin(orm_db_q(uq))?
             return auth_issue(ctx, p.db, sub)
         }
         return act_err(orm_db_q(uq), 401, "грешен потребител или парола")
     }
-    if orm_cell_by_i64(uq, 0, "totp_enabled") == 1 {
-        return auth_issue_mfa(ctx, orm_db_q(uq), email)
+    let mut db3 = orm_db_q(uq)
+    // Legacy sha256 хешове се заменят с pbkdf2 при първи успешен вход.
+    if user_hash_is_legacy(hash) == 1 {
+        let new_hash = user_hash_password(email, password)?
+        let cols = vec_new()
+        vec_push(cols, "password_hash")
+        let vals = vec_new()
+        vec_push(vals, new_hash)
+        let uid = orm_cell_by_i64(uq, 0, "id")
+        let up = orm_update_by_id(db3, user_table(), uid, cols, vals)?
+        if orm_ok(up) == 1 {
+            db3 = orm_db_exec(up)
+        }
     }
-    return auth_issue(ctx, orm_db_q(uq), email)
+    if orm_cell_by_i64(uq, 0, "totp_enabled") == 1 {
+        return auth_issue_mfa(ctx, db3, email)
+    }
+    return auth_issue(ctx, db3, email)
 }
 
 fn act_me(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {

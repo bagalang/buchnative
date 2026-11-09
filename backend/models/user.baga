@@ -5,6 +5,9 @@ import "kvtime.baga"
 import "fmrbaga/jsonx.baga"
 import "std/str/str.baga"
 import "std/crypto/sha256.baga"
+import "std/crypto/hmac.baga"
+import "std/random/random.baga"
+import "std/bytes/bytes.baga"
 
 fn user_table() -> str {
     return "users"
@@ -14,8 +17,117 @@ fn user_next_id(db: OrmDb) -> OrmCount !IO !Net {
     return kv_count_sql(db, "SELECT MAX(id) AS count FROM users")?
 }
 
-fn user_hash_password(email: str, password: str) -> str {
-    return sha256_hex(concat(concat("buchnative|", email), concat("|", password)))
+// PBKDF2-HMAC-SHA256, 100k итерации (~0.9s на C backend) — преди това беше
+// бърз sha256 със статичен префикс. Формат: pbkdf2_sha256$<iters>$<salt_hex>$<dk_hex>
+fn user_pbkdf2_iters() -> i64 {
+    return 100000
+}
+
+fn user_hex_to_bytes(h: str) -> bytes {
+    let mut out = bytes_new(0)
+    let mut i: i64 = 0
+    while i + 1 < len(h) {
+        out = bytes_push(out, hex_val(char_at(h, i)) * 16 + hex_val(char_at(h, i + 1)))
+        i = i + 2
+    }
+    return out
+}
+
+fn user_bytes_to_hex(b: bytes) -> str {
+    let mut v: Vec<i64> = vec_new()
+    let mut i: i64 = 0
+    while i < bytes_len(b) {
+        vec_push(v, bytes_at(b, i))
+        i = i + 1
+    }
+    return bytes_to_hex(v)
+}
+
+fn user_pbkdf2(pw: bytes, salt: bytes, iters: i64) -> bytes {
+    let mut msg = bytes_new(0)
+    let mut i: i64 = 0
+    while i < bytes_len(salt) {
+        msg = bytes_push(msg, bytes_at(salt, i))
+        i = i + 1
+    }
+    msg = bytes_push(bytes_push(bytes_push(msg, 0), 0), 0)
+    msg = bytes_push(msg, 1)
+    let mut u = hmac_sha256_b(pw, msg)
+    let mut t = u
+    i = 1
+    while i < iters {
+        u = hmac_sha256_b(pw, u)
+        let mut acc = bytes_new(0)
+        let mut j: i64 = 0
+        while j < bytes_len(u) {
+            acc = bytes_push(acc, bytes_at(u, j) ^ bytes_at(t, j))
+            j = j + 1
+        }
+        t = acc
+        i = i + 1
+    }
+    return t
+}
+
+fn user_hash_password(email: str, password: str) -> str !Random {
+    let salt_raw = random_bytes(16)?
+    let mut salt = bytes_new(0)
+    let mut i: i64 = 0
+    while i < vec_len(salt_raw) {
+        salt = bytes_push(salt, vec_get(salt_raw, i))
+        i = i + 1
+    }
+    let pw = bytes_of_str(concat(email, concat("|", password)))
+    let dk = user_pbkdf2(pw, salt, user_pbkdf2_iters())
+    return concat("pbkdf2_sha256$", concat(int_to_str(user_pbkdf2_iters()), concat("$", concat(user_bytes_to_hex(salt), concat("$", user_bytes_to_hex(dk))))))
+}
+
+// Constant-time сравнение на низове (за хешове).
+fn user_str_eq_ct(a: str, b: str) -> i64 {
+    if len(a) != len(b) {
+        return 0
+    }
+    let mut x: i64 = 0
+    let mut i: i64 = 0
+    while i < len(a) {
+        x = x | (char_at(a, i) ^ char_at(b, i))
+        i = i + 1
+    }
+    if x == 0 {
+        return 1
+    }
+    return 0
+}
+
+// Проверка срещу записания хеш: нов формат pbkdf2_sha256$..., иначе legacy
+// sha256("buchnative|"+email+"|"+password) — старите хешове още се разпознават
+// (препоръчително е rehash при следващ успешен вход).
+fn user_check_password(email: str, password: str, stored: str) -> i64 {
+    if str_starts_with(stored, "pbkdf2_sha256$") == 1 {
+        let parts = str_split(stored, "$")
+        if vec_len(parts) != 4 {
+            return 0
+        }
+        let iters = parse_int(vec_get(parts, 1))
+        if iters < 1 {
+            return 0
+        }
+        let salt = user_hex_to_bytes(vec_get(parts, 2))
+        let want = vec_get(parts, 3)
+        let pw = bytes_of_str(concat(email, concat("|", password)))
+        let dk = user_pbkdf2(pw, salt, iters)
+        return user_str_eq_ct(user_bytes_to_hex(dk), want)
+    }
+    let want = sha256_hex(concat(concat("buchnative|", email), concat("|", password)))
+    return user_str_eq_ct(want, stored)
+}
+
+// Дали записаният хеш е от стария (слаб) формат.
+fn user_hash_is_legacy(stored: str) -> i64 {
+    if str_starts_with(stored, "pbkdf2_sha256$") == 1 {
+        return 0
+    }
+    return 1
 }
 
 fn user_cols() -> Vec<str> {
@@ -110,7 +222,7 @@ fn user_list_json(q: OrmQuery) -> JObj {
 }
 
 // Смяна на парола: хешът зависи от имейла, затова се преизчислява.
-fn user_set_password(db: OrmDb, id: i64, email: str, password: str) -> OrmExec !IO !Net {
+fn user_set_password(db: OrmDb, id: i64, email: str, password: str) -> OrmExec !IO !Net !Random {
     let cols: Vec<str> = vec_new()
     vec_push(cols, "password_hash")
     let vals: Vec<str> = vec_new()
@@ -119,7 +231,7 @@ fn user_set_password(db: OrmDb, id: i64, email: str, password: str) -> OrmExec !
 }
 
 // Смяна на имейл: паролата се прехешира с новия имейл.
-fn user_set_email(db: OrmDb, id: i64, new_email: str, password: str) -> OrmExec !IO !Net {
+fn user_set_email(db: OrmDb, id: i64, new_email: str, password: str) -> OrmExec !IO !Net !Random {
     let cols: Vec<str> = vec_new()
     vec_push(cols, "email")
     vec_push(cols, "password_hash")
