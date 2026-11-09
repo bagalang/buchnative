@@ -30,6 +30,10 @@ fn act_invoices_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if orm_nrows(existing) < 1 {
         return act_404(orm_db_q(existing), "Invoice not found")
     }
+    let ac_upd = active_company_id(orm_db_q(existing), auth.ctx.user_sub)?
+    if orm_cell_by_i64(existing, 0, "company_id") != ac_upd.id {
+        return act_404(ac_upd.db, "Invoice not found")
+    }
     let st0 = orm_cell_by(existing, 0, "status")
     // Редакцията е свободна (ръчно въвеждане, големи грешки — вж. conventions.md).
     // При осчетоводена фактура потребителят първо я връща към чернова, ако

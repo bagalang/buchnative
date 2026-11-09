@@ -106,12 +106,26 @@ fn counterpart_all(db: OrmDb) -> OrmQuery !IO !Net {
     return kv_select_all_order(db, counterpart_table(), "id", counterpart_cols())?
 }
 
+fn counterpart_all_co(db: OrmDb, company_id: i64) -> OrmQuery !IO !Net {
+    return kv_where_order(db, counterpart_table(), "company_id", int_to_str(company_id), "id", counterpart_cols())?
+}
+
 fn counterpart_by_vat(db: OrmDb, vat_number: str) -> OrmQuery !IO !Net {
     return kv_where_star(db, counterpart_table(), "vat_number", vat_number)?
 }
 
 fn counterpart_by_eik(db: OrmDb, eik: str) -> OrmQuery !IO !Net {
     return kv_where_star(db, counterpart_table(), "eik", eik)?
+}
+
+// Уникалността е в рамките на фирмата: един и същ доставчик е редовно
+// контрагент на няколко фирми, затова глобална проверка би блокирала това.
+fn counterpart_by_eik_co(db: OrmDb, company_id: i64, eik: str) -> OrmQuery !IO !Net {
+    return kv_where2_star(db, counterpart_table(), "company_id", int_to_str(company_id), "eik", eik)?
+}
+
+fn counterpart_by_vat_co(db: OrmDb, company_id: i64, vat_number: str) -> OrmQuery !IO !Net {
+    return kv_where2_star(db, counterpart_table(), "company_id", int_to_str(company_id), "vat_number", vat_number)?
 }
 
 fn counterpart_create(db: OrmDb, name: str, counterpart_type: str, eik: str, vat_number: str, address: str, vies_address: str, city: str, country: str, post_code: str, street_name: str, building_number: str, region: str, address_building: str, additional_address_detail: str, address_type: str, contact_person: str, email: str, phone: str, company_id: i64) -> OrmExec !IO !Net !Time {

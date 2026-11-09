@@ -2,9 +2,11 @@
 // Резултат: данни за чернова фактура с редове (не запис по сметки).
 
 import "../models/counterpart.baga"
+import "../models/product.baga"
 import "../models/product_name_mapping.baga"
 import "mistral.baga"
 import "mistral_ocr.baga"
+import "active_company.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
 import "fmrbaga/action.baga"
@@ -78,13 +80,14 @@ fn act_scans_extract(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
     if r.ok == 0 {
         return act_err(mk.db, 502, r.err)
     }
-    let mut db2 = mk.db
+    let ac = active_company_id(mk.db, auth.ctx.user_sub)?
+    let mut db2 = ac.db
     let mut cp_id: i64 = 0
     let mut cp_obj = jobj_new()
     let vat = str_trim(r.counterpart_vat_number)
     let eik = str_trim(r.counterpart_eik)
     if vat != "" {
-        let cq = counterpart_by_vat(db2, vat)?
+        let cq = counterpart_by_vat_co(db2, ac.id, vat)?
         if orm_ok_q(cq) == 0 {
             return act_err(orm_db_q(cq), 500, orm_err_q(cq))
         }
@@ -95,7 +98,7 @@ fn act_scans_extract(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
         }
     }
     if cp_id == 0 && eik != "" {
-        let cq = counterpart_by_eik(db2, eik)?
+        let cq = counterpart_by_eik_co(db2, ac.id, eik)?
         if orm_ok_q(cq) == 0 {
             return act_err(orm_db_q(cq), 500, orm_err_q(cq))
         }
@@ -155,7 +158,12 @@ fn act_pnmap_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if cid <= 0 {
         return act_err(db, 422, "counterpart_id е задължителен")
     }
-    let q = pnmap_by_counterpart(db, cid)?
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    let cpq = counterpart_find(ac.db, cid)?
+    if orm_ok_q(cpq) == 0 || orm_nrows(cpq) < 1 || orm_cell_by_i64(cpq, 0, "company_id") != ac.id {
+        return act_404(ac.db, "Counterpart not found")
+    }
+    let q = pnmap_by_counterpart(orm_db_q(cpq), cid)?
     if orm_ok_q(q) == 0 {
         return act_err(orm_db_q(q), 500, orm_err_q(q))
     }
@@ -185,11 +193,16 @@ fn act_pnmap_save(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if orm_ok_db(db) == 0 {
         return act_err(db, 503, "database unavailable")
     }
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    let cpq = counterpart_find(ac.db, cid.num)?
+    if orm_ok_q(cpq) == 0 || orm_nrows(cpq) < 1 || orm_cell_by_i64(cpq, 0, "company_id") != ac.id {
+        return act_404(ac.db, "Counterpart not found")
+    }
     let items = json_get(b.doc, b.root, "items")
     if items < 0 || json_tag(b.doc, items) != 5 {
         return act_err(db, 422, "items трябва да е масив")
     }
-    let mut mq = pnmap_by_counterpart(db, cid.num)?
+    let mut mq = pnmap_by_counterpart(orm_db_q(cpq), cid.num)?
     if orm_ok_q(mq) == 0 {
         return act_err(orm_db_q(mq), 500, orm_err_q(mq))
     }
@@ -204,6 +217,11 @@ fn act_pnmap_save(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         let name = jflex_str(b.doc, elem, "scanned_name", "")
         let pid = jreq_i64(b.doc, elem, "product_id")
         if name != "" && pid.ok == 1 && pid.num > 0 {
+            let pf = product_find(db2, pid.num)?
+            if orm_ok_q(pf) == 0 || orm_nrows(pf) < 1 || orm_cell_by_i64(pf, 0, "company_id") != ac.id {
+                return act_err(db2, 422, concat("липсва артикул с id ", int_to_str(pid.num)))
+            }
+            db2 = orm_db_q(pf)
             let hit = pnmap_find_name(mq, name)
             if hit >= 0 {
                 let id = orm_cell_by_i64(mq, hit, "id")

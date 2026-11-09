@@ -131,14 +131,14 @@ fn sft_gl_number(db: OrmDb, bank_id: i64) -> SftGl !IO !Net {
     return SftGl { db: orm_db_q(aq), code: num }
 }
 
-fn sft_party(q: OrmQuery, name: str) -> str {
+fn sft_party(q: OrmQuery, name: str, company_id: i64) -> str {
     let want = str_trim(name)
     if want == "" {
         return "0"
     }
     let mut i: i64 = 0
     while i < orm_nrows(q) {
-        if str_trim(orm_cell_by(q, i, "name")) == want {
+        if orm_cell_by_i64(q, i, "company_id") == company_id && str_trim(orm_cell_by(q, i, "name")) == want {
             let eik = sft_clip(orm_cell_by(q, i, "eik"), 35)
             if eik != "" {
                 return eik
@@ -235,7 +235,7 @@ fn sft_payments(db: OrmDb, company_id: i64, period: str, currency: str) -> SftPa
                 } else {
                     credit = vat_dadd(credit, mag)
                 }
-                let party = sft_party(kq, orm_cell_by(tq, i, "counterpart_name"))
+                let party = sft_party(kq, orm_cell_by(tq, i, "counterpart_name"), company_id)
                 let mut customer = "0"
                 let mut supplier = "0"
                 if ind == "D" {

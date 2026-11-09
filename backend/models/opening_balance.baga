@@ -96,6 +96,7 @@ fn ob_to_json(q: OrmQuery, row: i64) -> JObj {
     o = jobj_i64(o, "product_id", orm_cell_by_i64(q, row, "product_id"))
     o = jobj_str(o, "quantity", orm_cell_by(q, row, "quantity"))
     o = jobj_str(o, "description", orm_cell_by(q, row, "description"))
+    o = jobj_i64(o, "company_id", orm_cell_by_i64(q, row, "company_id"))
     return o
 }
 
@@ -110,6 +111,7 @@ fn ob_cols() -> Vec<str> {
     vec_push(c, "product_id")
     vec_push(c, "quantity")
     vec_push(c, "description")
+    vec_push(c, "company_id")
     return c
 }
 
@@ -117,11 +119,13 @@ fn ob_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
     return kv_select_by_id(db, ob_table(), id, ob_cols())?
 }
 
-fn ob_by_year(db: OrmDb, year: i64) -> OrmQuery !IO !Net {
-    return kv_where_order(db, ob_table(), "fiscal_year", int_to_str(year), "id", ob_cols())?
+fn ob_by_year_co(db: OrmDb, year: i64, company_id: i64) -> OrmQuery !IO !Net {
+    let sc: Vec<str> = vec_new()
+    vec_push(sc, "id")
+    return kv_where2_dir(db, ob_table(), "fiscal_year", int_to_str(year), "company_id", int_to_str(company_id), ob_cols(), sc, kv_dirs_asc(1))?
 }
 
-fn ob_insert(db: OrmDb, fiscal_year: i64, account_id: i64, debit: str, credit: str, counterpart_id: i64, product_id: i64, quantity: str, description: str) -> OrmExec !IO !Net {
+fn ob_insert(db: OrmDb, fiscal_year: i64, account_id: i64, debit: str, credit: str, counterpart_id: i64, product_id: i64, quantity: str, description: str, company_id: i64) -> OrmExec !IO !Net {
     let cols: Vec<str> = vec_new()
     vec_push(cols, "fiscal_year")
     vec_push(cols, "account_id")
@@ -131,6 +135,7 @@ fn ob_insert(db: OrmDb, fiscal_year: i64, account_id: i64, debit: str, credit: s
     vec_push(cols, "product_id")
     vec_push(cols, "quantity")
     vec_push(cols, "description")
+    vec_push(cols, "company_id")
     let vals: Vec<str> = vec_new()
     vec_push(vals, int_to_str(fiscal_year))
     vec_push(vals, int_to_str(account_id))
@@ -140,6 +145,7 @@ fn ob_insert(db: OrmDb, fiscal_year: i64, account_id: i64, debit: str, credit: s
     vec_push(vals, int_to_str(product_id))
     vec_push(vals, quantity)
     vec_push(vals, description)
+    vec_push(vals, int_to_str(company_id))
     let nulls: Vec<i64> = vec_new()
     let mut i: i64 = 0
     while i < vec_len(cols) {

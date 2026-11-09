@@ -80,6 +80,10 @@ fn product_all(db: OrmDb) -> OrmQuery !IO !Net {
     return kv_select_all_order(db, product_table(), "id", product_cols())?
 }
 
+fn product_all_co(db: OrmDb, company_id: i64) -> OrmQuery !IO !Net {
+    return kv_where_order(db, product_table(), "company_id", int_to_str(company_id), "id", product_cols())?
+}
+
 fn product_ins_cols() -> Vec<str> {
     let cols = vec_new()
     vec_push(cols, "name")

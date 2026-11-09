@@ -82,7 +82,8 @@ fn act_ob_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if year < 2000 {
         year = 2026
     }
-    let q = ob_by_year(db, year)?
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    let q = ob_by_year_co(ac.db, year, ac.id)?
     if orm_ok_q(q) == 0 {
         return act_err(orm_db_q(q), 500, orm_err_q(q))
     }
@@ -92,12 +93,12 @@ fn act_ob_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         return act_err(orm_db_q(aq), 500, orm_err_q(aq))
     }
     db2 = orm_db_q(aq)
-    let cq = counterpart_all(db2)?
+    let cq = counterpart_all_co(db2, ac.id)?
     if orm_ok_q(cq) == 0 {
         return act_err(orm_db_q(cq), 500, orm_err_q(cq))
     }
     db2 = orm_db_q(cq)
-    let pq = product_all(db2)?
+    let pq = product_all_co(db2, ac.id)?
     if orm_ok_q(pq) == 0 {
         return act_err(orm_db_q(pq), 500, orm_err_q(pq))
     }
@@ -222,7 +223,19 @@ fn act_ob_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if analytic == "product" && product_id <= 0 {
         return act_err(orm_db_q(aq), 422, concat(number, " е аналитична към продукт"))
     }
-    let ins = ob_insert(orm_db_q(aq), yf.num, aid.num, debit.val, credit.val, counterpart_id, product_id, quantity.val, description.val)?
+    if counterpart_id > 0 {
+        let cpq = counterpart_find(orm_db_q(aq), counterpart_id)?
+        if orm_ok_q(cpq) == 0 || orm_nrows(cpq) < 1 || orm_cell_by_i64(cpq, 0, "company_id") != ac.id {
+            return act_404(orm_db_q(aq), "Counterpart not found")
+        }
+    }
+    if product_id > 0 {
+        let prq = product_find(orm_db_q(aq), product_id)?
+        if orm_ok_q(prq) == 0 || orm_nrows(prq) < 1 || orm_cell_by_i64(prq, 0, "company_id") != ac.id {
+            return act_404(orm_db_q(aq), "Product not found")
+        }
+    }
+    let ins = ob_insert(orm_db_q(aq), yf.num, aid.num, debit.val, credit.val, counterpart_id, product_id, quantity.val, description.val, ac.id)?
     if orm_ok(ins) == 0 {
         return act_err(orm_db_exec(ins), 500, orm_err_exec(ins))
     }
@@ -262,6 +275,9 @@ fn act_ob_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         return act_err(orm_db_q(q0), 500, orm_err_q(q0))
     }
     if orm_nrows(q0) < 1 {
+        return act_404(orm_db_q(q0), "Opening balance not found")
+    }
+    if orm_cell_by_i64(q0, 0, "company_id") != ac.id {
         return act_404(orm_db_q(q0), "Opening balance not found")
     }
     let year = orm_cell_by_i64(q0, 0, "fiscal_year")
@@ -309,6 +325,12 @@ fn act_ob_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         if cpid.ok == 0 {
             return act_422_field(pc.db, "counterpart_id", cpid)
         }
+        if cpid.num > 0 {
+            let cpq = counterpart_find(pc.db, cpid.num)?
+            if orm_ok_q(cpq) == 0 || orm_nrows(cpq) < 1 || orm_cell_by_i64(cpq, 0, "company_id") != ac.id {
+                return act_404(pc.db, "Counterpart not found")
+            }
+        }
         vec_push(cols, "counterpart_id")
         vec_push(vals, int_to_str(cpid.num))
     }
@@ -316,6 +338,12 @@ fn act_ob_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if prid.present == 1 {
         if prid.ok == 0 {
             return act_422_field(pc.db, "product_id", prid)
+        }
+        if prid.num > 0 {
+            let prq = product_find(pc.db, prid.num)?
+            if orm_ok_q(prq) == 0 || orm_nrows(prq) < 1 || orm_cell_by_i64(prq, 0, "company_id") != ac.id {
+                return act_404(pc.db, "Product not found")
+            }
         }
         vec_push(cols, "product_id")
         vec_push(vals, int_to_str(prid.num))
@@ -352,6 +380,9 @@ fn act_ob_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         return act_err(orm_db_q(q0), 500, orm_err_q(q0))
     }
     if orm_nrows(q0) < 1 {
+        return act_404(orm_db_q(q0), "Opening balance not found")
+    }
+    if orm_cell_by_i64(q0, 0, "company_id") != ac.id {
         return act_404(orm_db_q(q0), "Opening balance not found")
     }
     let year = orm_cell_by_i64(q0, 0, "fiscal_year")

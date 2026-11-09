@@ -8,6 +8,7 @@ import "../models/company.baga"
 import "../models/vat_manual.baga"
 import "vat_fmt.baga"
 import "acl.baga"
+import "active_company.baga"
 import "vat_line.baga"
 import "vat_files.baga"
 import "fmrbaga/app.baga"
@@ -125,8 +126,8 @@ fn vat_base_from_total(total: str, vat: str) -> Decimal {
     return vat_dsub(vat_parse_amt(total), vat_parse_amt(vat))
 }
 
-fn vat_collect(db: OrmDb, period: str) -> VatPack !IO !Net {
-    let cq = company_all(db)?
+fn vat_collect(db: OrmDb, period: str, company_id: i64) -> VatPack !IO !Net {
+    let cq = company_find(db, company_id)?
     if orm_ok_q(cq) == 0 {
         return vat_pack_err(orm_db_q(cq), orm_err_q(cq))
     }
@@ -159,7 +160,7 @@ fn vat_collect(db: OrmDb, period: str) -> VatPack !IO !Net {
     let n = orm_nrows(q)
     while i < n {
         let vt = orm_cell_by(q, i, "vat_type")
-        if vt == "purchase" || vt == "sales" {
+        if (vt == "purchase" || vt == "sales") && journal_row_in_company(q, i, company_id) == 1 {
             let mut dd = orm_cell_by(q, i, "document_date")
             if dd == "" {
                 dd = orm_cell_by(q, i, "entry_date")
@@ -251,7 +252,7 @@ fn vat_collect(db: OrmDb, period: str) -> VatPack !IO !Net {
         }
         vi = vi + 1
     }
-    let dq = company_all(db2)?
+    let dq = cq
     let mut d_egn = orm_cell_by(dq, 0, "accountant_egn")
     let mut d_name = orm_cell_by(dq, 0, "accountant_name")
     let mut quality = "A"
@@ -333,7 +334,8 @@ fn act_vat_registers(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if orm_ok_db(db) == 0 {
         return act_err(db, 503, "database unavailable")
     }
-    let p = vat_collect(db, period)?
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    let p = vat_collect(ac.db, period, ac.id)?
     if p.ok == 0 {
         return act_err(p.db, 500, p.err)
     }
@@ -361,7 +363,8 @@ fn act_vat_export(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if orm_ok_db(db) == 0 {
         return act_err(db, 503, "database unavailable")
     }
-    let p = vat_collect(db, period)?
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    let p = vat_collect(ac.db, period, ac.id)?
     if p.ok == 0 {
         return act_err(p.db, 500, p.err)
     }
@@ -413,16 +416,16 @@ fn act_vat_manual_save(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     let c80 = vat_manual_field(b.doc, b.root, "cell_80", "0")
     let c81 = vat_manual_field(b.doc, b.root, "cell_81", "0")
     let c82 = vat_manual_field(b.doc, b.root, "cell_82", "0")
-    let cq = company_all(db)?
-    if orm_ok_q(cq) == 0 || orm_nrows(cq) < 1 {
-        return act_err(orm_db_q(cq), 422, "няма фирма за ДДС")
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
     }
-    let cid = orm_cell_by_i64(cq, 0, "id")
-    let sv = vat_manual_save(orm_db_q(cq), cid, period, c33, c70, c71, c80, c81, c82)?
+    let cid = ac.id
+    let sv = vat_manual_save(ac.db, cid, period, c33, c70, c71, c80, c81, c82)?
     if orm_ok(sv) == 0 {
         return act_err(orm_db_exec(sv), 500, orm_err_exec(sv))
     }
-    let p = vat_collect(orm_db_exec(sv), period)?
+    let p = vat_collect(orm_db_exec(sv), period, cid)?
     if p.ok == 0 {
         return act_err(p.db, 500, p.err)
     }

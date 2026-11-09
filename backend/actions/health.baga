@@ -6,6 +6,7 @@
 
 import "../models/journal.baga"
 import "../models/account.baga"
+import "../models/counterpart.baga"
 import "acl.baga"
 import "active_company.baga"
 import "fmrbaga/app.baga"
@@ -141,6 +142,47 @@ fn act_db_check(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
             health_check(details, oks, ids, 1, "account_numbers", "ok")
         } else {
             health_check(details, oks, ids, 0, "account_numbers", concat("дублирани номера: ", int_to_str(dups)))
+        }
+        // Дублиран ЕИК или ДДС номер на контрагент — два записа за едно и
+        // също лице дават раздвоени фактури и грешни ВИЕС/НАП справки.
+        let cpq = counterpart_all(d)?
+        let eiks: Map<str, i64> = map_new()
+        let vats: Map<str, i64> = map_new()
+        let mut dup_eik: i64 = 0
+        let mut dup_vat: i64 = 0
+        if orm_ok_q(cpq) == 1 {
+            let mut ci: i64 = 0
+            while ci < orm_nrows(cpq) {
+                let co = int_to_str(orm_cell_by_i64(cpq, ci, "company_id"))
+                let e = str_trim(orm_cell_by(cpq, ci, "eik"))
+                let v = str_trim(orm_cell_by(cpq, ci, "vat_number"))
+                if e != "" {
+                    let ek = concat(concat(co, "|"), e)
+                    if map_has(eiks, ek) == 1 {
+                        dup_eik = dup_eik + 1
+                    }
+                    map_set(eiks, ek, 1)
+                }
+                if v != "" {
+                    let vk = concat(concat(co, "|"), v)
+                    if map_has(vats, vk) == 1 {
+                        dup_vat = dup_vat + 1
+                    }
+                    map_set(vats, vk, 1)
+                }
+                ci = ci + 1
+            }
+            d = orm_db_q(cpq)
+        }
+        if dup_eik == 0 {
+            health_check(details, oks, ids, 1, "counterpart_eik", "ok")
+        } else {
+            health_check(details, oks, ids, 0, "counterpart_eik", concat("дублирани ЕИК: ", int_to_str(dup_eik)))
+        }
+        if dup_vat == 0 {
+            health_check(details, oks, ids, 1, "counterpart_vat", "ok")
+        } else {
+            health_check(details, oks, ids, 0, "counterpart_vat", concat("дублирани ДДС номера: ", int_to_str(dup_vat)))
         }
     }
 

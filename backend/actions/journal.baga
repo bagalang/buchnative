@@ -68,6 +68,10 @@ fn act_journal_show(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if orm_nrows(q) < 1 {
         return act_404(orm_db_q(q), "Journal entry not found")
     }
+    let ac_show = active_company_id(orm_db_q(q), auth.ctx.user_sub)?
+    if orm_cell_by_i64(q, 0, "company_id") != ac_show.id {
+        return act_404(ac_show.db, "Journal entry not found")
+    }
     let mut o = journal_entry_to_json(q, 0)
     let lq = journal_lines_by_entry(orm_db_q(q), id)?
     o = jobj_arr(o, "lines", journal_lines_list_json(lq))
@@ -136,6 +140,9 @@ fn act_journal_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
             return act_err(orm_db_q(cq), 500, orm_err_q(cq))
         }
         if orm_nrows(cq) < 1 {
+            return act_404(orm_db_q(cq), "Counterpart not found")
+        }
+        if orm_cell_by_i64(cq, 0, "company_id") != ac.id {
             return act_404(orm_db_q(cq), "Counterpart not found")
         }
         counterpart_name = orm_cell_by(cq, 0, "name")
@@ -343,6 +350,9 @@ fn act_journal_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         if orm_nrows(cq) < 1 {
             return act_404(orm_db_q(cq), "Counterpart not found")
         }
+        if orm_cell_by_i64(cq, 0, "company_id") != ac.id {
+            return act_404(orm_db_q(cq), "Counterpart not found")
+        }
         counterpart_name = orm_cell_by(cq, 0, "name")
         counterpart_vat_number = orm_cell_by(cq, 0, "vat_number")
         db2 = orm_db_q(cq)
@@ -507,7 +517,7 @@ fn act_journal_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         return act_404(orm_db_q(q), "Journal entry not found")
     }
     let ac = active_company_id(db, auth.ctx.user_sub)
-    if orm_cell_by_i64(q, 0, "company_id") != 0 && orm_cell_by_i64(q, 0, "company_id") != ac.id {
+    if orm_cell_by_i64(q, 0, "company_id") != ac.id {
         return act_404(orm_db_q(q), "Journal entry not found")
     }
     let bgn = bb_begin(orm_db_q(q))?

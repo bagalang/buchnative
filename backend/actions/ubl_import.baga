@@ -393,7 +393,7 @@ fn act_scans_ubl(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     let vat = str_trim(party.vat)
     let eik = str_trim(party.eik)
     if vat != "" {
-        let cq = counterpart_by_vat(db2, vat)?
+        let cq = counterpart_by_vat_co(db2, ac.id, vat)?
         if orm_ok_q(cq) == 0 {
             return act_err(orm_db_q(cq), 500, orm_err_q(cq))
         }
@@ -404,7 +404,7 @@ fn act_scans_ubl(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         }
     }
     if cp_id == 0 && eik != "" {
-        let cq = counterpart_by_eik(db2, eik)?
+        let cq = counterpart_by_eik_co(db2, ac.id, eik)?
         if orm_ok_q(cq) == 0 {
             return act_err(orm_db_q(cq), 500, orm_err_q(cq))
         }

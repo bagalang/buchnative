@@ -125,8 +125,8 @@ fn sftm_dap(category: str, cost: str, tax_acc: str, tax_rate: str) -> str {
     return out
 }
 
-fn sft_annual(db: OrmDb, year: i64) -> SftMode !IO !Net {
-    let q = fa_all(db)?
+fn sft_annual(db: OrmDb, year: i64, company_id: i64) -> SftMode !IO !Net {
+    let q = fa_all_co(db, company_id)?
     if orm_ok_q(q) == 0 {
         return SftMode { ok: 0, err: orm_err_q(q), db: orm_db_q(q), xml: "" }
     }

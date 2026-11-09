@@ -428,6 +428,14 @@ fn invoice_numbers_by_type(db: OrmDb) -> OrmQuery !IO !Net {
     return kv_select_all(db, invoice_table(), cols)?
 }
 
+fn invoice_numbers_by_company(db: OrmDb, company_id: i64) -> OrmQuery !IO !Net {
+    let cols: Vec<str> = vec_new()
+    vec_push(cols, "number")
+    vec_push(cols, "document_type")
+    vec_push(cols, "direction")
+    return kv_select_where(db, invoice_table(), "company_id", int_to_str(company_id), cols)?
+}
+
 fn invoice_next_number_str(q: OrmQuery, document_type: str, direction: str) -> str {
     let mut maxn: i64 = 0
     let mut i: i64 = 0

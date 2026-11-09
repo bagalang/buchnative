@@ -84,9 +84,10 @@ fn kv_mig_set_default(cols: Vec<str>, vals: Vec<str>, nulls: Vec<i64>, name: str
 
 // ── регистър ──────────────────────────────────────────────────────────────
 
-// Периодите са били глобални. Съществуващите редове се запринасят към
-// първата фирма — преди това нямаше разграничение и всичко е в една фирма.
-fn kv_mig_period_company(db: OrmDb, table: str, cols: Vec<str>, vals: Vec<str>, nulls: Vec<i64>, id: str) -> i64 !Net !IO !Time {
+// Периодите/началните салда/ДМА са били глобални. Съществуващите редове се
+// запринасят към първата фирма — преди това нямаше разграничение и всичко е
+// в една фирма.
+fn kv_mig_default_company(db: OrmDb, table: str, cols: Vec<str>, vals: Vec<str>, nulls: Vec<i64>, id: str) -> i64 !Net !IO !Time {
     let mut i: i64 = 0
     while i < vec_len(cols) {
         if vec_get(cols, i) == "company_id" {
@@ -108,7 +109,12 @@ fn kv_mig_period_company(db: OrmDb, table: str, cols: Vec<str>, vals: Vec<str>, 
 // с кода, а миграция се добавя само при промяна, която иска преизчисление.
 fn buchnative_kv_migrations() -> KvMigrations {
     let mut m = kv_migrations_new()
-    m = kv_migrations_add(m, "accounting_periods", 20261107001, "period_company_id", kv_mig_period_company)
+    m = kv_migrations_add(m, "accounting_periods", 20261107001, "period_company_id", kv_mig_default_company)
+    m = kv_migrations_add(m, "opening_balances", 20261109001, "opening_balance_company_id", kv_mig_default_company)
+    m = kv_migrations_add(m, "fixed_assets", 20261109002, "fixed_asset_company_id", kv_mig_default_company)
+    m = kv_migrations_add(m, "internal_docs", 20261109003, "internal_doc_company_id", kv_mig_default_company)
+    // Амортизационните записи по-рано се вмъкваха с company_id=0.
+    m = kv_migrations_add(m, "journal_entries", 20261109004, "journal_entry_company_id", kv_mig_default_company)
     return m
 }
 

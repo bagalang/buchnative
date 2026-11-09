@@ -141,6 +141,9 @@ fn invoice_post_one(db: OrmDb, id: i64, user_sub: str) -> FmrOut !IO !Net !Time 
             return act_err(orm_db_q(cq), 500, orm_err_q(cq))
         }
         if orm_nrows(cq) > 0 {
+            if orm_cell_by_i64(cq, 0, "company_id") != acp.id {
+                return act_err(orm_db_q(cq), 422, "контрагентът е от друга фирма")
+            }
             counterpart_name = orm_cell_by(cq, 0, "name")
             counterpart_vat_number = orm_cell_by(cq, 0, "vat_number")
             db2 = orm_db_q(cq)

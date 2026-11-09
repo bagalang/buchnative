@@ -2,8 +2,6 @@
 
 import "../models/counterpart.baga"
 import "../models/kvpage.baga"
-import "../models/addr_saft.baga"
-import "mistral.baga"
 import "acl.baga"
 import "active_company.baga"
 import "fmrbaga/app.baga"
@@ -11,9 +9,6 @@ import "fmrbaga/ctx.baga"
 import "fmrbaga/action.baga"
 import "fmrbaga/jsonx.baga"
 import "ormbaga/orm.baga"
-import "std/net/http_client.baga"
-import "std/crypto/pkey.baga"
-import "std/os/os.baga"
 import "std/str/str.baga"
 
 // Проверява типа (customer/supplier/both).
@@ -94,6 +89,28 @@ fn act_counterparts_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         return act_err(db, 503, "database unavailable")
     }
     let accp = active_company_id(db, auth.ctx.user_sub)?
+    // ЕИК и ДДС номер са идентичност на контрагента: два клиента с един ЕИК
+    // дават дублирани фактури и грешни ВИЕС/НАП справки.
+    let eik_t = str_trim(eik.val)
+    if eik_t != "" {
+        let dq = counterpart_by_eik_co(accp.db, accp.id, eik_t)?
+        if orm_ok_q(dq) == 0 {
+            return act_err(orm_db_q(dq), 500, orm_err_q(dq))
+        }
+        if orm_nrows(dq) > 0 {
+            return act_err(orm_db_q(dq), 409, concat("ЕИК ", concat(eik_t, " вече се използва")))
+        }
+    }
+    let vat_t = str_trim(vat_number.val)
+    if vat_t != "" {
+        let vq = counterpart_by_vat_co(accp.db, accp.id, vat_t)?
+        if orm_ok_q(vq) == 0 {
+            return act_err(orm_db_q(vq), 500, orm_err_q(vq))
+        }
+        if orm_nrows(vq) > 0 {
+            return act_err(orm_db_q(vq), 409, concat("ДДС номер ", concat(vat_t, " вече се използва")))
+        }
+    }
     let ins = counterpart_create(accp.db, name.val, counterpart_type.val, eik.val, vat_number.val, address.val, vies_address.val, city.val, country.val, post_code.val, street_name.val, building_number.val, rn.code, address_building.val, additional_address_detail.val, tn.code, contact_person.val, email.val, phone.val, accp.id)?
     if orm_ok(ins) == 0 {
         return act_err(orm_db_exec(ins), 409, orm_err_exec(ins))
@@ -124,7 +141,11 @@ fn act_counterparts_show(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if orm_nrows(q) < 1 {
         return act_404(orm_db_q(q), "Counterpart not found")
     }
-    return act_ok(orm_db_q(q), counterpart_to_json(q, 0))
+    let ac = active_company_id(orm_db_q(q), auth.ctx.user_sub)?
+    if orm_cell_by_i64(q, 0, "company_id") != ac.id {
+        return act_404(ac.db, "Counterpart not found")
+    }
+    return act_ok(ac.db, counterpart_to_json(q, 0))
 }
 
 fn act_counterparts_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
@@ -136,6 +157,16 @@ fn act_counterparts_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if id <= 0 {
         return act_err(db, 400, "invalid id")
     }
+    let cur = counterpart_find(db, id)?
+    if orm_ok_q(cur) == 0 || orm_nrows(cur) < 1 {
+        return act_404(db, "Counterpart not found")
+    }
+    let cur_cid = orm_cell_by_i64(cur, 0, "company_id")
+    let accp = active_company_id(db, auth.ctx.user_sub)?
+    if cur_cid != accp.id {
+        return act_404(accp.db, "Counterpart not found")
+    }
+    db = accp.db
     let body = jbody_parse_str(fmr_body(ctx))
     if body.ok == 0 {
         return act_err(db, 400, body.err)
@@ -173,6 +204,20 @@ fn act_counterparts_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         if eik.ok == 0 {
             return act_422_field(db, "eik", eik)
         }
+        let eik_t = str_trim(eik.val)
+        if eik_t != "" {
+            let dq = counterpart_by_eik_co(db, cur_cid, eik_t)?
+            if orm_ok_q(dq) == 0 {
+                return act_err(orm_db_q(dq), 500, orm_err_q(dq))
+            }
+            let mut di: i64 = 0
+            while di < orm_nrows(dq) {
+                if orm_cell_by_i64(dq, di, "id") != id {
+                    return act_err(orm_db_q(dq), 409, concat("ЕИК ", concat(eik_t, " вече се използва")))
+                }
+                di = di + 1
+            }
+        }
         vec_push(cols, "eik")
         vec_push(vals, eik.val)
     }
@@ -180,6 +225,20 @@ fn act_counterparts_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if vat_number.present == 1 {
         if vat_number.ok == 0 {
             return act_422_field(db, "vat_number", vat_number)
+        }
+        let vat_t = str_trim(vat_number.val)
+        if vat_t != "" {
+            let vq = counterpart_by_vat_co(db, cur_cid, vat_t)?
+            if orm_ok_q(vq) == 0 {
+                return act_err(orm_db_q(vq), 500, orm_err_q(vq))
+            }
+            let mut vi: i64 = 0
+            while vi < orm_nrows(vq) {
+                if orm_cell_by_i64(vq, vi, "id") != id {
+                    return act_err(orm_db_q(vq), 409, concat("ДДС номер ", concat(vat_t, " вече се използва")))
+                }
+                vi = vi + 1
+            }
         }
         vec_push(cols, "vat_number")
         vec_push(vals, vat_number.val)
@@ -341,240 +400,17 @@ fn act_counterparts_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if orm_ok_db(db) == 0 {
         return act_err(db, 503, "database unavailable")
     }
-    let del = counterpart_delete(db, id)?
+    let cur = counterpart_find(db, id)?
+    if orm_ok_q(cur) == 0 || orm_nrows(cur) < 1 {
+        return act_404(db, "Counterpart not found")
+    }
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    if orm_cell_by_i64(cur, 0, "company_id") != ac.id {
+        return act_404(ac.db, "Counterpart not found")
+    }
+    let del = counterpart_delete(ac.db, id)?
     if orm_ok(del) == 0 {
         return act_err(orm_db_exec(del), 500, orm_err_exec(del))
     }
     return act_no_content(orm_db_exec(del))
-}
-
-// --- VIES (ЕК) извличане на контрагент по ЕС ДДС номер ---
-// Същият подход като secret/inv (ViesService): REST API на ЕК, нормализация
-// на номера, дългият суров адрес се пази в vies_address. Ако фирмата има
-// Mistral ключ, адресът се разделя към street_name/building_number/city/
-// post_code/region за SAF-T BG.
-
-struct ViesResult {
-    ok: i64,          // 1 = HTTP+JSON ок (валидността е в .valid)
-    err: str,
-    valid: i64,
-    name: str,
-    address: str,     // суровият дълъг адрес от VIES (с \n редове)
-    user_error: str,
-    request_date: str
-}
-
-// ЕС кодове, поддържани от VIES (EL = Гърция, XI = Северна Ирландия).
-fn vies_is_eu_cc(cc: str) -> i64 {
-    if cc == "AT" || cc == "BE" || cc == "BG" || cc == "CY" || cc == "CZ" { return 1 }
-    if cc == "DE" || cc == "DK" || cc == "EE" || cc == "ES" || cc == "FI" { return 1 }
-    if cc == "FR" || cc == "EL" || cc == "HR" || cc == "HU" || cc == "IE" { return 1 }
-    if cc == "IT" || cc == "LT" || cc == "LU" || cc == "LV" || cc == "MT" { return 1 }
-    if cc == "NL" || cc == "PL" || cc == "PT" || cc == "RO" || cc == "SE" { return 1 }
-    if cc == "SI" || cc == "SK" || cc == "XI" || cc == "GR" { return 1 }
-    return 0
-}
-
-// Главни букви, само A-Z0-9 (като normalizeVatNumber в secret/inv).
-fn vies_normalize_vat(v: str) -> str {
-    let mut out = ""
-    let mut i: i64 = 0
-    while i < len(v) {
-        let mut o = ord(substr(v, i, i + 1))
-        if o >= 97 && o <= 122 {
-            o = o - 32
-        }
-        if (o >= 65 && o <= 90) || (o >= 48 && o <= 57) {
-            out = concat(out, chr(o))
-        }
-        i = i + 1
-    }
-    return out
-}
-
-// Форма: ЕС код (2 букви) + поне 2 знака номер.
-fn vies_vat_shape_ok(v: str) -> i64 {
-    if len(v) < 4 || len(v) > 15 {
-        return 0
-    }
-    if vies_is_eu_cc(substr(v, 0, 2)) == 0 {
-        return 0
-    }
-    return 1
-}
-
-fn vies_api_url(cc: str, num: str) -> str {
-    let mut c = cc
-    if c == "GR" {
-        c = "EL" // VIES ползва EL за Гърция
-    }
-    return concat(concat(concat("https://ec.europa.eu/taxation_customs/vies/rest-api/ms/", c), "/vat/"), num)
-}
-
-// GlobalSign Atlas R46 OV TLS CA 2026 Q3 — издателят на листовия сертификат
-// на ec.europa.eu (клиентът пази само листото, затова котвата е прякият
-// издател; GlobalSign ротира Atlas CA-тата тримесечно). При ротация:
-// BUCHNATIVE_VIES_ANCHOR_FILE=<pem път>.
-fn vies_anchor_pem() -> str {
-    return "-----BEGIN CERTIFICATE-----\nMIIGgTCCBGmgAwIBAgIRAIWscMScS87T3r+QX2i7QqQwDQYJKoZIhvcNAQEMBQAw\nRjELMAkGA1UEBhMCQkUxGTAXBgNVBAoTEEdsb2JhbFNpZ24gbnYtc2ExHDAaBgNV\nBAMTE0dsb2JhbFNpZ24gUm9vdCBSNDYwHhcNMjYwNDIyMDMwMDU3WhcNMjgwNDIy\nMDAwMDAwWjBZMQswCQYDVQQGEwJCRTEZMBcGA1UEChMQR2xvYmFsU2lnbiBudi1z\nYTEvMC0GA1UEAxMmR2xvYmFsU2lnbiBBdGxhcyBSNDYgT1YgVExTIENBIDIwMjYg\nUTMwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQC/ZYuL4wN022bRhC+t\n6Pe/DBbDwQ807vE2938VLZyjmcKa6evvQwC43btDYQy/+HKhYPRXhja9CuidDJpr\ntkdT/lv0iOkJqjylvx9jK5CfAu3mV8nNJA67jH4B0o0O99fjKZwBVLOvjwazUemG\nPbsTNFnG2laoAEVhggkNmH/ORPO6LkHitFhmPNolZzyJNPkxV3yRQfiCf9hh/DMz\nP/1fHkQWqtwvdZ+yD+BQAX/02qbL41z7fsRJ/nfqH5Ez/emtvl9BCC6zHTwLWO9Z\ny+8RPxL1DS2my2IZLjuPQSteukt+FEvEEszgviAj+PpeZrSinFgFA4FVmxLmKUNa\nsvAyxpsZ0CuLO6ddp6Cy+WpTWCmoE4F27wJCI2e5Zdf4y5O92Q/pyms91uK6ICv7\ndjn0YmSjln/3S6g3PwaymkLe/MgSzsF6ad3Ut+8Cujc8aAkeY5ct7sDWMCGyZBft\nynPrL2NtPOcYVjN4+A/wYa3M9nH1uEqovwig54vp07PxAIfCGUED37yiK6gZitue\n27IF6xsIQvcjZD3MHTgqKX72LlAF3cJ74oDSoK3RSZAsaoDJWPLcVIySP7V+pNtg\nrJPvythoG3ztTAwMeTwQeimqJMYj/1eYO/a/kKsVIuvZhC4ft9i8xc53tjMujN/0\n2KMtgef54CNJeoEMT1AuAa6RGQIDAQABo4IBVTCCAVEwDgYDVR0PAQH/BAQDAgGG\nMBMGA1UdJQQMMAoGCCsGAQUFBwMBMBIGA1UdEwEB/wQIMAYBAf8CAQAwHQYDVR0O\nBBYEFONL2rxtq9dVskSSvmDUcSSEa7NRMB8GA1UdIwQYMBaAFANcq3OBh6jMsKbV\nlOI2lkn/BZksMHsGCCsGAQUFBwEBBG8wbTAuBggrBgEFBQcwAYYiaHR0cDovL29j\nc3AuZ2xvYmFsc2lnbi5jb20vcm9vdHI0NjA7BggrBgEFBQcwAoYvaHR0cDovL3Nl\nY3VyZS5nbG9iYWxzaWduLmNvbS9jYWNlcnQvcm9vdHI0Ni5jcnQwNgYDVR0fBC8w\nLTAroCmgJ4YlaHR0cDovL2NybC5nbG9iYWxzaWduLmNvbS9yb290cjQ2LmNybDAh\nBgNVHSAEGjAYMAgGBmeBDAECAjAMBgorBgEEAaAyCgECMA0GCSqGSIb3DQEBDAUA\nA4ICAQAnJ7F65t1Pa4+IDI22zUsRssLVJnfSPNHkcCu/KvWQRdvATfwQncLr2Wf4\nRHUub3TB0ZIZOCMM8+RQQr/VF0XMzAoJ1UjAGWBcVf0N64lEybiUgdNxvnPP+PF0\nfDyqDeELx+mtVLaOqkg1MDQwm10mCOQtznypigyiUOwWy06CU0sk4eWg8CauPyUn\nGbWlJBYclsHZbXD2xuwfqK7l/vGIWvXxjQIDiLSp4pTpOYpuayNFVvjfPotdZqU0\n+uXl7xfBjc4Lc94pdyrit5cm9ECLLv6UvAg7mJQS5/cNG585B07Hn7NgKZOxGaQn\nhM/+8k3P/M+IFAtMsPfY963SB7YndLujj3oW+ALjuVJcKqPj3JYAKkanwqrbZMgP\nUX0MYYK8du4GUH2o72i+6NfyKmzwzLw2FQuwA2Ksh9UPNrYC8HZayi5zCgIoOWsO\nRpgSOCjsL7oyETyevb7U6QRAWaUiqfSFiKsGmqHTpg/6O5JSmZG4VAkXt671judF\nyaNVpW7xDT0h8KBQ2GtEZPodL5hv3usVc5KHkoTsQYNQ03ZZFeLrhKEzsjfb5Hbs\nGJxfuHWyzDj6lHK5g6HjyAbxl6gukn7rsDjeJDEdr5lm7nWxUu8CzdAnWwt0eRRX\npP4ZX2fJZSaevDWXlu9rhqQ2Dha2nidQgEstzALhjs7RVn4CuA==\n-----END CERTIFICATE-----\n"
-}
-
-fn vies_anchor_der() -> bytes !IO {
-    let f = env("BUCHNATIVE_VIES_ANCHOR_FILE")?
-    if f != "" {
-        if file_readable(f)? == 1 {
-            let pem = read_file(f)?
-            return pem_der_block(pem, "CERTIFICATE")
-        }
-    }
-    return pem_der_block(vies_anchor_pem(), "CERTIFICATE")
-}
-
-// Една споделена точка за VIES заявката + JSON парсването на отговора.
-fn vies_fetch(vat: str) -> ViesResult !IO !Net !Random {
-    let cc = substr(vat, 0, 2)
-    let num = substr(vat, 2, len(vat))
-    let headers: Map<str, str> = map_new()
-    map_set(headers, "user-agent", "buchnative/0.1")
-    let anchor = vies_anchor_der()?
-    let resp = http_request_anchor("GET", vies_api_url(cc, num), headers, "", 15, anchor)?
-    if resp.ok == 0 {
-        return ViesResult { ok: 0, err: "VIES услугата е недостъпна (мрежова грешка)", valid: 0, name: "", address: "", user_error: "", request_date: "" }
-    }
-    if resp.status != 200 {
-        return ViesResult { ok: 0, err: concat(concat("VIES върна статус ", int_to_str(resp.status)), " — опитайте пак"), valid: 0, name: "", address: "", user_error: "", request_date: "" }
-    }
-    let body = jbody_parse_str(resp.body)
-    if body.ok == 0 {
-        return ViesResult { ok: 0, err: "невалиден JSON отговор от VIES", valid: 0, name: "", address: "", user_error: "", request_date: "" }
-    }
-    let mut valid: i64 = 0
-    let vf = jreq_bool(body.doc, body.root, "isValid")
-    if vf.ok == 1 {
-        valid = vf.num
-    }
-    return ViesResult {
-        ok: 1,
-        err: "",
-        valid: valid,
-        name: jopt_str(body.doc, body.root, "name", "").val,
-        address: jopt_str(body.doc, body.root, "address", "").val,
-        user_error: jopt_str(body.doc, body.root, "userError", "").val,
-        request_date: jopt_str(body.doc, body.root, "requestDate", "").val
-    }
-}
-
-// GET /v1/counterparts/vies-lookup?vat=BG123456789 — само справка, без запис.
-fn act_counterparts_vies_lookup(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
-    let auth = act_require_perm(ctx, db, "accounting:read")?
-    if auth.ok == 0 {
-        return auth.out
-    }
-    let vat = vies_normalize_vat(fmr_query(ctx, "vat"))
-    if vies_vat_shape_ok(vat) == 0 {
-        return act_err(db, 422, "vat трябва да е ЕС ДДС номер (напр. BG123456789)")
-    }
-    let mk = company_mistral_key(db, auth.ctx.user_sub)?
-    let r = vies_fetch(vat)?
-    if r.ok == 0 {
-        return act_err(mk.db, 502, r.err)
-    }
-    let mut parts = addr_parts_empty()
-    if mk.key != "" && r.address != "" && r.address != "---" {
-        parts = mistral_parse_address(mk.key, r.address, substr(vat, 0, 2))?
-    }
-    let mut o = jobj_new()
-    o = jobj_bool(o, "valid", r.valid)
-    o = jobj_str(o, "name", r.name)
-    o = jobj_str(o, "address", r.address)
-    o = jobj_str(o, "vies_address", r.address)
-    o = jobj_str(o, "street_name", parts.street_name)
-    o = jobj_str(o, "building_number", parts.building_number)
-    o = jobj_str(o, "address_building", parts.address_building)
-    o = jobj_str(o, "additional_address_detail", parts.additional_address_detail)
-    o = jobj_str(o, "address_type", parts.address_type)
-    o = jobj_str(o, "city", parts.city)
-    o = jobj_str(o, "post_code", parts.post_code)
-    o = jobj_str(o, "region", parts.region)
-    o = jobj_str(o, "user_error", r.user_error)
-    o = jobj_str(o, "request_date", r.request_date)
-    o = jobj_str(o, "vat_number", vat)
-    o = jobj_str(o, "country_code", substr(vat, 0, 2))
-    o = jobj_bool(o, "parse_ok", parts.ok)
-    o = jobj_str(o, "parse_note", vies_parse_note(mk.key, parts))
-    return act_ok(mk.db, o)
-}
-
-// POST /v1/counterparts/vies — създава контрагент от VIES данни.
-// Дългият адрес отива в vies_address и address; split полетата — от Mistral.
-fn act_counterparts_vies_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
-    let auth = act_require_perm(ctx, db, "accounting:read")?
-    if auth.ok == 0 {
-        return auth.out
-    }
-    let body = jbody_parse_str(fmr_body(ctx))
-    if body.ok == 0 {
-        return act_err(db, 400, body.err)
-    }
-    let b = jbody_require_object(body)
-    if b.ok == 0 {
-        return act_err(db, 400, b.err)
-    }
-    let vat_f = jreq_str(b.doc, b.root, "vat_number")
-    if vat_f.ok == 0 {
-        return act_422_field(db, "vat_number", vat_f)
-    }
-    let vat = vies_normalize_vat(vat_f.val)
-    if vies_vat_shape_ok(vat) == 0 {
-        return act_err(db, 422, "vat_number трябва да е ЕС ДДС номер (напр. BG123456789)")
-    }
-    let counterpart_type = jopt_str(b.doc, b.root, "counterpart_type", "both")
-    if counterpart_type_ok(counterpart_type.val) == 0 {
-        return act_err(db, 422, "counterpart_type трябва да е customer/supplier/both")
-    }
-    if orm_ok_db(db) == 0 {
-        return act_err(db, 503, "database unavailable")
-    }
-    let mk = company_mistral_key(db, auth.ctx.user_sub)?
-    let r = vies_fetch(vat)?
-    if r.ok == 0 {
-        return act_err(mk.db, 502, r.err)
-    }
-    if r.valid == 0 {
-        return act_err(mk.db, 422, "ДДС номерът не е намерен във VIES")
-    }
-    // name е NOT NULL; някои държави (DE) не връзат име/адрес → "---".
-    let mut name = r.name
-    if name == "" || name == "---" {
-        name = concat("VIES ", vat)
-    }
-    let mut addr = r.address
-    if addr == "---" {
-        addr = ""
-    }
-    let cc = substr(vat, 0, 2)
-    let mut eik = ""
-    if cc == "BG" {
-        eik = substr(vat, 2, len(vat))
-    }
-    let mut parts = addr_parts_empty()
-    if mk.key != "" && addr != "" {
-        parts = mistral_parse_address(mk.key, addr, cc)?
-    }
-    let mut city = parts.city
-    let mut post = parts.post_code
-    let mut country = cc
-    if parts.country != "" {
-        country = parts.country
-    }
-    let acv = active_company_id(mk.db, auth.ctx.user_sub)?
-    let ins = counterpart_create(acv.db, name, counterpart_type.val, eik, vat, addr, addr, city, country, post, parts.street_name, parts.building_number, parts.region, parts.address_building, parts.additional_address_detail, parts.address_type, "", "", "", acv.id)?
-    if orm_ok(ins) == 0 {
-        return act_err(orm_db_exec(ins), 409, orm_err_exec(ins))
-    }
-    let q = counterpart_all(orm_db_exec(ins))?
-    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
-        return act_err(orm_db_q(q), 500, "insert ok but row missing")
-    }
-    return act_created(orm_db_q(q), counterpart_to_json(q, orm_nrows(q) - 1))
 }

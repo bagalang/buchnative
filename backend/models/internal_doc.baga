@@ -35,6 +35,7 @@ fn idoc_cols() -> Vec<str> {
     vec_push(c, "handed_by")
     vec_push(c, "received_by")
     vec_push(c, "created_at")
+    vec_push(c, "company_id")
     return c
 }
 
@@ -67,6 +68,7 @@ fn idoc_to_json(q: OrmQuery, row: i64) -> JObj {
     if ca != "" {
         o = jobj_str(o, "created_at", ca)
     }
+    o = jobj_i64(o, "company_id", orm_cell_by_i64(q, row, "company_id"))
     return o
 }
 
@@ -92,11 +94,21 @@ fn idoc_all(db: OrmDb) -> OrmQuery !IO !Net {
     return kv_select_all_order(db, idoc_table(), "id", idoc_cols())?
 }
 
+fn idoc_all_co(db: OrmDb, company_id: i64) -> OrmQuery !IO !Net {
+    return kv_where_order(db, idoc_table(), "company_id", int_to_str(company_id), "id", idoc_cols())?
+}
+
 // Номерата на всички протоколи — само колоната, която idoc_max_number чете.
 fn idoc_numbers(db: OrmDb) -> OrmQuery !IO !Net {
     let cols: Vec<str> = vec_new()
     vec_push(cols, "number")
     return kv_select_all(db, idoc_table(), cols)?
+}
+
+fn idoc_numbers_co(db: OrmDb, company_id: i64) -> OrmQuery !IO !Net {
+    let cols: Vec<str> = vec_new()
+    vec_push(cols, "number")
+    return kv_select_where(db, idoc_table(), "company_id", int_to_str(company_id), cols)?
 }
 
 // Редовете по документ: индексът по doc_id дава редовете, id ги подрежда.
@@ -106,7 +118,7 @@ fn idoc_lines_by_doc(db: OrmDb, doc_id: i64) -> OrmQuery !IO !Net {
 
 // Вмъква заглавния ред и връща реда с готовото id (каквото даваше RETURNING).
 // created_at се щампова тук — KV няма DEFAULT NOW().
-fn idoc_insert(db: OrmDb, number: str, doc_date: str, from_id: i64, to_id: i64, notes: str, handed_by: str, received_by: str) -> OrmQuery !IO !Net !Time {
+fn idoc_insert(db: OrmDb, number: str, doc_date: str, from_id: i64, to_id: i64, notes: str, handed_by: str, received_by: str, company_id: i64) -> OrmQuery !IO !Net !Time {
     let cols: Vec<str> = vec_new()
     vec_push(cols, "number")
     vec_push(cols, "doc_date")
@@ -117,6 +129,7 @@ fn idoc_insert(db: OrmDb, number: str, doc_date: str, from_id: i64, to_id: i64, 
     vec_push(cols, "handed_by")
     vec_push(cols, "received_by")
     vec_push(cols, "created_at")
+    vec_push(cols, "company_id")
     let vals: Vec<str> = vec_new()
     vec_push(vals, number)
     vec_push(vals, doc_date)
@@ -127,6 +140,7 @@ fn idoc_insert(db: OrmDb, number: str, doc_date: str, from_id: i64, to_id: i64, 
     vec_push(vals, handed_by)
     vec_push(vals, received_by)
     vec_push(vals, kv_now_iso()?)
+    vec_push(vals, int_to_str(company_id))
     return orm_insert_returning_strs(db, idoc_table(), cols, vals)?
 }
 

@@ -80,6 +80,14 @@ fn act_invoices_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if cid.ok == 0 {
         return act_422_field(db, "counterpart_id", cid)
     }
+    let ac_cp = active_company_id(db, auth.ctx.user_sub)?
+    let cq = counterpart_find(ac_cp.db, cid.num)?
+    if orm_ok_q(cq) == 0 || orm_nrows(cq) < 1 {
+        return act_err(ac_cp.db, 422, concat("липсва контрагент с id ", int_to_str(cid.num)))
+    }
+    if orm_cell_by_i64(cq, 0, "company_id") != ac_cp.id {
+        return act_err(ac_cp.db, 422, "контрагентът е от друга фирма")
+    }
     let currency = jopt_str(b.doc, b.root, "currency", "BGN")
     let currency_rate = jopt_str(b.doc, b.root, "currency_rate", "1")
     let document_type = jopt_str(b.doc, b.root, "document_type", "01")
@@ -127,7 +135,7 @@ fn act_invoices_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         if direction.val == "in" {
             return act_err(db, 422, "номерът на входящия документ е задължителен")
         }
-        number = invoice_auto_number(db, document_type.val, direction.val)?
+        number = invoice_auto_number(db, document_type.val, direction.val, ac_cp.id)?
         if number == "" {
             number = "1"
         }
@@ -244,13 +252,17 @@ fn act_invoices_show(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if orm_nrows(q) < 1 {
         return act_404(orm_db_q(q), "Invoice not found")
     }
+    let ac_inv = active_company_id(orm_db_q(q), auth.ctx.user_sub)?
+    if orm_cell_by_i64(q, 0, "company_id") != ac_inv.id {
+        return act_404(ac_inv.db, "Invoice not found")
+    }
     let mut o = invoice_to_json(q, 0)
     let cid = orm_cell_by_i64(q, 0, "counterpart_id")
     let mut d = orm_db_q(q)
     if cid > 0 {
         let cq = counterpart_find(d, cid)?
         if orm_ok_q(cq) == 1 {
-            if orm_nrows(cq) > 0 {
+            if orm_nrows(cq) > 0 && orm_cell_by_i64(cq, 0, "company_id") == ac_inv.id {
                 o = jobj_obj(o, "counterpart", counterpart_to_json(cq, 0))
             }
             d = orm_db_q(cq)
@@ -296,6 +308,10 @@ fn act_invoices_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     }
     if orm_nrows(existing) < 1 {
         return act_404(orm_db_q(existing), "Invoice not found")
+    }
+    let ac_del = active_company_id(orm_db_q(existing), auth.ctx.user_sub)?
+    if orm_cell_by_i64(existing, 0, "company_id") != ac_del.id {
+        return act_404(ac_del.db, "Invoice not found")
     }
     // Изтриването е свободно и за осчетоводени: маха записа в дневника и
     // връща стоката (вж. invoices_bulk.baga → bulk_delete_one). Няма сторно —

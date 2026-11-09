@@ -143,6 +143,9 @@ fn act_bank_transactions_book(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         if orm_nrows(cq) < 1 {
             return act_404(orm_db_q(cq), "Контрагентът не е намерен")
         }
+        if orm_cell_by_i64(cq, 0, "company_id") != ac.id {
+            return act_404(orm_db_q(cq), "Контрагентът не е намерен")
+        }
         cp_name = orm_cell_by(cq, 0, "name")
         cp_vat = orm_cell_by(cq, 0, "vat_number")
         d0 = orm_db_q(cq)
@@ -279,6 +282,9 @@ fn act_bank_transactions_reallocate(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
             return act_err(orm_db_q(cq), 500, orm_err_q(cq))
         }
         if orm_nrows(cq) < 1 {
+            return act_404(orm_db_q(cq), "Контрагентът не е намерен")
+        }
+        if orm_cell_by_i64(cq, 0, "company_id") != ac.id {
             return act_404(orm_db_q(cq), "Контрагентът не е намерен")
         }
         cp_name = orm_cell_by(cq, 0, "name")

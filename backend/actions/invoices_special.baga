@@ -66,6 +66,10 @@ fn act_invoices_issue_protocol(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time 
     if orm_ok_q(iq) == 0 || orm_nrows(iq) < 1 {
         return act_404(orm_db_q(iq), "Invoice not found")
     }
+    let ac_spec = active_company_id(orm_db_q(iq), auth.ctx.user_sub)?
+    if orm_cell_by_i64(iq, 0, "company_id") != ac_spec.id {
+        return act_404(ac_spec.db, "Invoice not found")
+    }
     let d0 = orm_db_q(iq)
     if orm_cell_by(iq, 0, "direction") != "in" {
         return act_err(d0, 422, "протокол по чл. 117 се издава само към входяща фактура")
@@ -76,7 +80,7 @@ fn act_invoices_issue_protocol(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time 
     if str_trim(issue_raw.val) != "" {
         issue_date = str_trim(issue_raw.val)
     }
-    let mut number = invoice_auto_number(d0, "09", "in")
+    let mut number = invoice_auto_number(d0, "09", "in", ac_spec.id)
     if str_trim(number_raw.val) != "" {
         number = str_trim(number_raw.val)
     }
@@ -168,6 +172,10 @@ fn act_invoices_issue_customs(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let iq = invoice_find(db, id)?
     if orm_ok_q(iq) == 0 || orm_nrows(iq) < 1 {
         return act_404(orm_db_q(iq), "Invoice not found")
+    }
+    let ac_spec = active_company_id(orm_db_q(iq), auth.ctx.user_sub)?
+    if orm_cell_by_i64(iq, 0, "company_id") != ac_spec.id {
+        return act_404(ac_spec.db, "Invoice not found")
     }
     let d0 = orm_db_q(iq)
     if orm_cell_by(iq, 0, "direction") != "in" {

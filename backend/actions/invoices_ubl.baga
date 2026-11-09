@@ -351,6 +351,10 @@ fn act_invoices_ubl(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if orm_nrows(q) < 1 {
         return act_404(orm_db_q(q), "Invoice not found")
     }
+    let ac_ubl = active_company_id(orm_db_q(q), auth.ctx.user_sub)?
+    if orm_cell_by_i64(q, 0, "company_id") != ac_ubl.id {
+        return act_404(ac_ubl.db, "Invoice not found")
+    }
     let number = orm_cell_by(q, 0, "number")
     let document_type = orm_cell_by(q, 0, "document_type")
     let issue_date = orm_cell_by(q, 0, "issue_date")
@@ -367,7 +371,7 @@ fn act_invoices_ubl(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     let cid = orm_cell_by_i64(q, 0, "counterpart_id")
     let oid = orm_cell_by_i64(q, 0, "original_invoice_id")
     let mut db2 = orm_db_q(q)
-    let cq = company_all(db2)?
+    let cq = company_find(db2, ac_ubl.id)?
     if orm_ok_q(cq) == 0 || orm_nrows(cq) < 1 {
         return act_err(orm_db_q(cq), 422, "няма фирма за UBL експорт")
     }
@@ -398,7 +402,7 @@ fn act_invoices_ubl(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
             return act_err(orm_db_q(kq), 500, orm_err_q(kq))
         }
         db2 = orm_db_q(kq)
-        if orm_nrows(kq) > 0 {
+        if orm_nrows(kq) > 0 && orm_cell_by_i64(kq, 0, "company_id") == ac_ubl.id {
             cp_name = orm_cell_by(kq, 0, "name")
             cp_eik = orm_cell_by(kq, 0, "eik")
             cp_vat = orm_cell_by(kq, 0, "vat_number")

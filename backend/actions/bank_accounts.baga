@@ -48,7 +48,11 @@ fn act_bank_accounts_show(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if orm_nrows(q) < 1 {
         return act_404(orm_db_q(q), "Bank account not found")
     }
-    return act_ok(orm_db_q(q), bank_account_to_json(q, 0))
+    let ac = active_company_id(orm_db_q(q), auth.ctx.user_sub)?
+    if orm_cell_by_i64(q, 0, "company_id") != ac.id {
+        return act_404(ac.db, "Bank account not found")
+    }
+    return act_ok(ac.db, bank_account_to_json(q, 0))
 }
 fn act_bank_accounts_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let auth = act_require_auth(ctx, db)
@@ -138,6 +142,15 @@ fn act_bank_accounts_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if b.ok == 0 {
         return act_err(db, 400, b.err)
     }
+    let cur = bank_account_find(db, id)?
+    if orm_ok_q(cur) == 0 || orm_nrows(cur) < 1 {
+        return act_404(db, "Bank account not found")
+    }
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    if orm_cell_by_i64(cur, 0, "company_id") != ac.id {
+        return act_404(ac.db, "Bank account not found")
+    }
+    db = ac.db
     let cols = vec_new()
     let vals = vec_new()
     let nulls = vec_new()
@@ -279,7 +292,15 @@ fn act_bank_accounts_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if orm_ok_db(db) == 0 {
         return act_err(db, 503, "database unavailable")
     }
-    let del = bank_account_delete(db, id)?
+    let cur = bank_account_find(db, id)?
+    if orm_ok_q(cur) == 0 || orm_nrows(cur) < 1 {
+        return act_404(db, "Bank account not found")
+    }
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    if orm_cell_by_i64(cur, 0, "company_id") != ac.id {
+        return act_404(ac.db, "Bank account not found")
+    }
+    let del = bank_account_delete(ac.db, id)?
     if orm_ok(del) == 0 {
         return act_err(orm_db_exec(del), 500, orm_err_exec(del))
     }

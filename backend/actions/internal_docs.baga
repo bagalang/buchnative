@@ -5,6 +5,8 @@ import "../models/internal_doc.baga"
 import "../models/document_series.baga"
 import "../models/product.baga"
 import "../models/inventory.baga"
+import "../models/company_related.baga"
+import "active_company.baga"
 import "inventory.baga"
 import "document_series.baga"
 import "txn.baga"
@@ -17,14 +19,14 @@ import "std/json/json.baga"
 import "std/str/str.baga"
 import "bagadecimal/src/decimal.baga"
 
-fn idoc_auto_number(db: OrmDb) -> str !IO !Net {
-    let nq = idoc_numbers(db)?
+fn idoc_auto_number(db: OrmDb, company_id: i64) -> str !IO !Net {
+    let nq = idoc_numbers_co(db, company_id)?
     if orm_ok_q(nq) == 0 {
         return invoice_pad(1, 10)
     }
     let mut mx = idoc_max_number(nq)
     let mut d = orm_db_q(nq)
-    let cid = dser_company_id(d)?
+    let cid = company_id
     let mut pad: i64 = 10
     let mut start: i64 = 1
     if cid > 0 {
@@ -112,7 +114,8 @@ fn act_idoc_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if orm_ok_db(db) == 0 {
         return act_err(db, 503, "database unavailable")
     }
-    let q = idoc_all(db)?
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    let q = idoc_all_co(ac.db, ac.id)?
     if orm_ok_q(q) == 0 {
         return act_err(orm_db_q(q), 500, orm_err_q(q))
     }
@@ -127,10 +130,11 @@ fn act_idoc_next_number(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if orm_ok_db(db) == 0 {
         return act_err(db, 503, "database unavailable")
     }
-    let number = idoc_auto_number(db)?
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    let number = idoc_auto_number(ac.db, ac.id)?
     let mut o = jobj_new()
     o = jobj_str(o, "number", number)
-    return act_ok(db, o)
+    return act_ok(ac.db, o)
 }
 
 fn act_idoc_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
@@ -168,16 +172,29 @@ fn act_idoc_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if orm_ok_db(db) == 0 {
         return act_err(db, 503, "database unavailable")
     }
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let fl = cloc_find(ac.db, from_id.num)?
+    if orm_ok_q(fl) == 0 || orm_nrows(fl) < 1 || orm_cell_by_i64(fl, 0, "company_id") != ac.id {
+        return act_404(ac.db, "Object not found")
+    }
+    let tl = cloc_find(orm_db_q(fl), to_id.num)?
+    if orm_ok_q(tl) == 0 || orm_nrows(tl) < 1 || orm_cell_by_i64(tl, 0, "company_id") != ac.id {
+        return act_404(orm_db_q(tl), "Object not found")
+    }
+    db = orm_db_q(tl)
     let mut number = number_in.val
     if number == "" {
-        number = idoc_auto_number(db)?
+        number = idoc_auto_number(db, ac.id)?
     }
     let bgn = bb_begin(db)?
     if orm_ok(bgn) == 0 {
         return act_err(orm_db_exec(bgn), 500, orm_err_exec(bgn))
     }
     let mut db2 = orm_db_exec(bgn)
-    let hq = idoc_insert(db2, number, doc_date.val, from_id.num, to_id.num, notes.val, handed_by.val, received_by.val)?
+    let hq = idoc_insert(db2, number, doc_date.val, from_id.num, to_id.num, notes.val, handed_by.val, received_by.val, ac.id)?
     if orm_ok_q(hq) == 0 || orm_nrows(hq) < 1 {
         return act_err_rb(orm_db_q(hq), 500, "insert failed")
     }
@@ -222,8 +239,12 @@ fn act_idoc_show(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if orm_nrows(q) < 1 {
         return act_404(orm_db_q(q), "Internal document not found")
     }
+    let ac = active_company_id(orm_db_q(q), auth.ctx.user_sub)?
+    if orm_cell_by_i64(q, 0, "company_id") != ac.id {
+        return act_404(ac.db, "Internal document not found")
+    }
     let mut o = idoc_to_json(q, 0)
-    let lq = idoc_lines_by_doc(orm_db_q(q), id)?
+    let lq = idoc_lines_by_doc(ac.db, id)?
     o = jobj_arr(o, "lines", idoc_lines_list_json(lq))
     return act_ok(orm_db_q(lq), o)
 }
@@ -254,6 +275,10 @@ fn act_idoc_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     }
     if orm_nrows(q0) < 1 {
         return act_404(orm_db_q(q0), "Internal document not found")
+    }
+    let ac = active_company_id(orm_db_q(q0), auth.ctx.user_sub)?
+    if orm_cell_by_i64(q0, 0, "company_id") != ac.id {
+        return act_404(ac.db, "Internal document not found")
     }
     if orm_cell_by(q0, 0, "status") != "draft" {
         return act_err(orm_db_q(q0), 409, "потвърденият протокол не се редактира")
@@ -294,12 +319,20 @@ fn act_idoc_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     let from_id = jreq_i64(b.doc, b.root, "from_location_id")
     if from_id.present == 1 {
         if from_id.ok == 0 { return act_422_field(dbu, "from_location_id", from_id) }
+        let fl = cloc_find(dbu, from_id.num)?
+        if orm_ok_q(fl) == 0 || orm_nrows(fl) < 1 || orm_cell_by_i64(fl, 0, "company_id") != ac.id {
+            return act_404(dbu, "Object not found")
+        }
         vec_push(cols, "from_location_id")
         vec_push(vals, int_to_str(from_id.num))
     }
     let to_id = jreq_i64(b.doc, b.root, "to_location_id")
     if to_id.present == 1 {
         if to_id.ok == 0 { return act_422_field(dbu, "to_location_id", to_id) }
+        let tl = cloc_find(dbu, to_id.num)?
+        if orm_ok_q(tl) == 0 || orm_nrows(tl) < 1 || orm_cell_by_i64(tl, 0, "company_id") != ac.id {
+            return act_404(dbu, "Object not found")
+        }
         vec_push(cols, "to_location_id")
         vec_push(vals, int_to_str(to_id.num))
     }
@@ -363,6 +396,10 @@ fn act_idoc_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if orm_nrows(q) < 1 {
         return act_404(orm_db_q(q), "Internal document not found")
     }
+    let ac = active_company_id(orm_db_q(q), auth.ctx.user_sub)?
+    if orm_cell_by_i64(q, 0, "company_id") != ac.id {
+        return act_404(ac.db, "Internal document not found")
+    }
     if orm_cell_by(q, 0, "status") != "draft" {
         return act_err(orm_db_q(q), 409, "потвърденият протокол не се трие")
     }
@@ -387,7 +424,12 @@ fn act_inventory_at_location(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if orm_ok_db(db) == 0 {
         return act_err(db, 503, "database unavailable")
     }
-    let pq = product_all(db)?
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    let ll = cloc_find(ac.db, location_id)?
+    if orm_ok_q(ll) == 0 || orm_nrows(ll) < 1 || orm_cell_by_i64(ll, 0, "company_id") != ac.id {
+        return act_404(ac.db, "Object not found")
+    }
+    let pq = product_all_co(orm_db_q(ll), ac.id)?
     if orm_ok_q(pq) == 0 {
         return act_err(orm_db_q(pq), 500, orm_err_q(pq))
     }

@@ -222,7 +222,7 @@ fn sft_gl_accounts(db: OrmDb, company_id: i64, year: i64, month: i64, fys: i64) 
         }
         i = i + 1
     }
-    let oq = ob_by_year(orm_db_q(aq), fy)?
+    let oq = ob_by_year_co(orm_db_q(aq), fy, company_id)?
     if orm_ok_q(oq) == 0 {
         return SftGl { ok: 0, err: orm_err_q(oq), db: orm_db_q(oq), xml: "", codes: codes }
     }
@@ -346,12 +346,14 @@ fn sft_gl_entries(db: OrmDb, company_id: i64, year: i64, month: i64, cur: str, c
     let parties: Map<str, str> = map_new()
     let mut pi: i64 = 0
     while pi < orm_nrows(cq) {
-        let eik = sftg_clip(orm_cell_by(cq, pi, "eik"), 35)
-        let mut id = eik
-        if id == "" {
-            id = "0"
+        if sftg_co(orm_cell_by_i64(cq, pi, "company_id"), company_id) == 1 {
+            let eik = sftg_clip(orm_cell_by(cq, pi, "eik"), 35)
+            let mut id = eik
+            if id == "" {
+                id = "0"
+            }
+            map_set(parties, int_to_str(orm_cell_by_i64(cq, pi, "id")), concat(concat(concat(concat(id, "|"), int_to_str(orm_cell_by_i64(cq, pi, "is_client"))), "|"), int_to_str(orm_cell_by_i64(cq, pi, "is_supplier"))))
         }
-        map_set(parties, int_to_str(orm_cell_by_i64(cq, pi, "id")), concat(concat(concat(concat(id, "|"), int_to_str(orm_cell_by_i64(cq, pi, "is_client"))), "|"), int_to_str(orm_cell_by_i64(cq, pi, "is_supplier"))))
         pi = pi + 1
     }
     let mut db2 = orm_db_q(cq)

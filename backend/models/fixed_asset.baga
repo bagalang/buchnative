@@ -149,6 +149,7 @@ fn fa_cols() -> Vec<str> {
     vec_push(c, "responsible_person")
     vec_push(c, "is_conserved")
     vec_push(c, "location_id")
+    vec_push(c, "company_id")
     return c
 }
 
@@ -178,6 +179,7 @@ fn fa_to_json(q: OrmQuery, row: i64) -> JObj {
     o = jobj_str(o, "responsible_person", orm_cell_by(q, row, "responsible_person"))
     o = jobj_i64(o, "is_conserved", orm_cell_by_i64(q, row, "is_conserved"))
     o = jobj_i64(o, "location_id", orm_cell_by_i64(q, row, "location_id"))
+    o = jobj_i64(o, "company_id", orm_cell_by_i64(q, row, "company_id"))
     return o
 }
 
@@ -189,9 +191,13 @@ fn fa_all(db: OrmDb) -> OrmQuery !IO !Net {
     return kv_select_all_order(db, fa_table(), "id", fa_cols())?
 }
 
+fn fa_all_co(db: OrmDb, company_id: i64) -> OrmQuery !IO !Net {
+    return kv_where_order(db, fa_table(), "company_id", int_to_str(company_id), "id", fa_cols())?
+}
+
 // Натрупаните амортизации тръгват от 0: те идват от месечното осчетоводяване
 // (fa_update_accumulated), не от екрана. location_id го слага action-ът.
-fn fa_create(db: OrmDb, name: str, inventory_number: str, category_id: i64, acquisition_date: str, put_into_service_date: str, cost: str, salvage_value: str, useful_life_months: str, depreciation_method: str, accounting_depreciation_rate: str, tax_depreciation_rate: str, status: str, serial_number: str, manufacturer: str, model: str, responsible_person: str, is_conserved: i64) -> OrmQuery !IO !Net !Time {
+fn fa_create(db: OrmDb, name: str, inventory_number: str, category_id: i64, acquisition_date: str, put_into_service_date: str, cost: str, salvage_value: str, useful_life_months: str, depreciation_method: str, accounting_depreciation_rate: str, tax_depreciation_rate: str, status: str, serial_number: str, manufacturer: str, model: str, responsible_person: str, is_conserved: i64, company_id: i64) -> OrmQuery !IO !Net !Time {
     let cols = vec_new()
     vec_push(cols, "name")
     vec_push(cols, "inventory_number")
@@ -213,6 +219,7 @@ fn fa_create(db: OrmDb, name: str, inventory_number: str, category_id: i64, acqu
     vec_push(cols, "responsible_person")
     vec_push(cols, "is_conserved")
     vec_push(cols, "created_at")
+    vec_push(cols, "company_id")
     let vals = vec_new()
     vec_push(vals, name)
     vec_push(vals, inventory_number)
@@ -234,9 +241,10 @@ fn fa_create(db: OrmDb, name: str, inventory_number: str, category_id: i64, acqu
     vec_push(vals, responsible_person)
     vec_push(vals, int_to_str(is_conserved))
     vec_push(vals, kv_now_iso()?)
+    vec_push(vals, int_to_str(company_id))
     let nulls = vec_new()
     let mut i: i64 = 0
-    while i < 20 {
+    while i < 21 {
         vec_push(nulls, 0)
         i = i + 1
     }

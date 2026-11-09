@@ -308,6 +308,10 @@ fn act_bank_transactions_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if orm_nrows(tq) < 1 {
         return act_404(orm_db_q(tq), "Транзакцията не е намерена")
     }
+    let ac = active_company_id(orm_db_q(tq), auth.ctx.user_sub)?
+    if orm_cell_by_i64(tq, 0, "company_id") != ac.id {
+        return act_404(ac.db, "Транзакцията не е намерена")
+    }
     let entry_id = orm_cell_by_i64(tq, 0, "journal_entry_id")
     let mut d0 = orm_db_q(tq)
     let bgn = bb_begin(d0)?

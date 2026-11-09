@@ -56,7 +56,7 @@ fn act_company_settings_get(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         return act_err(orm_db_q(sq), 500, orm_err_q(sq))
     }
     d = orm_db_q(sq)
-    let nq = invoice_numbers_by_type(d)?
+    let nq = invoice_numbers_by_company(d, id)?
     if orm_ok_q(nq) == 0 {
         return act_err(orm_db_q(nq), 500, orm_err_q(nq))
     }

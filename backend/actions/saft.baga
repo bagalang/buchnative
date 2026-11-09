@@ -182,7 +182,7 @@ fn act_saft_export(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     out = concat(out, xml_close("nsSAFT:Header"))
 
     if mode == "annual" {
-        let body = sft_annual(db2, year)?
+        let body = sft_annual(db2, year, ac.id)?
         if body.ok == 0 {
             return act_err(body.db, 500, body.err)
         }
