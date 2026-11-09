@@ -25,6 +25,28 @@
   (по фирма).
 - Заедно с 0.9.16 (уникални номера на сметки) това са двете идентичности,
   които приложението пази: номер на сметка и ЕИК/ДДС на контрагент.
+- VIES.TXT е проверен байтово спрямо образците на НАП в `secret/vies/`
+  (`04-vies.txt`, `06-vies.txt`): генерираният файл е идентичен с двата
+  (VHR/VDR/VTR/TTR/VIR, фиксирана ширина, Windows-1251, CRLF).
+- ДДС номерата за VIR редовете вече минават през списъка на ЕС държавите от
+  VIES (`actions/vies_cc.baga`, споделен с VIES lookup-а): BG и не-ЕС кодове
+  (US, GB, CH…) се изключват, а GR се записва като EL — както в VIES.
+- Улицата във VDR реда се сглобява от структурираните SAF-T полета на фирмата
+  (`street_name` + `building_number`), с резервен вариант свободния адрес.
+- SAF-T експортът е проверен с xmllint спрямо `secret/SAFT_BG/BG_SAFT_Schema_V_1.0.1.xsd`:
+  сглобеният месечен/годишен файл валидира по схемата. Корекции:
+  - Header: добавени задължителните `Contact` (ContactPerson с FirstName/LastName
+    от МОЛ + OtherTitles) и `Ownership` (IsPartOfGroup 1-5, по подразбиране "3");
+    `BankAccount` (поне един, само IBANNumber — така е в образеца на НАП);
+    `TaxNumber` вече е с префикс BG.
+  - `Product`: заменени невалидните `ProductDescription`/`UnitOfMeasure` със
+    задължителните по схемата `Description`, `ProductCommodityCode` (cn8_code),
+    `GoodsServicesID` (01/02), `UOMBase`, `UOMStandard`, `UOMToUOMBaseConversionFactor`.
+  - `UOMTableEntry`: добавен задължителният `Description`.
+  - Бележка: в тази версия на XSD `DefaultCurrencyCode` е enum само с EUR
+    (дефект на схемата — в Structure_Definition.xlsx валутите са ISO 4217),
+    затова файлът пази валутата на фирмата. При-поискване режим изисква поне един
+    StockMovement — известен gap, докато няма дневник за движения на стоки.
 
 ## 0.9.16 — 2026-11-09
 

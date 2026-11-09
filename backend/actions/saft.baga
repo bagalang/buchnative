@@ -3,6 +3,7 @@
 // Режими: monthly/ondemand/annual. Сумите са десимални (bagadecimal) като стрингове.
 
 import "../models/company.baga"
+import "../models/bank_account.baga"
 import "../models/addr_saft.baga"
 import "../models/product.baga"
 import "saft_gl.baga"
@@ -10,6 +11,7 @@ import "saft_month.baga"
 import "saft_src.baga"
 import "saft_mode.baga"
 import "active_company.baga"
+import "vat_fmt.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
 import "fmrbaga/action.baga"
@@ -131,6 +133,10 @@ fn act_saft_export(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     let company_extra = orm_cell_by(cq, 0, "additional_address_detail")
     let company_atype = orm_cell_by(cq, 0, "address_type")
     let company_region = orm_cell_by(cq, 0, "region")
+    let company_mol = orm_cell_by(cq, 0, "mol")
+    let company_phone = orm_cell_by(cq, 0, "phone")
+    let company_email = orm_cell_by(cq, 0, "email")
+    let company_web = orm_cell_by(cq, 0, "website")
     let currency = orm_cell_by(cq, 0, "currency")
     let mut db2 = orm_db_q(cq)
     let mut cur = "BGN"
@@ -156,12 +162,76 @@ fn act_saft_export(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     out = concat(out, sf_text("nsSAFT:RegistrationNumber", company_eik))
     out = concat(out, sf_text("nsSAFT:Name", company_name))
     out = concat(out, sf_company_address(company_street, company_number, company_extra, company_building, company_city, company_post, company_region, company_country, company_atype))
+    // Contact е задължителен в Company на Header-а (ContactPerson с FirstName/LastName).
+    let mut mol = str_trim(company_mol)
+    if mol == "" {
+        mol = str_trim(company_name)
+    }
+    let sp = str_find(mol, " ")
+    let mut mol_first = mol
+    let mut mol_last = mol
+    if sp > 0 {
+        mol_first = substr(mol, 0, sp)
+        mol_last = str_trim(substr(mol, sp + 1, len(mol)))
+    }
+    out = concat(out, sf_open("nsSAFT:Contact"))
+    out = concat(out, sf_open("nsSAFT:ContactPerson"))
+    out = concat(out, sf_text("nsSAFT:FirstName", mol_first))
+    out = concat(out, sf_text("nsSAFT:LastName", mol_last))
+    // OtherTitles е задължителен (minOccurs=1) в PersonNameStructure.
+    out = concat(out, sf_text("nsSAFT:OtherTitles", ""))
+    out = concat(out, xml_close("nsSAFT:ContactPerson"))
+    if str_trim(company_phone) != "" {
+        out = concat(out, sf_text("nsSAFT:Telephone", str_trim(company_phone)))
+    }
+    if str_trim(company_email) != "" {
+        out = concat(out, sf_text("nsSAFT:Email", str_trim(company_email)))
+    }
+    if str_trim(company_web) != "" {
+        out = concat(out, sf_text("nsSAFT:Website", str_trim(company_web)))
+    }
+    out = concat(out, xml_close("nsSAFT:Contact"))
     out = concat(out, sf_open("nsSAFT:TaxRegistration"))
     out = concat(out, sf_text("nsSAFT:TaxRegistrationNumber", company_eik))
     out = concat(out, sf_text("nsSAFT:TaxType", "100010"))
-    out = concat(out, sf_text("nsSAFT:TaxNumber", company_vat))
+    out = concat(out, sf_text("nsSAFT:TaxNumber", vat_with_bg(company_vat)))
     out = concat(out, xml_close("nsSAFT:TaxRegistration"))
+    // BankAccount е задължителен поне един ред в Company на Header-а; по
+    // образеца на НАП се изисква само IBANNumber (AccountNumber/SortCode не се приемат).
+    let bq = bank_account_by_company(orm_db_q(cq), ac.id)?
+    if orm_ok_q(bq) == 0 {
+        return act_err(orm_db_q(bq), 500, orm_err_q(bq))
+    }
+    let mut nb = 0
+    let mut bi: i64 = 0
+    while bi < orm_nrows(bq) {
+        out = concat(out, sf_open("nsSAFT:BankAccount"))
+        out = concat(out, sf_text("nsSAFT:IBANNumber", orm_cell_by(bq, bi, "iban")))
+        out = concat(out, xml_close("nsSAFT:BankAccount"))
+        nb = nb + 1
+        bi = bi + 1
+    }
+    if nb == 0 {
+        out = concat(out, sf_open("nsSAFT:BankAccount"))
+        out = concat(out, sf_text("nsSAFT:IBANNumber", ""))
+        out = concat(out, xml_close("nsSAFT:BankAccount"))
+    }
     out = concat(out, xml_close("nsSAFT:Company"))
+    // Ownership е задължителен в Header (след Company, преди DefaultCurrencyCode).
+    // IsPartOfGroup е enum 1-5 ("3" = не е част от група). UltimateOwner* полетата
+    // са задължителни по схемата; без данни за собственици остават празни низове.
+    let mut ipg = str_trim(orm_cell_by(cq, 0, "is_part_of_group"))
+    if ipg == "" {
+        ipg = "3"
+    }
+    out = concat(out, sf_open("nsSAFT:Ownership"))
+    out = concat(out, sf_text("nsSAFT:IsPartOfGroup", ipg))
+    out = concat(out, sf_text("nsSAFT:UltimateOwnerNameCyrillicBG", ""))
+    out = concat(out, sf_text("nsSAFT:UltimateOwnerUICBG", ""))
+    out = concat(out, sf_text("nsSAFT:UltimateOwnerNameCyrillicForeign", ""))
+    out = concat(out, sf_text("nsSAFT:UltimateOwnerNameLatinForeign", ""))
+    out = concat(out, sf_text("nsSAFT:CountryForeign", adr_country(company_country, "BG")))
+    out = concat(out, xml_close("nsSAFT:Ownership"))
     out = concat(out, sf_text("nsSAFT:DefaultCurrencyCode", cur))
     out = concat(out, sf_open("nsSAFT:SelectionCriteria"))
     out = concat(out, sf_text("nsSAFT:TaxReportingJurisdiction", "NRA"))
@@ -254,6 +324,7 @@ fn act_saft_export(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     while i < vec_len(uoms) {
         out = concat(out, sf_open("nsSAFT:UOMTableEntry"))
         out = concat(out, sf_text("nsSAFT:UnitOfMeasure", vec_get(uoms, i)))
+        out = concat(out, sf_text("nsSAFT:Description", vec_get(uoms, i)))
         out = concat(out, xml_close("nsSAFT:UOMTableEntry"))
         i = i + 1
     }
@@ -265,10 +336,26 @@ fn act_saft_export(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         if u == "" {
             u = "C62"
         }
+        let mut gs = "01"
+        if orm_cell_by_i64(pq, i, "is_service") == 1 {
+            gs = "02"
+        }
+        let mut cn8 = str_trim(orm_cell_by(pq, i, "cn8_code"))
+        if cn8 == "" {
+            cn8 = "0"
+        }
+        let mut desc = orm_cell_by(pq, i, "name")
+        if str_trim(desc) == "" {
+            desc = orm_cell_by(pq, i, "code")
+        }
         out = concat(out, sf_open("nsSAFT:Product"))
         out = concat(out, sf_text("nsSAFT:ProductCode", orm_cell_by(pq, i, "code")))
-        out = concat(out, sf_text("nsSAFT:ProductDescription", orm_cell_by(pq, i, "name")))
-        out = concat(out, sf_text("nsSAFT:UnitOfMeasure", u))
+        out = concat(out, sf_text("nsSAFT:GoodsServicesID", gs))
+        out = concat(out, sf_text("nsSAFT:Description", desc))
+        out = concat(out, sf_text("nsSAFT:ProductCommodityCode", cn8))
+        out = concat(out, sf_text("nsSAFT:UOMBase", u))
+        out = concat(out, sf_text("nsSAFT:UOMStandard", u))
+        out = concat(out, sf_text("nsSAFT:UOMToUOMBaseConversionFactor", "1"))
         out = concat(out, xml_close("nsSAFT:Product"))
         i = i + 1
     }

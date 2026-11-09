@@ -15,6 +15,7 @@ import "std/net/http_client.baga"
 import "std/crypto/pkey.baga"
 import "std/os/os.baga"
 import "std/str/str.baga"
+import "vies_cc.baga"
 
 // --- VIES (ЕК) извличане на контрагент по ЕС ДДС номер ---
 // Същият подход като secret/inv (ViesService): REST API на ЕК, нормализация
@@ -32,16 +33,7 @@ struct ViesResult {
     request_date: str
 }
 
-// ЕС кодове, поддържани от VIES (EL = Гърция, XI = Северна Ирландия).
-fn vies_is_eu_cc(cc: str) -> i64 {
-    if cc == "AT" || cc == "BE" || cc == "BG" || cc == "CY" || cc == "CZ" { return 1 }
-    if cc == "DE" || cc == "DK" || cc == "EE" || cc == "ES" || cc == "FI" { return 1 }
-    if cc == "FR" || cc == "EL" || cc == "HR" || cc == "HU" || cc == "IE" { return 1 }
-    if cc == "IT" || cc == "LT" || cc == "LU" || cc == "LV" || cc == "MT" { return 1 }
-    if cc == "NL" || cc == "PL" || cc == "PT" || cc == "RO" || cc == "SE" { return 1 }
-    if cc == "SI" || cc == "SK" || cc == "XI" || cc == "GR" { return 1 }
-    return 0
-}
+// Списъкът с ЕС кодове е в vies_cc.baga (ползва се и от VAT/VIES файла).
 
 // Главни букви, само A-Z0-9 (като normalizeVatNumber в secret/inv).
 fn vies_normalize_vat(v: str) -> str {

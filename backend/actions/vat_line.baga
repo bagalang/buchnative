@@ -4,6 +4,7 @@
 import "../models/invoice.baga"
 import "../models/vat_exemption.baga"
 import "vat_fmt.baga"
+import "vies_cc.baga"
 import "fmrbaga/jsonx.baga"
 import "ormbaga/orm.baga"
 import "bagadecimal/src/decimal.baga"
@@ -442,8 +443,9 @@ fn vat_cells_json(c: VatCells) -> JObj {
     return o
 }
 
-// ДДС номер за VIES: само ЕС (не BG), големи букви, без интервали.
-// Връща "" ако не е годен за декларация.
+// ДДС номер за VIES декларацията (VIR ред): само държави от ЕС списъка на VIES
+// (без BG), главни букви, без интервали; GR се записва като EL (както в VIES —
+// виж vies_api_url). Връща "" ако не е годен за декларация.
 fn vat_vies_vin(raw: str) -> str {
     let mut out = ""
     let t = str_trim(raw)
@@ -459,17 +461,21 @@ fn vat_vies_vin(raw: str) -> str {
         }
         i = i + 1
     }
-    if len(out) < 3 || len(out) > 15 {
+    if len(out) < 4 || len(out) > 15 {
         return ""
     }
-    let c0 = char_at(out, 0)
-    let c1 = char_at(out, 1)
-    let letters = (c0 >= 65 && c0 <= 90) && (c1 >= 65 && c1 <= 90)
-    if letters == 0 {
+    let mut cc = substr(out, 0, 2)
+    if cc == "GR" {
+        cc = "EL"
+    }
+    if cc == "BG" {
         return ""
     }
-    if c0 == 66 && c1 == 71 {
+    if vies_is_eu_cc(cc) == 0 {
         return ""
+    }
+    if cc == "EL" {
+        out = concat("EL", substr(out, 2, len(out)))
     }
     return out
 }

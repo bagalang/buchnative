@@ -270,10 +270,22 @@ fn sft_ondemand(db: OrmDb, company_id: i64, eik: str) -> SftMode !IO !Net {
             if name == "" {
                 name = code
             }
+            let mut gs = "01"
+            if orm_cell_by_i64(pq, i, "is_service") == 1 {
+                gs = "02"
+            }
+            let mut cn8 = sftm_clip(orm_cell_by(pq, i, "cn8_code"), 70)
+            if cn8 == "" {
+                cn8 = "0"
+            }
             products = concat(products, sftm_open("nsSAFT:Product"))
             products = concat(products, sftm_text("nsSAFT:ProductCode", code))
-            products = concat(products, sftm_text("nsSAFT:ProductDescription", name))
-            products = concat(products, sftm_text("nsSAFT:UnitOfMeasure", u))
+            products = concat(products, sftm_text("nsSAFT:GoodsServicesID", gs))
+            products = concat(products, sftm_text("nsSAFT:Description", name))
+            products = concat(products, sftm_text("nsSAFT:ProductCommodityCode", cn8))
+            products = concat(products, sftm_text("nsSAFT:UOMBase", u))
+            products = concat(products, sftm_text("nsSAFT:UOMStandard", u))
+            products = concat(products, sftm_text("nsSAFT:UOMToUOMBaseConversionFactor", "1"))
             products = concat(products, xml_close("nsSAFT:Product"))
             if orm_cell_by_i64(pq, i, "is_inventory") == 1 {
                 let qty = sftm_or(orm_cell_by(pq, i, "stock_quantity"), "0")
@@ -304,6 +316,7 @@ fn sft_ondemand(db: OrmDb, company_id: i64, eik: str) -> SftMode !IO !Net {
     while i < vec_len(uoms) {
         uom_xml = concat(uom_xml, sftm_open("nsSAFT:UOMTableEntry"))
         uom_xml = concat(uom_xml, sftm_text("nsSAFT:UnitOfMeasure", vec_get(uoms, i)))
+        uom_xml = concat(uom_xml, sftm_text("nsSAFT:Description", vec_get(uoms, i)))
         uom_xml = concat(uom_xml, xml_close("nsSAFT:UOMTableEntry"))
         i = i + 1
     }

@@ -268,10 +268,24 @@ fn vat_collect(db: OrmDb, period: str, company_id: i64) -> VatPack !IO !Net {
     let d_addr = orm_cell_by(dq, 0, "address")
     let d_city = orm_cell_by(dq, 0, "city")
     let d_post = orm_cell_by(dq, 0, "post_code")
+    // Улицата за VDR се сглобява от структурираните SAF-T полета (като в образеца
+    // secret/vies: "ул. Дунав № 11"); при липса — свободният адрес.
+    let mut d_street = str_trim(orm_cell_by(dq, 0, "street_name"))
+    let d_bno = str_trim(orm_cell_by(dq, 0, "building_number"))
+    if d_bno != "" {
+        if d_street != "" {
+            d_street = concat(d_street, concat(" ", d_bno))
+        } else {
+            d_street = d_bno
+        }
+    }
+    if d_street == "" {
+        d_street = d_addr
+    }
     let mm = substr(period_fin, 4, 6)
     let yyyy = substr(period_fin, 0, 4)
     let vies_period = concat(mm, concat("/", yyyy))
-    let vies = vat_vies_txt(company_vat, company_name, d_addr, d_egn, d_name, d_city, d_post, d_addr, quality, vies_period, vins_out, out3, out4, out5)
+    let vies = vat_vies_txt(company_vat, company_name, d_addr, d_egn, d_name, d_city, d_post, d_street, quality, vies_period, vins_out, out3, out4, out5)
     return VatPack {
         ok: 1, err: "", db: db2, period: period, period_fin: period_fin,
         company_name: company_name, company_vat: vat_with_bg(company_vat),
