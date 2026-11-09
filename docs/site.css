@@ -1,0 +1,230 @@
+/* buhal.sbs — тъмна хакерска тема за buchnative */
+
+:root {
+  --bg: #05080c;
+  --bg-2: #0a0f14;
+  --panel: #0d141b;
+  --line: #1c2a36;
+  --green: #39d353;
+  --green-2: #7ee787;
+  --green-dim: #238636;
+  --amber: #f0a542;
+  --amber-2: #ffc069;
+  --text: #c9d1d9;
+  --muted: #8b98a5;
+  --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 15px;
+  line-height: 1.6;
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(57, 211, 83, 0.08), transparent),
+    linear-gradient(rgba(28, 42, 54, 0.25) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(28, 42, 54, 0.25) 1px, transparent 1px);
+  background-size: 100% 100%, 32px 32px, 32px 32px;
+}
+
+a { color: var(--green); text-decoration: none; }
+a:hover { color: var(--green-2); text-decoration: underline; }
+
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
+
+/* ── горна лента ─────────────────────────────────────────────── */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: rgba(5, 8, 12, 0.92);
+  border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(6px);
+}
+.topbar .wrap {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  height: 54px;
+}
+.brand {
+  color: var(--green);
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+.brand .dot { color: var(--amber); }
+.topbar nav { margin-left: auto; display: flex; gap: 16px; flex-wrap: wrap; }
+.topbar nav a { color: var(--muted); font-size: 13px; }
+.topbar nav a:hover { color: var(--green-2); text-decoration: none; }
+.topbar .gh { color: var(--amber); }
+
+/* ── герой ───────────────────────────────────────────────────── */
+.hero {
+  padding: 90px 0 60px;
+  text-align: center;
+  position: relative;
+}
+.owl {
+  width: 190px;
+  height: 190px;
+  margin: 0 auto 26px;
+  filter: drop-shadow(0 0 22px rgba(240, 165, 66, 0.30));
+}
+.hero h1 {
+  font-size: clamp(38px, 7vw, 68px);
+  letter-spacing: 4px;
+  color: var(--green);
+  text-shadow: 0 0 18px rgba(57, 211, 83, 0.35);
+}
+.hero h1 .cursor {
+  color: var(--amber);
+  animation: blink 1s steps(1) infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+.tagline {
+  margin-top: 12px;
+  color: var(--text);
+  font-size: clamp(15px, 2.4vw, 19px);
+}
+.tagline .owl-word { color: var(--amber-2); }
+.badges {
+  margin-top: 22px;
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.badge {
+  border: 1px solid var(--green-dim);
+  color: var(--green-2);
+  background: rgba(35, 134, 54, 0.12);
+  padding: 3px 12px;
+  font-size: 12px;
+  border-radius: 2px;
+}
+.badge.amber { border-color: rgba(240, 165, 66, 0.5); color: var(--amber-2); background: rgba(240, 165, 66, 0.08); }
+
+.term {
+  margin: 34px auto 0;
+  max-width: 640px;
+  text-align: left;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 14px 18px;
+  font-size: 14px;
+  box-shadow: 0 0 0 1px rgba(57, 211, 83, 0.08), 0 18px 40px rgba(0, 0, 0, 0.5);
+}
+.term .prompt { color: var(--green); }
+.term .cmd { color: var(--text); }
+.term .comment { color: var(--muted); }
+
+/* ── секции ──────────────────────────────────────────────────── */
+section { padding: 56px 0; border-top: 1px solid var(--line); }
+h2 {
+  color: var(--green);
+  font-size: 24px;
+  letter-spacing: 1px;
+  margin-bottom: 8px;
+}
+h2 .hash { color: var(--muted); }
+.sub { color: var(--muted); margin-bottom: 26px; }
+
+/* ── карти ───────────────────────────────────────────────────── */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
+}
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 16px 18px;
+}
+.card h3 {
+  color: var(--green-2);
+  font-size: 14px;
+  margin-bottom: 8px;
+  font-weight: 700;
+}
+.card h3::before { content: "> "; color: var(--amber); }
+.card p { color: var(--text); font-size: 13.5px; }
+.card p em { color: var(--amber-2); font-style: normal; }
+
+/* ── код ─────────────────────────────────────────────────────── */
+pre {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--green-dim);
+  border-radius: 4px;
+  padding: 18px 20px;
+  overflow-x: auto;
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+.k { color: var(--green-2); }          /* ключови думи */
+.s { color: var(--amber-2); }          /* стрингове */
+.c { color: var(--muted); }            /* коментари */
+.n { color: #79c0ff; }                 /* числа */
+.f { color: #d2a8ff; }                 /* функции */
+
+/* ── база: статистика ─────────────────────────────────────────── */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+  margin-top: 24px;
+}
+.stat {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 14px 16px;
+}
+.stat .num { color: var(--green); font-size: 22px; font-weight: 700; }
+.stat .lbl { color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+/* ── изолация ────────────────────────────────────────────────── */
+.split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+@media (max-width: 760px) { .split { grid-template-columns: 1fr; } }
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 18px 20px;
+}
+.panel h3 { color: var(--amber-2); font-size: 14px; margin-bottom: 8px; }
+.panel ul { list-style: none; }
+.panel li { padding: 3px 0 3px 16px; position: relative; font-size: 13.5px; }
+.panel li::before { content: "▸"; position: absolute; left: 0; color: var(--green); }
+
+/* ── старт ───────────────────────────────────────────────────── */
+.start .term { margin: 16px 0 0; max-width: none; }
+
+/* ── футер ───────────────────────────────────────────────────── */
+footer {
+  border-top: 1px solid var(--line);
+  padding: 34px 0 46px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+footer .owl-small { width: 46px; height: 46px; margin-bottom: 10px; }
+footer .night { color: var(--green-2); }
+footer a { color: var(--green); }
+
+/* ── отстъпи за мобилни ──────────────────────────────────────── */
+@media (max-width: 640px) {
+  .hero { padding: 60px 0 40px; }
+  .topbar nav { display: none; }
+}

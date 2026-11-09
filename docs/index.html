@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>buchnative — счетоводството не спи | buhal.sbs</title>
+<meta name="description" content="buchnative — счетоводна програма за българския пазар, написана на езика Baga върху нативна база rocksbaga. Фирми, документи, ДДС, SAF-T, склад, ДМА, одит.">
+<link rel="stylesheet" href="site.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='42' fill='%2305080c'/%3E%3Ccircle cx='38' cy='46' r='9' fill='%23f0a542'/%3E%3Ccircle cx='62' cy='46' r='9' fill='%23f0a542'/%3E%3C/svg%3E">
+</head>
+<body>
+
+<!-- ── горна лента ──────────────────────────────────────────── -->
+<header class="topbar">
+  <div class="wrap">
+    <span class="brand">buhal<span class="dot">.sbs</span></span>
+    <nav>
+      <a href="#owl">Бухалът</a>
+      <a href="#app">Програмата</a>
+      <a href="#lang">Езикът</a>
+      <a href="#db">Базата</a>
+      <a href="#co">Изолация</a>
+      <a href="#start">Старт</a>
+      <a class="gh" href="https://github.com/bagalang/buchnative">github ↗</a>
+    </nav>
+  </div>
+</header>
+
+<!-- ── герой ────────────────────────────────────────────────── -->
+<section class="hero">
+  <div class="wrap">
+    <svg class="owl" viewBox="0 0 200 200" role="img" aria-label="Бухал (Bubo bubo)">
+      <!-- уши -->
+      <path d="M58 52 L74 22 L82 56 Z" fill="#0d141b" stroke="#39d353" stroke-width="2"/>
+      <path d="M142 52 L126 22 L118 56 Z" fill="#0d141b" stroke="#39d353" stroke-width="2"/>
+      <!-- тяло -->
+      <path d="M100 26 C62 26 44 58 44 102 C44 152 66 180 100 180 C134 180 156 152 156 102 C156 58 138 26 100 26 Z"
+            fill="#0d141b" stroke="#39d353" stroke-width="2.5"/>
+      <!-- очи -->
+      <circle cx="79" cy="88" r="21" fill="#05080c" stroke="#f0a542" stroke-width="2.5"/>
+      <circle cx="121" cy="88" r="21" fill="#05080c" stroke="#f0a542" stroke-width="2.5"/>
+      <circle cx="79" cy="88" r="8" fill="#f0a542"/>
+      <circle cx="121" cy="88" r="8" fill="#f0a542"/>
+      <!-- клюн -->
+      <path d="M100 106 L91 120 L100 128 L109 120 Z" fill="#f0a542"/>
+      <!-- корем -->
+      <path d="M78 140 Q100 152 122 140" fill="none" stroke="#1c2a36" stroke-width="2"/>
+      <path d="M84 152 Q100 161 116 152" fill="none" stroke="#1c2a36" stroke-width="2"/>
+      <path d="M90 163 Q100 169 110 163" fill="none" stroke="#1c2a36" stroke-width="2"/>
+    </svg>
+
+    <h1>BUCHNATIVE<span class="cursor">_</span></h1>
+    <p class="tagline">Счетоводството не спи. Нито <span class="owl-word">Бухалът</span>.</p>
+    <div class="badges">
+      <span class="badge">v0.9.17</span>
+      <span class="badge">език Baga</span>
+      <span class="badge">нативна база rocksbaga</span>
+      <span class="badge amber">български пазар · EUR</span>
+    </div>
+
+    <div class="term">
+      <div><span class="prompt">$</span> <span class="cmd">git clone https://github.com/bagalang/buchnative</span></div>
+      <div><span class="prompt">$</span> <span class="cmd">docker compose -f deploy/docker-compose.yml --env-file deploy/.env up --build -d</span></div>
+      <div><span class="prompt">$</span> <span class="comment"># демо: superadmin / 123+123 — портове 3000 / 8080 / 16579</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ── за Бухала ────────────────────────────────────────────── -->
+<section id="owl">
+  <div class="wrap">
+    <h2><span class="hash">#</span> За Бухала</h2>
+    <p class="sub">Домейнът <b>buhal.sbs</b> е българска транскрипция на <b>бухал</b> — <i>Bubo bubo</i>.</p>
+    <div class="grid">
+      <div class="card">
+        <h3>Bubo bubo</h3>
+        <p>Най-едрата нощна граблива птица. Размах на крилете до ~1.6 m, очи като два жълти фенера, които не мигат на дневна светлина.</p>
+      </div>
+      <div class="card">
+        <h3>Не спи през нощта</h3>
+        <p>Документи, счетоводство и код — през цялата нощ. Точно както приложението: фактури, дневник, ДДС и справки не чакат утре.</p>
+      </div>
+      <div class="card">
+        <h3>Зръчност в тъмнината</h3>
+        <p>Вижда в тъмното, чува и най-малкото трепенене на баланса. Дебитът не ѝ избегва: <em>Σ дебит = Σ кредит</em>.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── програмата ───────────────────────────────────────────── -->
+<section id="app">
+  <div class="wrap">
+    <h2><span class="hash">#</span> Какво е buchnative</h2>
+    <p class="sub">Счетоводна програма за българския пазар — 2026, еврозона, базова валута EUR.</p>
+    <div class="grid">
+      <div class="card"><h3>Фирми и сметкоплан</h3><p>Мултифирмена работа с активна фирма; йерархичен сметкоплан; контрагенти с <em>уникални ЕИК/ДДС по фирма</em>; стоки и услуги; обекти и склад по обект.</p></div>
+      <div class="card"><h3>Фактури и публикуване</h3><p>Фактура, проформа, кредитно и дебитно известие; автоматична номерация по посока; печат и PDF/DOCX/ODT; публикуване с кореспонденции <em>Дт 411 / Кт 702</em> и <em>Дт 602 / Кт 401</em>.</p></div>
+      <div class="card"><h3>Счетоводен дневник</h3><p>Дебит/кредит по редове, отрицателни суми (сторно, кредитно известие, корекция), баланс дебит = кредит, група 60 с чисти обороти.</p></div>
+      <div class="card"><h3>ДДС и НАП</h3><p>Дневници покупки/продажби, клетки ППДДС 01-01…01-82, DEKLAR/POKUPKI/PRODAGBI в Windows-1251, ZIP за НАП; всеки отчет е <em>по активна фирма</em>.</p></div>
+      <div class="card"><h3>SAF-T и VIES</h3><p>Годишен и месечен SAF-T (NRA), схеми по фирма; контрагент от VIES с нормализация и разделяне на адреса за SAF-T BG.</p></div>
+      <div class="card"><h3>Склад и ДМА</h3><p>Постъпки от партиди, разписване по документи, WAC/FIFO/LIFO преглед; дълготрайни материални активи с амортизация, преоценка, консервация и снемане.</p></div>
+      <div class="card"><h3>Справки и НСС</h3><p>Оборотна ведомост, главна книга, баланс / ОПР / паричен поток / собствен капитал, хронологичен журнал и по контрагент; експорт PDF/Excel/ODS.</p></div>
+      <div class="card"><h3>Банки и производство</h3><p>Банкови сметки с ГЛ + буфер, импорт на извлечения (OBB XML, camt.053, MT-940, CSV), разнасяне; рецепти (BOM) и производствени поръчки.</p></div>
+      <div class="card"><h3>Одит и бекъп</h3><p>История по обект, частичен PATCH, роля super_admin/admin/accountant/viewer; файлов архив в S3 с checkpoint, размери и crc32c.</p></div>
+      <div class="card"><h3>Мултифирмена изолация</h3><p>Всичко бизнес данни са <em>по активна фирма</em>: документи, контрагенти, ДДС, ДМА, начални салда, протоколи. Един доставчик може да е контрагент на няколко фирми.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ── езикът ───────────────────────────────────────────────── -->
+<section id="lang">
+  <div class="wrap">
+    <h2><span class="hash">#</span> Езикът Baga</h2>
+    <p class="sub">Приложението е написано на Baga — език с български ключови думи, C bootstrap компилатор и опционален LLVM backend. Пакетен мениджър — <b>sandak</b>.</p>
+    <pre><span class="c">// публикуване на изходяща фактура — счетоводни кореспонденции</span>
+<span class="k">let</span> eq = journal_entry_insert(db2, issue_date, doc_type, id, desc, vat_type,
+    counterpart_id, counterpart_name, counterpart_vat_number, number,
+    issue_date, accounting_month, total_amount, vat_amount, acp.id)<span class="f">?</span>
+<span class="k">let</span> p1 = post_jl(db2, entry_id, <span class="n">411</span>, <span class="s">"debit"</span>, total_amount, <span class="s">"0"</span>,
+    counterpart_id, <span class="n">0</span>, location_id)<span class="f">?</span>
+<span class="k">let</span> p2 = post_jl(db2, entry_id, <span class="n">702</span>, <span class="s">"credit"</span>, net, <span class="s">"0"</span>,
+    counterpart_id, pid, location_id)<span class="f">?</span></pre>
+    <p class="sub" style="margin-top:14px">Дебит и кредит са първокласни: балансът се пази на ниво запис, а не с тригери в базата.</p>
+  </div>
+</section>
+
+<!-- ── базата ───────────────────────────────────────────────── -->
+<section id="db">
+  <div class="wrap">
+    <h2><span class="hash">#</span> Нативна база rocksbaga</h2>
+    <p class="sub">Без SQL engine и без стотици нишки, които се състезават за него. Един писател върху LSM, RESP2 на :16579.</p>
+    <div class="grid">
+      <div class="card"><h3>RESP2 / LSM</h3><p>Редовете са JSON по ключ <em>kv:t:&lt;таблица&gt;:&lt;id&gt;</em>; индекси по стойност на колона; вторичен индекс <em>kv:t:&lt;таблица&gt;:ix:&lt;колона&gt;:&lt;стойност&gt;</em>.</p></div>
+      <div class="card"><h3>Един писател</h3><p>Всички транзакции са под един mutex — без състезание между потоци, за разлика от boilaDB (езикова пътечка, не продукция).</p></div>
+      <div class="card"><h3>CHECKPOINT / BACKUP</h3><p>Онлайн <em>BACKUP &lt;dest&gt;</em> и <em>CHECKPOINT</em> — инвентар BAGABK1 с размери и crc32c; sidecar качва файлове в S3 и връща обратно за възстановяване.</p></div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="num">16579</div><div class="lbl">rocksbaga · RESP2</div></div>
+      <div class="stat"><div class="num">8080</div><div class="lbl">backend API · HTTP/JSON</div></div>
+      <div class="stat"><div class="num">3000</div><div class="lbl">frontend · Next.js</div></div>
+      <div class="stat"><div class="num">HS256</div><div class="lbl">JWT · jwtbaga</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ── изолация ─────────────────────────────────────────────── -->
+<section id="co">
+  <div class="wrap">
+    <h2><span class="hash">#</span> Всичко по фирма</h2>
+    <p class="sub">Една фирма не вижда данните на другата — от 0.9.17 това е инвариант, не настройка.</p>
+    <div class="split">
+      <div class="panel">
+        <h3>Изолирано по активна фирма</h3>
+        <ul>
+          <li>Контрагенти — списък, GET/PATCH/DELETE, VIES, сканиране, UBL</li>
+          <li>Фактури, журнал, банкови сметки и транзакции</li>
+          <li>ДМА, начални салда, вътрешни протоколи</li>
+          <li>ДДС дневници и номерация на документи</li>
+          <li>SAF-T и справки резолвват контрагенти само в фирмата</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <h3>Уникални идентичности</h3>
+        <ul>
+          <li>ЕИК и ДДС номер — уникални в рамките на фирмата</li>
+          <li>Един доставчик може да е контрагент на няколко фирми</li>
+          <li>Номер на сметка — уникален в сметкоплана</li>
+          <li>db-check проверява дублирани ЕИК/ДДС по фирма</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── старт ────────────────────────────────────────────────── -->
+<section id="start" class="start">
+  <div class="wrap">
+    <h2><span class="hash">#</span> Старт</h2>
+    <p class="sub">Моноrepo: <b>katehonz/baga-lang</b> (app-product/buchnative е submodule към bagalang/buchnative).</p>
+    <div class="term">
+      <div><span class="prompt">$</span> <span class="cmd">git clone --recurse-submodules https://github.com/katehonz/baga-lang</span></div>
+      <div><span class="prompt">$</span> <span class="cmd">cd baga-lang/app-product/buchnative</span></div>
+      <div><span class="prompt">$</span> <span class="cmd">cp deploy/.env.example deploy/.env</span> <span class="comment"># FMR_JWT_SECRET</span></div>
+      <div><span class="prompt">$</span> <span class="cmd">docker compose -f deploy/docker-compose.yml --env-file deploy/.env up --build -d</span></div>
+      <div><span class="prompt">$</span> <span class="comment"># http://127.0.0.1:3000 · superadmin / 123+123</span></div>
+    </div>
+    <p class="sub" style="margin-top:14px">Локална разработка: <b>./scripts/dev.sh</b> (rocksbaga → backend → frontend), демо данни: <b>./scripts/seed.sh</b>.</p>
+  </div>
+</section>
+
+<!-- ── футер ────────────────────────────────────────────────── -->
+<footer>
+  <div class="wrap">
+    <svg class="owl-small" viewBox="0 0 200 200" aria-hidden="true">
+      <path d="M100 26 C62 26 44 58 44 102 C44 152 66 180 100 180 C134 180 156 152 156 102 C156 58 138 26 100 26 Z"
+            fill="#0d141b" stroke="#39d353" stroke-width="4"/>
+      <circle cx="79" cy="88" r="18" fill="#05080c" stroke="#f0a542" stroke-width="4"/>
+      <circle cx="121" cy="88" r="18" fill="#05080c" stroke="#f0a542" stroke-width="4"/>
+      <circle cx="79" cy="88" r="7" fill="#f0a542"/>
+      <circle cx="121" cy="88" r="7" fill="#f0a542"/>
+      <path d="M100 106 L91 120 L100 128 L109 120 Z" fill="#f0a542"/>
+    </svg>
+    <p><span class="night">buhal.sbs</span> — където счетоводството е будно.</p>
+    <p style="margin-top:6px">Bubo bubo · документи, счетоводство и код през цялата нощ · <a href="https://github.com/bagalang/buchnative">github.com/bagalang/buchnative</a></p>
+  </div>
+</footer>
+
+</body>
+</html>
