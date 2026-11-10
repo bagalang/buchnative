@@ -404,6 +404,7 @@ export const bgA = {
   "bank_accounts.gl_account": "Счетоводна сметка",
   "bank_accounts.buffer_account": "Буферна сметка",
   "bank_accounts.pick_account": "— изберете сметка —",
+  "bank_accounts.search_account": "Търси сметка по номер или име…",
   "bank_accounts.name_placeholder": "Основна сметка",
   "bank_accounts.bank_name_placeholder": "УниКредит Булбанк",
   "bank_accounts.iban_placeholder": "BG00 UNCR 0000 0000 0000 00",

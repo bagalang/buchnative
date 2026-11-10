@@ -2,6 +2,7 @@
 // Мултитенант: сметките се филтрират по активната фирма. ГЛ/буферна сметка
 // са сметки от сметкоплана (accounts). Салдото е десимален стринг.
 import "../models/bank_account.baga"
+import "../models/company.baga"
 import "active_company.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
@@ -77,7 +78,21 @@ fn act_bank_accounts_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     }
     let bic = jopt_str(b.doc, b.root, "bic", "")
     let bank_name = jopt_str(b.doc, b.root, "bank_name", "")
-    let currency = jopt_str(b.doc, b.root, "currency", "BGN")
+    let cur_in = jopt_str(b.doc, b.root, "currency", "")
+    let mut currency = cur_in.val
+    if currency == "" {
+        currency = "EUR"
+        let ac0 = active_company_id(db, auth.ctx.user_sub)?
+        if ac0.id > 0 {
+            let cq = company_find(ac0.db, ac0.id)?
+            if orm_ok_q(cq) == 1 && orm_nrows(cq) > 0 {
+                let cc = orm_cell_by(cq, 0, "currency")
+                if cc != "" {
+                    currency = cc
+                }
+            }
+        }
+    }
     let account_number = jopt_str(b.doc, b.root, "account_number", "")
     let balance = jopt_str(b.doc, b.root, "balance", "0")
     // Валидация на салдото.
@@ -114,7 +129,7 @@ fn act_bank_accounts_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if ac.id <= 0 {
         return act_err(ac.db, 422, "няма избрана активна фирма")
     }
-    let ins = bank_account_create(ac.db, ac.id, iban.val, bic.val, bank_name.val, currency.val, name.val, account_number.val, gl_id, buf_id, balance_norm)?
+    let ins = bank_account_create(ac.db, ac.id, iban.val, bic.val, bank_name.val, currency, name.val, account_number.val, gl_id, buf_id, balance_norm)?
     if orm_ok_q(ins) == 0 || orm_nrows(ins) < 1 {
         return act_err(orm_db_q(ins), 500, "bank account insert failed")
     }

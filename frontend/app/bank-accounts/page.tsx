@@ -6,8 +6,9 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { RequireAuth } from "../../components/RequireAuth";
 import { useI18n } from "../../components/I18nProvider";
-import { api, ListResponse } from "../../lib/api";
+import { api, ListResponse, getActiveCompany } from "../../lib/api";
 import { IconButton } from "../../components/IconButton";
+import { AccountPicker } from "../../components/AccountPicker";
 
 interface BankAccount {
   id: number;
@@ -36,7 +37,7 @@ const emptyForm = {
   account_number: "",
   iban: "",
   bic: "",
-  currency: "BGN",
+  currency: "EUR",
   balance: "0.00",
   gl_account_id: 0,
   buffer_account_id: 0,
@@ -54,17 +55,21 @@ function BankAccountsInner() {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
   const [q, setQ] = useState("");
+  const [companyCurrency, setCompanyCurrency] = useState("EUR");
 
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const [b, a] = await Promise.all([
+      const [b, a, co] = await Promise.all([
         api.get<ListResponse<BankAccount>>("/v1/bank-accounts"),
-        api.get<ListResponse<Account>>("/v1/accounts"),
+        api.get<ListResponse<Account>>("/v1/accounts?limit=1000"),
+        getActiveCompany(),
       ]);
       setRows(b.items ?? []);
       setAccounts(a.items ?? []);
+      const cc = (co as { currency?: string }).currency;
+      setCompanyCurrency(cc && cc !== "" ? cc : "EUR");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -77,7 +82,7 @@ function BankAccountsInner() {
   }, [load]);
 
   const openCreate = () => {
-    setForm(emptyForm);
+    setForm({ ...emptyForm, currency: companyCurrency || "EUR" });
     setEditing(null);
     setFormError("");
     setModalOpen(true);
@@ -90,7 +95,7 @@ function BankAccountsInner() {
       account_number: acc.account_number ?? "",
       iban: acc.iban,
       bic: acc.bic ?? "",
-      currency: acc.currency || "BGN",
+      currency: acc.currency || companyCurrency || "EUR",
       balance: acc.balance || "0.00",
       gl_account_id: acc.gl_account_id || 0,
       buffer_account_id: acc.buffer_account_id || 0,
@@ -157,18 +162,7 @@ function BankAccountsInner() {
   };
 
   const accountOptions = (value: number, onChange: (v: number) => void) => (
-    <select
-      className="select"
-      value={value || 0}
-      onChange={(e) => onChange(Number(e.target.value))}
-    >
-      <option value={0}>{t("bank_accounts.pick_account")}</option>
-      {accounts.map((a) => (
-        <option key={a.id} value={a.id}>
-          {a.number} — {a.name}
-        </option>
-      ))}
-    </select>
+    <AccountPicker value={value} accounts={accounts} onChange={onChange} />
   );
 
   return (
