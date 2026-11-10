@@ -105,6 +105,35 @@ fn kv_mig_default_company(db: OrmDb, table: str, cols: Vec<str>, vals: Vec<str>,
     return kv_mig_set_default(cols, vals, nulls, "company_id", int_to_str(cid))
 }
 
+// От 2026 България е в еврозоната: сметка 503 се казва в EUR, не в левове.
+fn kv_mig_account_eur(db: OrmDb, table: str, cols: Vec<str>, vals: Vec<str>, nulls: Vec<i64>, id: str) -> i64 !Net !IO !Time {
+    let mut ni: i64 = 0 - 1
+    let mut mi: i64 = 0 - 1
+    let mut i: i64 = 0
+    while i < vec_len(cols) {
+        if vec_get(cols, i) == "number" {
+            ni = i
+        }
+        if vec_get(cols, i) == "name" {
+            mi = i
+        }
+        i = i + 1
+    }
+    if ni < 0 || mi < 0 {
+        return 0
+    }
+    if vec_get(vals, ni) != "503" {
+        return 0
+    }
+    let nm = vec_get(vals, mi)
+    if str_find(nm, "в левове") < 0 {
+        return 0
+    }
+    vec_set(vals, mi, str_replace(nm, "в левове", "в EUR"))
+    vec_set(nulls, mi, 0)
+    return 1
+}
+
 // Празен списък е нормалното състояние на ново приложение: схемата се движи
 // с кода, а миграция се добавя само при промяна, която иска преизчисление.
 fn buchnative_kv_migrations() -> KvMigrations {
@@ -115,6 +144,7 @@ fn buchnative_kv_migrations() -> KvMigrations {
     m = kv_migrations_add(m, "internal_docs", 20261109003, "internal_doc_company_id", kv_mig_default_company)
     // Амортизационните записи по-рано се вмъкваха с company_id=0.
     m = kv_migrations_add(m, "journal_entries", 20261109004, "journal_entry_company_id", kv_mig_default_company)
+    m = kv_migrations_add(m, "accounts", 20261111001, "account_503_eur", kv_mig_account_eur)
     return m
 }
 
