@@ -81,16 +81,25 @@ export function InvoiceForm({ mode, invoiceId }: Props) {
   const [lines, setLines] = useState<InvoiceLine[]>([emptyLine()]);
   const [locations, setLocations] = useState<CompanyLocation[]>([]);
   const [locationId, setLocationId] = useState("0");
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
+  const [bankAccountId, setBankAccountId] = useState("");
+
+  interface BankAccount {
+    id: number;
+    name: string;
+    iban: string;
+  }
 
   const loadLookups = useCallback(async () => {
     try {
-      const [cp, pr, inv, un, ex, co] = await Promise.all([
+      const [cp, pr, inv, un, ex, co, ba] = await Promise.all([
         api.get<ListResponse<Counterpart>>("/v1/counterparts"),
         api.get<ListResponse<Product>>("/v1/products"),
         api.get<ListResponse<Invoice>>("/v1/invoices"),
         api.get<ListResponse<UnitOfMeasure>>("/v1/units"),
         api.get<ListResponse<VatExemption>>("/v1/vat-exemptions"),
         getActiveCompany(),
+        api.get<ListResponse<BankAccount>>("/v1/bank-accounts"),
       ]);
       setCounterparts(cp.items ?? []);
       setProducts(pr.items ?? []);
@@ -98,6 +107,7 @@ export function InvoiceForm({ mode, invoiceId }: Props) {
       setUnits(un.items ?? []);
       setExemptions(ex.items ?? []);
       setVatRegistered(Number((co as { is_vat_registered?: number }).is_vat_registered ?? 1) === 1);
+      setBankAccounts(ba.items ?? []);
       const locs = await fetchCompanyLocations();
       setLocations(locs);
       if (mode === "create" && locs.length > 0) {
@@ -141,6 +151,14 @@ export function InvoiceForm({ mode, invoiceId }: Props) {
   }, [mode, documentType, direction, loadNumber]);
 
   useEffect(() => {
+    if (mode !== "create") return;
+    if (bankAccountId) return;
+    if (paymentMethod !== "банков превод") return;
+    if (bankAccounts.length === 0) return;
+    setBankAccountId(String(bankAccounts[0].id));
+  }, [mode, bankAccountId, paymentMethod, bankAccounts]);
+
+  useEffect(() => {
     if (mode !== "edit") return;
     if (!invoiceId || !Number.isFinite(invoiceId) || invoiceId <= 0) {
       setFormError(t("common.error"));
@@ -162,6 +180,7 @@ export function InvoiceForm({ mode, invoiceId }: Props) {
         setCurrencyRate(inv.currency_rate || "1");
         setPaymentMethod(inv.payment_method || "");
         setLocationId(String(inv.location_id || 0));
+        setBankAccountId(inv.bank_account_id ? String(inv.bank_account_id) : "");
         setNotes(inv.notes || "");
         setDiscountPercent(inv.discount_percent || "0");
         setVatExemption(inv.vat_exemption_reason || "");
@@ -343,6 +362,7 @@ export function InvoiceForm({ mode, invoiceId }: Props) {
         currency,
         currency_rate: currency === "EUR" ? "1" : currencyRate,
         payment_method: paymentMethod,
+        bank_account_id: Number(bankAccountId) || 0,
         notes,
         discount_percent: discountPercent || "0",
         discount_amount: totals.discount,
@@ -431,6 +451,24 @@ export function InvoiceForm({ mode, invoiceId }: Props) {
               )}
             </select>
           </div>
+          {paymentMethod === "банков превод" && (
+            <div className="field">
+              <label className="label">{t("invoices.bank_account")}</label>
+              <select
+                className="select"
+                value={bankAccountId}
+                onChange={(e) => setBankAccountId(e.target.value)}
+              >
+                <option value="">{t("invoices.bank_account_pick")}</option>
+                {bankAccounts.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                    {a.iban ? ` · ${a.iban}` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="field">
             <label className="label">{t("invoices.discount_percent")}</label>
             <input

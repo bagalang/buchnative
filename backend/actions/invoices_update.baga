@@ -1,6 +1,7 @@
 // actions/invoices_update.baga — PATCH на фактура (чернова).
 import "../models/invoice.baga"
 import "../models/doc_type.baga"
+import "../models/bank_account.baga"
 import "acl.baga"
 import "txn.baga"
 import "fmrbaga/app.baga"
@@ -203,6 +204,21 @@ fn act_invoices_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         }
         vec_push(cols, "location_id")
         vec_push(vals, int_to_str(locu.num))
+    }
+    let bank = jreq_i64(b.doc, b.root, "bank_account_id")
+    if bank.present == 1 {
+        if bank.ok == 0 {
+            return act_422_field(dbu, "bank_account_id", bank)
+        }
+        if bank.num > 0 {
+            let bq = bank_account_find(dbu, bank.num)?
+            if orm_ok_q(bq) == 0 || orm_nrows(bq) < 1 || orm_cell_by_i64(bq, 0, "company_id") != ac_upd.id {
+                return act_404(dbu, "Bank account not found")
+            }
+            dbu = orm_db_q(bq)
+        }
+        vec_push(cols, "bank_account_id")
+        vec_push(vals, int_to_str(bank.num))
     }
     let lines_node = json_get(b.doc, b.root, "lines")
     let mut has_lines: i64 = 0

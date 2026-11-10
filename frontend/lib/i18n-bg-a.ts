@@ -575,6 +575,7 @@ export const bgA = {
   "invoices.due_date": "Дата на падеж",
   "invoices.tax_event_date": "Данъчно събитие",
   "invoices.payment_method": "Начин на плащане",
+  "invoices.bank_account_pick": "— избери банкова сметка —",
   "invoices.notes": "Бележки",
   "invoices.original_invoice": "Първоначална фактура",
   "invoices.issue_date": "Дата",

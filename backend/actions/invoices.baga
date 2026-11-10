@@ -2,6 +2,7 @@ import "../models/invoice.baga"
 import "../models/kvpage.baga"
 import "../models/counterpart.baga"
 import "../models/company.baga"
+import "../models/bank_account.baga"
 import "../models/setting.baga"
 import "../models/doc_type.baga"
 import "document_series.baga"
@@ -126,6 +127,20 @@ fn act_invoices_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         }
         location_id = loc.num
     }
+    let bank = jreq_i64(b.doc, b.root, "bank_account_id")
+    let mut bank_account_id: i64 = 0
+    if bank.present == 1 {
+        if bank.ok == 0 {
+            return act_422_field(db, "bank_account_id", bank)
+        }
+        bank_account_id = bank.num
+    }
+    if bank_account_id > 0 {
+        let bq = bank_account_find(ac_cp.db, bank_account_id)?
+        if orm_ok_q(bq) == 0 || orm_nrows(bq) < 1 || orm_cell_by_i64(bq, 0, "company_id") != ac_cp.id {
+            return act_404(orm_db_q(bq), "Bank account not found")
+        }
+    }
     if orm_ok_db(db) == 0 {
         return act_err(db, 503, "database unavailable")
     }
@@ -145,7 +160,7 @@ fn act_invoices_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         return act_err(orm_db_exec(bgn), 500, orm_err_exec(bgn))
     }
     d0 = orm_db_exec(bgn)
-    let hq = invoice_create_header(d0, direction.val, number, document_type.val, original_invoice_id, issue_date.val, due_date.val, tax_event_date, accounting_month, cid.num, currency.val, currency_rate.val, payment_method.val, notes.val, discount_percent.val, discount_amount.val, vat_exemption_reason.val, auth.ctx.user_sub)?
+    let hq = invoice_create_header(d0, direction.val, number, document_type.val, original_invoice_id, issue_date.val, due_date.val, tax_event_date, accounting_month, cid.num, currency.val, currency_rate.val, payment_method.val, notes.val, discount_percent.val, discount_amount.val, vat_exemption_reason.val, bank_account_id, auth.ctx.user_sub)?
     if orm_ok_q(hq) == 0 || orm_nrows(hq) < 1 {
         return act_err_rb(orm_db_q(hq), 500, "header insert failed")
     }

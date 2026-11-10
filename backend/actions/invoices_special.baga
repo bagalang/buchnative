@@ -86,7 +86,7 @@ fn act_invoices_issue_protocol(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time 
     }
     let month = inv_month(issue_date)
     let notes = concat("Протокол по ", concat(article.val, concat(" от ЗДДС към входяща фактура № ", concat(src_number, concat(" от ", src_date)))))
-    let hq = invoice_create_header(d0, "in", number, "09", id, issue_date, "", issue_date, month, orm_cell_by_i64(iq, 0, "counterpart_id"), orm_cell_by(iq, 0, "currency"), orm_cell_by(iq, 0, "currency_rate"), "", notes, "0", "0", "", auth.ctx.user_sub)?
+    let hq = invoice_create_header(d0, "in", number, "09", id, issue_date, "", issue_date, month, orm_cell_by_i64(iq, 0, "counterpart_id"), orm_cell_by(iq, 0, "currency"), orm_cell_by(iq, 0, "currency_rate"), "", notes, "0", "0", "", 0, auth.ctx.user_sub)?
     if orm_ok_q(hq) == 0 || orm_nrows(hq) < 1 {
         return act_err(orm_db_q(hq), 500, orm_err_q(hq))
     }
@@ -217,7 +217,7 @@ fn act_invoices_issue_customs(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     notes = concat(notes, " (")
     notes = concat(notes, src_name)
     notes = concat(notes, ") — Разчети с митници")
-    let hq = invoice_create_header(d0, "in", str_trim(mrn.val), "07", id, issue_date, "", issue_date, month, 0, "EUR", "1", "", notes, "0", "0", "", auth.ctx.user_sub)?
+    let hq = invoice_create_header(d0, "in", str_trim(mrn.val), "07", id, issue_date, "", issue_date, month, 0, "EUR", "1", "", notes, "0", "0", "", 0, auth.ctx.user_sub)?
     if orm_ok_q(hq) == 0 || orm_nrows(hq) < 1 {
         return act_err(orm_db_q(hq), 500, orm_err_q(hq))
     }

@@ -564,6 +564,7 @@ export const enA = {
   "invoices.due_date": "Due date",
   "invoices.tax_event_date": "Tax event date",
   "invoices.payment_method": "Payment method",
+  "invoices.bank_account_pick": "— select bank account —",
   "invoices.notes": "Notes",
   "invoices.original_invoice": "Original invoice",
   "invoices.direction.in": "Incoming",
