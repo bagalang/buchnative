@@ -161,8 +161,14 @@ function BankAccountsInner() {
     return a?.number || "-";
   };
 
-  const accountOptions = (value: number, onChange: (v: number) => void) => (
-    <AccountPicker value={value} accounts={accounts} onChange={onChange} />
+  // Счетоводната сметка на банка е от класа 5 (парични средства).
+  const glAccounts = useMemo(
+    () => accounts.filter((a) => a.number.startsWith("5")),
+    [accounts]
+  );
+
+  const accountOptions = (value: number, onChange: (v: number) => void, list?: Account[]) => (
+    <AccountPicker value={value} accounts={list ?? accounts} onChange={onChange} />
   );
 
   return (
@@ -321,7 +327,7 @@ function BankAccountsInner() {
                 <div className="field">
                   <label className="label">{t("bank_accounts.gl_account")}</label>
                   {accountOptions(form.gl_account_id, (v) =>
-                    setForm({ ...form, gl_account_id: v })
+                    setForm({ ...form, gl_account_id: v }), glAccounts
                   )}
                 </div>
                 <div className="field">

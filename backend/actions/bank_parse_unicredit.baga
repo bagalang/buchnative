@@ -1,0 +1,183 @@
+// actions/bank_parse_unicredit.baga — UniCredit XML (Items/AccountMovement).
+// Изнесено от bank_parse_xml.baga (filesize gate 600). Чисти функции.
+
+import "bank_parse_types.baga"
+import "xmlbaga/xml.baga"
+import "std/str/str.baga"
+
+// ─── UniCredit XML (Items/AccountMovement) ───
+// Сумата е положителна, знакът идва от MovementType (Debit = теглене).
+fn bp_parse_unicredit(content: str) -> ParseResult {
+    let mut result = parse_result_new("UniCredit XML")
+    let p = xml_parser(content)
+    let stack: Vec<str> = vec_new()
+    let mut depth: i64 = 0
+    let mut current_tag = ""
+    let mut in_tx: i64 = 0
+    let mut in_account: i64 = 0
+    let mut account_iban = ""
+    let mut account_ccy = ""
+    let mut amount = ""
+    let mut ccy = ""
+    let mut movement_type = ""
+    let mut description = ""
+    let mut reason = ""
+    let mut payment_date = ""
+    let mut value_date = ""
+    let mut reference = ""
+    let mut opposite_name = ""
+    let mut opposite_account = ""
+    let mut running: i64 = 1
+    while running == 1 {
+        let ev = xml_next(p)
+        if ev.kind == 1 {
+            current_tag = ev.name
+            if ev.name == "AccountMovement" {
+                in_tx = 1
+                account_iban = ""
+                account_ccy = ""
+                amount = ""
+                ccy = ""
+                movement_type = ""
+                description = ""
+                reason = ""
+                payment_date = ""
+                value_date = ""
+                reference = ""
+                opposite_name = ""
+                opposite_account = ""
+            }
+            if ev.name == "Account" && in_tx == 1 {
+                in_account = 1
+            }
+            if depth < vec_len(stack) {
+                vec_set(stack, depth, ev.name)
+            } else {
+                vec_push(stack, ev.name)
+            }
+            depth = depth + 1
+        } else {
+            if ev.kind == 3 {
+                let text = str_trim(ev.text)
+                if text != "" && in_tx == 1 {
+                    let current = current_tag
+                    if current == "IBAN" && in_account == 1 {
+                        account_iban = text
+                        if result.account_iban == "" {
+                            result.account_iban = text
+                        }
+                    } else {
+                        if current == "CCY" {
+                            if in_account == 1 {
+                                account_ccy = text
+                                if result.account_currency == "" {
+                                    result.account_currency = text
+                                }
+                            } else {
+                                ccy = text
+                            }
+                        } else {
+                            if current == "Amount" {
+                                amount = text
+                            } else {
+                                if current == "AmountInMovementCCY" && text != "0" && amount == "" {
+                                    amount = text
+                                } else {
+                                    if current == "MovementType" || current == "MovementTypeForExport" {
+                                        movement_type = text
+                                    } else {
+                                        if current == "MovementFunctionalType" {
+                                            description = text
+                                        } else {
+                                            if current == "Reason" {
+                                                reason = text
+                                            } else {
+                                                if current == "PaymentDate" {
+                                                    payment_date = text
+                                                } else {
+                                                    if current == "ValueDate" {
+                                                        value_date = text
+                                                    } else {
+                                                        if current == "DocumentReference" {
+                                                            reference = text
+                                                        } else {
+                                                            if current == "OppositeSideName" {
+                                                                opposite_name = text
+                                                            } else {
+                                                                if current == "OppositeSideAccount" {
+                                                                    opposite_account = text
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                if ev.kind == 2 {
+                    if ev.name == "Account" && in_account == 1 {
+                        in_account = 0
+                    }
+                    if ev.name == "AccountMovement" && in_tx == 1 {
+                        in_tx = 0
+                        let mut dt = payment_date
+                        if dt == "" {
+                            dt = value_date
+                        }
+                        let ti = str_find(dt, "T")
+                        if ti >= 0 {
+                            dt = substr(dt, 0, ti)
+                        }
+                        let amt = bp_money(amount)
+                        if amt != "" && amt != "0" && amt != "0.00" && dt != "" {
+                            let mut signed = amt
+                            if movement_type == "Debit" {
+                                signed = concat("-", amt)
+                            }
+                            let mut desc = description
+                            if reason != "" {
+                                if desc == "" {
+                                    desc = reason
+                                } else {
+                                    desc = concat(concat(desc, " - "), reason)
+                                }
+                            }
+                            let mut ccy2 = ccy
+                            if ccy2 == "" {
+                                ccy2 = account_ccy
+                            }
+                            let mut tx = parsed_tx_new()
+                            tx.date = dt
+                            tx.amount = signed
+                            tx.currency = ccy2
+                            tx.description = desc
+                            tx.contra_name = opposite_name
+                            tx.contra_iban = opposite_account
+                            tx.reference = reference
+                            vec_push(result.txs, tx)
+                        }
+                        if result.period_from == "" || bp_str_lt(dt, result.period_from) == 1 {
+                            result.period_from = dt
+                        }
+                        if result.period_to == "" || bp_str_gt(dt, result.period_to) == 1 {
+                            result.period_to = dt
+                        }
+                    }
+                    if depth > 0 {
+                        depth = depth - 1
+                    }
+                }
+            }
+        }
+        if ev.kind <= 0 {
+            running = 0
+        }
+    }
+    return result
+}

@@ -61,7 +61,7 @@ function BankTransactionsInner() {
     try {
       const [b, a, c] = await Promise.all([
         api.get<ListResponse<BankAccount>>("/v1/bank-accounts"),
-        api.get<ListResponse<Account>>("/v1/accounts"),
+        api.get<ListResponse<Account>>("/v1/accounts?limit=1000"),
         api.get<ListResponse<Counterpart>>("/v1/counterparts"),
       ]);
       setAccounts(b.items ?? []);
@@ -111,10 +111,6 @@ function BankTransactionsInner() {
   }, [rows, q]);
 
   const handleFile = async (file: File) => {
-    if (!selectedAccount) {
-      setError(t("bank_tx.select_account"));
-      return;
-    }
     setError("");
     setSuccess("");
     const content = await file.text();
@@ -124,7 +120,7 @@ function BankTransactionsInner() {
     setPreviewLoading(true);
     try {
       const data = await api.post<Preview>("/v1/bank-transactions/preview", {
-        bank_account_id: Number(selectedAccount),
+        bank_account_id: selectedAccount ? Number(selectedAccount) : undefined,
         file_content: content,
       });
       setPreview(data);
@@ -139,13 +135,15 @@ function BankTransactionsInner() {
   const handleImport = async () => {
     setImporting(true);
     try {
-      const r = await api.post<{ imported: number; journal_count: number }>(
-        "/v1/bank-transactions/import",
-        {
-          bank_account_id: Number(selectedAccount),
-          file_content: pendingContent,
-        }
-      );
+      const r = await api.post<{
+        imported: number;
+        journal_count: number;
+        auto_journal?: number;
+        bank_account_name?: string;
+      }>("/v1/bank-transactions/import", {
+        bank_account_id: selectedAccount ? Number(selectedAccount) : undefined,
+        file_content: pendingContent,
+      });
       const msg =
         r.journal_count > 0
           ? t("bank_tx.imported_with_journal")
@@ -173,6 +171,15 @@ function BankTransactionsInner() {
     setBookCpId(m?.id ?? 0);
     setBookCpSearch(tx.counterpart_name || "");
     setBookAccSearch("");
+    // Предложение по ключови думи (като baraba) — предварително избрана сметка.
+    api
+      .get<{ account_id?: number; account_number?: string; account_name?: string }>(
+        `/v1/bank-transactions/${tx.id}/suggest`
+      )
+      .then((s) => {
+        if (s.account_id) setBookContra(s.account_id);
+      })
+      .catch(() => {});
   };
 
   const openReallocate = async (tx: BankTransaction) => {

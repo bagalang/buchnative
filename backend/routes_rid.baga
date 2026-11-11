@@ -142,6 +142,7 @@ fn RID_BANK_TRANSACTIONS_IMPORT() -> i64 { return 222 }
 fn RID_BANK_TRANSACTIONS_BOOK() -> i64 { return 223 }
 fn RID_BANK_TRANSACTIONS_REALLOCATE() -> i64 { return 224 }
 fn RID_BANK_TRANSACTIONS_DELETE() -> i64 { return 225 }
+fn RID_BANK_TRANSACTIONS_SUGGEST() -> i64 { return 226 }
 fn RID_DDIST_INDEX() -> i64 { return 230 }
 fn RID_DDIST_CREATE() -> i64 { return 231 }
 fn RID_DDIST_SHOW() -> i64 { return 232 }

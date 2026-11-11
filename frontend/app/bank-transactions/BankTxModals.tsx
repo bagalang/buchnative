@@ -117,11 +117,31 @@ export function BankTxModals(props: {
                       {preview.duplicate_count}
                     </div>
                   </div>
+                  {preview.period_from && (
+                    <div className="summary-box">
+                      <div className="summary-label">{t("bank_tx.preview.period")}</div>
+                      <div className="summary-value">
+                        {preview.period_from} — {preview.period_to}
+                      </div>
+                    </div>
+                  )}
+                  {(preview.opening_balance || preview.closing_balance) && (
+                    <div className="summary-box">
+                      <div className="summary-label">{t("bank_tx.preview.balances")}</div>
+                      <div className="summary-value">
+                        {preview.opening_balance || "—"} / {preview.closing_balance || "—"}{" "}
+                        {preview.account_currency}
+                      </div>
+                    </div>
+                  )}
                 </div>
                 {preview.account_iban && (
                   <div className="muted" style={{ margin: "12px 0" }}>
                     {t("bank_tx.preview.iban")}:{" "}
                     <strong>{preview.account_iban}</strong>
+                    {preview.bank_account_name
+                      ? ` · ${t("bank_tx.preview.account")}: ${preview.bank_account_name}`
+                      : ""}
                   </div>
                 )}
                 <div style={{ maxHeight: 300, overflowY: "auto" }}>

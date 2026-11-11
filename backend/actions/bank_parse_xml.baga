@@ -313,11 +313,15 @@ fn bp_parse_camt(content: str) -> ParseResult {
     return result
 }
 // ─── PostBank XML ───
+// Две генерации на износа: MultipleAccountTransactionItemAPIOutputModel (нов)
+// и AccountTransactionsHistoryModel (по-стар). Вторият носи и салдото след
+// всяка транзакция (AmountBalanceAfter).
 fn bp_parse_postbank(content: str) -> ParseResult {
     let mut result = parse_result_new("PostBank XML")
     let p = xml_parser(content)
     let stack: Vec<str> = vec_new()
     let mut depth: i64 = 0
+    let mut current_tag = ""
     let mut in_model: i64 = 0
     let mut account_number = ""
     let mut account_currency = ""
@@ -325,16 +329,19 @@ fn bp_parse_postbank(content: str) -> ParseResult {
     let mut tx_amount = ""
     let mut tx_currency = ""
     let mut booking_date = ""
+    let mut value_date = ""
     let mut counterparty = ""
     let mut from_to_account = ""
     let mut remittance = ""
     let mut bordero = ""
     let mut type_op = ""
+    let mut balance_after = ""
     let mut running: i64 = 1
     while running == 1 {
         let ev = xml_next(p)
         if ev.kind == 1 {
-            if ev.name == "MultipleAccountTransactionItemAPIOutputModel" {
+            current_tag = ev.name
+            if ev.name == "MultipleAccountTransactionItemAPIOutputModel" || ev.name == "AccountTransactionsHistoryModel" {
                 in_model = 1
                 account_number = ""
                 account_currency = ""
@@ -342,11 +349,13 @@ fn bp_parse_postbank(content: str) -> ParseResult {
                 tx_amount = ""
                 tx_currency = ""
                 booking_date = ""
+                value_date = ""
                 counterparty = ""
                 from_to_account = ""
                 remittance = ""
                 bordero = ""
                 type_op = ""
+                balance_after = ""
             }
             if depth < vec_len(stack) {
                 vec_set(stack, depth, ev.name)
@@ -358,7 +367,7 @@ fn bp_parse_postbank(content: str) -> ParseResult {
             if ev.kind == 3 {
                 let text = str_trim(ev.text)
                 if text != "" && in_model == 1 {
-                    let current = ev.name
+                    let current = current_tag
                     let mut parent = ""
                     if depth >= 2 {
                         parent = vec_get(stack, depth - 2)
@@ -378,33 +387,53 @@ fn bp_parse_postbank(content: str) -> ParseResult {
                             if current == "FlowDirection" {
                                 flow_direction = text
                             } else {
-                                if current == "TypeOperation" {
+                                if current == "TypeOperation" || current == "TransactionType" || current == "OperationType" {
                                     type_op = text
                                 } else {
-                                    if current == "Counterparty" {
+                                    if current == "Counterparty" || current == "CorrespondentName" {
                                         counterparty = text
                                     } else {
-                                        if current == "FromToAccount" {
+                                        if current == "FromToAccount" || current == "CorrespondentAccount" {
                                             from_to_account = text
                                         } else {
                                             if current == "RemittanceInformation" {
                                                 remittance = text
                                             } else {
-                                                if current == "BorderoNumber" {
+                                                if current == "BorderoNumber" || current == "BorderNumber" {
                                                     bordero = text
                                                 } else {
                                                     if current == "Value" && parent == "TransactionAmount" {
                                                         tx_amount = text
                                                     } else {
-                                                        if current == "Code" && parent == "CurrencyCode" && tx_currency == "" {
+                                                        if current == "Currency" && parent == "TransactionAmount" {
                                                             tx_currency = text
                                                         } else {
-                                                            if current == "DateTimeValue" && parent == "BookingDate" {
-                                                                let ti = str_find(text, "T")
-                                                                if ti >= 0 {
-                                                                    booking_date = substr(text, 0, ti)
+                                                            if current == "Code" && parent == "CurrencyCode" && tx_currency == "" {
+                                                                tx_currency = text
+                                                            } else {
+                                                                if current == "BookingDate" || (current == "DateTimeValue" && parent == "BookingDate") {
+                                                                    let ti = str_find(text, "T")
+                                                                    if ti >= 0 {
+                                                                        booking_date = substr(text, 0, ti)
+                                                                    } else {
+                                                                        booking_date = text
+                                                                    }
                                                                 } else {
-                                                                    booking_date = text
+                                                                    if current == "ValueDate" || (current == "DateTimeValue" && parent == "ValueDate") {
+                                                                        let ti2 = str_find(text, "T")
+                                                                        if ti2 >= 0 {
+                                                                            value_date = substr(text, 0, ti2)
+                                                                        } else {
+                                                                            value_date = text
+                                                                        }
+                                                                    } else {
+                                                                        if current == "Value" && parent == "AmountBalanceAfter" {
+                                                                            balance_after = text
+                                                                            if result.closing_balance == "" {
+                                                                                result.closing_balance = bp_money(text)
+                                                                            }
+                                                                        }
+                                                                    }
                                                                 }
                                                             }
                                                         }
@@ -420,10 +449,14 @@ fn bp_parse_postbank(content: str) -> ParseResult {
                 }
             } else {
                 if ev.kind == 2 {
-                    if ev.name == "MultipleAccountTransactionItemAPIOutputModel" && in_model == 1 {
+                    if (ev.name == "MultipleAccountTransactionItemAPIOutputModel" || ev.name == "AccountTransactionsHistoryModel") && in_model == 1 {
                         in_model = 0
+                        let mut dt = booking_date
+                        if dt == "" {
+                            dt = value_date
+                        }
                         let amt = bp_money(tx_amount)
-                        if amt != "" && amt != "0" && amt != "0.00" && booking_date != "" {
+                        if amt != "" && amt != "0" && amt != "0.00" && dt != "" {
                             let mut amount = amt
                             if flow_direction == "Outbound" {
                                 amount = concat("-", amt)
@@ -440,8 +473,11 @@ fn bp_parse_postbank(content: str) -> ParseResult {
                             if ccy == "" {
                                 ccy = account_currency
                             }
+                            if result.account_currency == "" {
+                                result.account_currency = ccy
+                            }
                             let mut tx = parsed_tx_new()
-                            tx.date = booking_date
+                            tx.date = dt
                             tx.amount = amount
                             tx.currency = ccy
                             tx.description = desc
@@ -449,6 +485,12 @@ fn bp_parse_postbank(content: str) -> ParseResult {
                             tx.contra_iban = from_to_account
                             tx.reference = bordero
                             vec_push(result.txs, tx)
+                        }
+                        if result.period_from == "" || bp_str_lt(dt, result.period_from) == 1 {
+                            result.period_from = dt
+                        }
+                        if result.period_to == "" || bp_str_gt(dt, result.period_to) == 1 {
+                            result.period_to = dt
                         }
                     }
                     if depth > 0 {

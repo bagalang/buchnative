@@ -34,6 +34,12 @@ export interface Preview {
   format_name: string;
   account_iban: string;
   account_currency: string;
+  opening_balance?: string;
+  closing_balance?: string;
+  period_from?: string;
+  period_to?: string;
+  bank_account_id?: number;
+  bank_account_name?: string;
   transactions: ParsedTx[];
   total_count: number;
   duplicate_count: number;

@@ -65,6 +65,9 @@ fn bank_account_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
 fn bank_account_by_company(db: OrmDb, company_id: i64) -> OrmQuery !IO !Net {
     return kv_where_order2(db, bank_account_table(), "company_id", int_to_str(company_id), "name", "id", bank_account_cols())?
 }
+fn bank_account_by_iban(db: OrmDb, company_id: i64, iban: str) -> OrmQuery !IO !Net {
+    return kv_where2_star(db, bank_account_table(), "company_id", int_to_str(company_id), "iban", iban)?
+}
 fn bank_account_all(db: OrmDb) -> OrmQuery !IO !Net {
     return kv_select_all_order2(db, bank_account_table(), "name", "id", bank_account_cols())?
 }
