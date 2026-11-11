@@ -234,3 +234,29 @@ footer a { color: var(--green); }
   .hero { padding: 60px 0 40px; }
   .topbar nav { display: none; }
 }
+
+/* ── страница „Версии" ───────────────────────────────────────── */
+.page-title {
+  font-size: 28px;
+  color: var(--green);
+  letter-spacing: 1px;
+  margin: 26px 0 6px;
+}
+.changelog { margin-top: 18px; }
+.changelog h2 {
+  font-size: 20px;
+  margin: 26px 0 8px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 6px;
+}
+.changelog h3 { font-size: 16px; margin: 18px 0 6px; color: var(--green-2); }
+.changelog ul { margin: 8px 0 12px; padding-left: 22px; }
+.changelog li { margin: 4px 0; font-size: 14px; }
+.changelog p { font-size: 14px; margin: 6px 0; }
+.changelog code {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 12.5px;
+}

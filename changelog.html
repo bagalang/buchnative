@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Версии — buhal.sbs</title>
+<meta name="description" content="История на версиите на buchnative — счетоводната програма на езика Baga.">
+<link rel="stylesheet" href="site.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='42' fill='%2305080c'/%3E%3Ccircle cx='38' cy='46' r='9' fill='%23f0a542'/%3E%3Ccircle cx='62' cy='46' r='9' fill='%23f0a542'/%3E%3C/svg%3E">
+</head>
+<body>
+
+<div class="wrap">
+  <h1 class="page-title">История на версиите</h1>
+  <p class="sub">
+    <a href="index.html">← buhal.sbs</a> ·
+    <a href="https://github.com/bagalang/buchnative/blob/main/CHANGELOG.md">CHANGELOG.md</a> ·
+    <a href="https://github.com/bagalang/buchnative">github ↗</a>
+  </p>
+  <div id="changelog" class="changelog"><div class="muted">Зареждане…</div></div>
+</div>
+
+<script>
+function inline(s) {
+  var esc = s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return esc.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/`([^`]+)`/g, '<code>$1</code>');
+}
+function render(md) {
+  var lines = md.split('\n');
+  var out = '';
+  var inList = false;
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    var m;
+    if ((m = line.match(/^###\s+(.*)$/))) {
+      if (inList) { out += '</ul>'; inList = false; }
+      out += '<h3>' + inline(m[1]) + '</h3>';
+    } else if ((m = line.match(/^##\s+(.*)$/))) {
+      if (inList) { out += '</ul>'; inList = false; }
+      out += '<h2>' + inline(m[1]) + '</h2>';
+    } else if ((m = line.match(/^#\s+(.*)$/))) {
+      if (inList) { out += '</ul>'; inList = false; }
+      out += '<h2>' + inline(m[1]) + '</h2>';
+    } else if ((m = line.match(/^\s*-\s+(.*)$/))) {
+      if (!inList) { out += '<ul>'; inList = true; }
+      out += '<li>' + inline(m[1]) + '</li>';
+    } else if (line.trim() === '') {
+      if (inList) { out += '</ul>'; inList = false; }
+    } else {
+      if (inList) { out += '</ul>'; inList = false; }
+      out += '<p>' + inline(line) + '</p>';
+    }
+  }
+  if (inList) { out += '</ul>'; }
+  return out;
+}
+fetch('CHANGELOG.md')
+  .then(function (r) { return r.text(); })
+  .then(function (t) { document.getElementById('changelog').innerHTML = render(t); })
+  .catch(function () {
+    document.getElementById('changelog').innerHTML =
+      '<p class="muted">Не може да се зареди CHANGELOG.md — <a href="https://github.com/bagalang/buchnative/blob/main/CHANGELOG.md">виж на GitHub</a>.</p>';
+  });
+</script>
+
+</body>
+</html>
