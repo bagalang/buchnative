@@ -486,10 +486,10 @@ fn bp_parse_postbank(content: str) -> ParseResult {
                             tx.reference = bordero
                             vec_push(result.txs, tx)
                         }
-                        if result.period_from == "" || bp_str_lt(dt, result.period_from) == 1 {
+                        if result.period_from == "" || dt < result.period_from {
                             result.period_from = dt
                         }
-                        if result.period_to == "" || bp_str_gt(dt, result.period_to) == 1 {
+                        if result.period_to == "" || dt > result.period_to {
                             result.period_to = dt
                         }
                     }
