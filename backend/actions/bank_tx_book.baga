@@ -1,0 +1,281 @@
+// actions/bank_tx_book.baga — общи операции за осчетоводяване/разнасяне на
+// банкова транзакция. Използват се от bank_transactions_ops (ръчно) и от
+// bank_rules (автоматично разнасяне по правила). Транзакции са в рамките на
+// една операция; грешката се връща като BankBookResult.
+import "../models/bank_account.baga"
+import "../models/bank_transaction.baga"
+import "../models/account.baga"
+import "../models/journal.baga"
+import "../models/counterpart.baga"
+import "active_company.baga"
+import "txn.baga"
+import "periods.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/json/json.baga"
+import "std/str/str.baga"
+import "bagadecimal/src/decimal.baga"
+
+struct BankBookResult {
+    ok: i64,
+    err: str,
+    status: i64,
+    db: OrmDb,
+    entry_id: i64
+}
+
+fn bank_book_result_err(err: str, status: i64, db: OrmDb) -> BankBookResult {
+    return BankBookResult { ok: 0, err: err, status: status, db: db, entry_id: 0 }
+}
+
+fn bank_book_result_ok(db: OrmDb, entry_id: i64) -> BankBookResult {
+    return BankBookResult { ok: 1, err: "", status: 200, db: db, entry_id: entry_id }
+}
+
+// Осчетоводяване на неосчетоводена транзакция: дебит/кредит с ГЛ на сметката
+// и кореспондираща сметка (contra_account_id).
+fn bank_tx_book_one(db: OrmDb, ac_id: i64, tx_id: i64, contra_account_id: i64, counterpart_id: i64) -> BankBookResult !IO !Net !Time {
+    let tq = bank_tx_find(db, tx_id)?
+    if orm_ok_q(tq) == 0 {
+        return bank_book_result_err(orm_err_q(tq), 500, orm_db_q(tq))
+    }
+    if orm_nrows(tq) < 1 {
+        return bank_book_result_err("Транзакцията не е намерена", 404, orm_db_q(tq))
+    }
+    if orm_cell_by_i64(tq, 0, "company_id") != ac_id {
+        return bank_book_result_err("Транзакцията не е намерена", 404, orm_db_q(tq))
+    }
+    if orm_cell_by_i64(tq, 0, "is_booked") != 0 {
+        return bank_book_result_err("транзакцията вече е осчетоводена", 409, orm_db_q(tq))
+    }
+    if contra_account_id <= 0 {
+        return bank_book_result_err("Моля изберете сметка", 422, orm_db_q(tq))
+    }
+    let mut d0 = orm_db_q(tq)
+    let tx_date = orm_cell_by(tq, 0, "txn_date")
+    let tx_amount = orm_cell_by(tq, 0, "amount")
+    let tx_desc = orm_cell_by(tq, 0, "description")
+    let tx_contra = orm_cell_by(tq, 0, "counterpart_name")
+    let tx_ref = orm_cell_by(tq, 0, "reference")
+    let ba_id = orm_cell_by_i64(tq, 0, "bank_account_id")
+    let ap = dec_parse(tx_amount)
+    if ap.ok == 0 {
+        return bank_book_result_err("невалидна сума на транзакцията", 422, d0)
+    }
+    let mut is_deposit: i64 = 1
+    if dec_is_negative(ap.value) != 0 {
+        is_deposit = 0
+    }
+    let abs = dec_abs(ap.value)
+    let abs_s = dec_to_string(abs)
+    let baq = bank_account_find(d0, ba_id)?
+    if orm_ok_q(baq) == 0 {
+        return bank_book_result_err(orm_err_q(baq), 500, orm_db_q(baq))
+    }
+    if orm_nrows(baq) < 1 {
+        return bank_book_result_err("Банковата сметка не е намерена", 404, orm_db_q(baq))
+    }
+    let gl_id = orm_cell_by_i64(baq, 0, "gl_account_id")
+    if gl_id <= 0 {
+        return bank_book_result_err("Банковата сметка няма свързана GL сметка", 422, orm_db_q(baq))
+    }
+    d0 = orm_db_q(baq)
+    let mut debit_id = contra_account_id
+    let mut credit_id = gl_id
+    let mut debit_cp: i64 = 0
+    let mut credit_cp: i64 = 0
+    if is_deposit == 1 {
+        debit_id = gl_id
+        credit_id = contra_account_id
+        credit_cp = counterpart_id
+    } else {
+        debit_cp = counterpart_id
+    }
+    let mut cp_name = tx_contra
+    let mut cp_vat = ""
+    if counterpart_id > 0 {
+        let cq = counterpart_find(d0, counterpart_id)?
+        if orm_ok_q(cq) == 0 {
+            return bank_book_result_err(orm_err_q(cq), 500, orm_db_q(cq))
+        }
+        if orm_nrows(cq) < 1 {
+            return bank_book_result_err("Контрагентът не е намерен", 404, orm_db_q(cq))
+        }
+        if orm_cell_by_i64(cq, 0, "company_id") != ac_id {
+            return bank_book_result_err("Контрагентът не е намерен", 404, orm_db_q(cq))
+        }
+        cp_name = orm_cell_by(cq, 0, "name")
+        cp_vat = orm_cell_by(cq, 0, "vat_number")
+        d0 = orm_db_q(cq)
+    }
+    let pc = period_assert_open(d0, ac_id, tx_date)?
+    if pc.ok == 0 {
+        return bank_book_result_err(pc.err, 422, pc.db)
+    }
+    d0 = pc.db
+    let mut desc = "Ръчно осчетоводяване"
+    if tx_desc != "" {
+        desc = tx_desc
+    }
+    if tx_contra != "" {
+        desc = concat(concat(desc, " - "), tx_contra)
+    }
+    let bgn = bb_begin(d0)?
+    if orm_ok(bgn) == 0 {
+        return bank_book_result_err(orm_err_exec(bgn), 500, orm_db_exec(bgn))
+    }
+    let mut db2 = orm_db_exec(bgn)
+    let eq = journal_entry_insert(db2, tx_date, "bank", 0, desc, "no_vat", counterpart_id, cp_name, cp_vat, tx_ref, tx_date, "", abs_s, "0", ac_id)?
+    if orm_ok_q(eq) == 0 || orm_nrows(eq) < 1 {
+        return bank_book_result_err("journal entry insert failed", 500, orm_db_q(eq))
+    }
+    let entry_id = orm_cell_by_i64(eq, 0, "id")
+    db2 = orm_db_q(eq)
+    let l1 = journal_line_insert(db2, entry_id, debit_id, "debit", abs_s, "0", debit_cp, 0, 0)?
+    if orm_ok(l1) == 0 {
+        return bank_book_result_err(orm_err_exec(l1), 500, orm_db_exec(l1))
+    }
+    db2 = orm_db_exec(l1)
+    let l2 = journal_line_insert(db2, entry_id, credit_id, "credit", abs_s, "0", credit_cp, 0, 0)?
+    if orm_ok(l2) == 0 {
+        return bank_book_result_err(orm_err_exec(l2), 500, orm_db_exec(l2))
+    }
+    db2 = orm_db_exec(l2)
+    let tcols = vec_new()
+    vec_push(tcols, "is_booked")
+    vec_push(tcols, "is_allocated")
+    vec_push(tcols, "journal_entry_id")
+    let tvals = vec_new()
+    vec_push(tvals, "1")
+    vec_push(tvals, "1")
+    vec_push(tvals, int_to_str(entry_id))
+    let tup = orm_update_by_id(db2, bank_tx_table(), tx_id, tcols, tvals)?
+    if orm_ok(tup) == 0 {
+        return bank_book_result_err(orm_err_exec(tup), 500, orm_db_exec(tup))
+    }
+    db2 = orm_db_exec(tup)
+    let cmt = bb_commit(db2)?
+    if orm_ok(cmt) == 0 {
+        return bank_book_result_err(orm_err_exec(cmt), 500, orm_db_exec(cmt))
+    }
+    return bank_book_result_ok(orm_db_exec(cmt), entry_id)
+}
+
+// Разнасяне: буферната сметка се заменя с реална; контрагентът отива на реда.
+fn bank_tx_reallocate_one(db: OrmDb, ac_id: i64, tx_id: i64, new_account_id: i64, counterpart_id: i64) -> BankBookResult !IO !Net {
+    let tq = bank_tx_find(db, tx_id)?
+    if orm_ok_q(tq) == 0 {
+        return bank_book_result_err(orm_err_q(tq), 500, orm_db_q(tq))
+    }
+    if orm_nrows(tq) < 1 {
+        return bank_book_result_err("Транзакцията не е намерена", 404, orm_db_q(tq))
+    }
+    if orm_cell_by_i64(tq, 0, "company_id") != ac_id {
+        return bank_book_result_err("Транзакцията не е намерена", 404, orm_db_q(tq))
+    }
+    let entry_id = orm_cell_by_i64(tq, 0, "journal_entry_id")
+    if entry_id <= 0 {
+        return bank_book_result_err("Транзакцията няма счетоводен запис", 422, orm_db_q(tq))
+    }
+    if new_account_id <= 0 {
+        return bank_book_result_err("Моля изберете сметка", 422, orm_db_q(tq))
+    }
+    let ba_id = orm_cell_by_i64(tq, 0, "bank_account_id")
+    let mut d0 = orm_db_q(tq)
+    let baq = bank_account_find(d0, ba_id)?
+    if orm_ok_q(baq) == 0 {
+        return bank_book_result_err(orm_err_q(baq), 500, orm_db_q(baq))
+    }
+    if orm_nrows(baq) < 1 {
+        return bank_book_result_err("Банковата сметка не е намерена", 404, orm_db_q(baq))
+    }
+    let buffer_id = orm_cell_by_i64(baq, 0, "buffer_account_id")
+    if buffer_id <= 0 {
+        return bank_book_result_err("Няма буферна сметка", 422, orm_db_q(baq))
+    }
+    d0 = orm_db_q(baq)
+    let mut cp_name = ""
+    let mut cp_vat = ""
+    if counterpart_id > 0 {
+        let cq = counterpart_find(d0, counterpart_id)?
+        if orm_ok_q(cq) == 0 {
+            return bank_book_result_err(orm_err_q(cq), 500, orm_db_q(cq))
+        }
+        if orm_nrows(cq) < 1 {
+            return bank_book_result_err("Контрагентът не е намерен", 404, orm_db_q(cq))
+        }
+        if orm_cell_by_i64(cq, 0, "company_id") != ac_id {
+            return bank_book_result_err("Контрагентът не е намерен", 404, orm_db_q(cq))
+        }
+        cp_name = orm_cell_by(cq, 0, "name")
+        cp_vat = orm_cell_by(cq, 0, "vat_number")
+        d0 = orm_db_q(cq)
+    }
+    let lq = journal_lines_by_entry(d0, entry_id)?
+    if orm_ok_q(lq) == 0 {
+        return bank_book_result_err(orm_err_q(lq), 500, orm_db_q(lq))
+    }
+    d0 = orm_db_q(lq)
+    let bgn = bb_begin(d0)?
+    if orm_ok(bgn) == 0 {
+        return bank_book_result_err(orm_err_exec(bgn), 500, orm_db_exec(bgn))
+    }
+    let mut db2 = orm_db_exec(bgn)
+    let mut i: i64 = 0
+    let mut replaced: i64 = 0
+    while i < orm_nrows(lq) {
+        if orm_cell_by_i64(lq, i, "account_id") == buffer_id {
+            let line_id = orm_cell_by_i64(lq, i, "id")
+            let cols = vec_new()
+            vec_push(cols, "account_id")
+            let vals = vec_new()
+            vec_push(vals, int_to_str(new_account_id))
+            if counterpart_id > 0 {
+                vec_push(cols, "counterpart_id")
+                vec_push(vals, int_to_str(counterpart_id))
+            }
+            let up = orm_update_by_id(db2, journal_line_table(), line_id, cols, vals)?
+            if orm_ok(up) == 0 {
+                return bank_book_result_err(orm_err_exec(up), 500, orm_db_exec(up))
+            }
+            db2 = orm_db_exec(up)
+            replaced = replaced + 1
+        }
+        i = i + 1
+    }
+    if replaced == 0 {
+        return bank_book_result_err("Не е намерен ред с буферна сметка", 422, db2)
+    }
+    if counterpart_id > 0 {
+        let jcols = vec_new()
+        vec_push(jcols, "counterpart_id")
+        vec_push(jcols, "counterpart_name")
+        vec_push(jcols, "counterpart_vat_number")
+        let jvals = vec_new()
+        vec_push(jvals, int_to_str(counterpart_id))
+        vec_push(jvals, cp_name)
+        vec_push(jvals, cp_vat)
+        let jup = orm_update_by_id(db2, journal_entry_table(), entry_id, jcols, jvals)?
+        if orm_ok(jup) == 0 {
+            return bank_book_result_err(orm_err_exec(jup), 500, orm_db_exec(jup))
+        }
+        db2 = orm_db_exec(jup)
+    }
+    let tcols = vec_new()
+    vec_push(tcols, "is_allocated")
+    let tvals = vec_new()
+    vec_push(tvals, "1")
+    let tup = orm_update_by_id(db2, bank_tx_table(), tx_id, tcols, tvals)?
+    if orm_ok(tup) == 0 {
+        return bank_book_result_err(orm_err_exec(tup), 500, orm_db_exec(tup))
+    }
+    db2 = orm_db_exec(tup)
+    let cmt = bb_commit(db2)?
+    if orm_ok(cmt) == 0 {
+        return bank_book_result_err(orm_err_exec(cmt), 500, orm_db_exec(cmt))
+    }
+    return bank_book_result_ok(orm_db_exec(cmt), entry_id)
+}

@@ -48,6 +48,7 @@ import "actions/exchange_rates.baga"
 import "actions/bank_accounts.baga"
 import "actions/bank_transactions.baga"
 import "actions/bank_transactions_ops.baga"
+import "actions/bank_rules.baga"
 import "actions/dividends.baga"
 import "actions/dividends_ops.baga"
 import "actions/recipes.baga"
@@ -246,6 +247,12 @@ fn fmr_build_app() -> FmrApp !IO {
     app = fmr_route_meta(app, "POST", "/v1/bank-transactions/{id}/reallocate", RID_BANK_TRANSACTIONS_REALLOCATE(), "", "bank-transactions", 0, "BankReallocateRequest", "BankReallocateResult", "200", "")
     app = fmr_route_meta(app, "DELETE", "/v1/bank-transactions/{id}", RID_BANK_TRANSACTIONS_DELETE(), "", "bank-transactions", 0, "", "-", "204", "")
     app = fmr_route_meta(app, "GET", "/v1/bank-transactions/{id}/suggest", RID_BANK_TRANSACTIONS_SUGGEST(), "", "bank-transactions", 0, "", "BankSuggest", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/bank-transactions/auto-allocate", RID_BANK_TRANSACTIONS_AUTO(), "", "bank-transactions", 0, "", "BankAuto", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/bank-matching-rules", RID_BANK_RULES_INDEX(), "", "bank-matching-rules", 0, "", "BankRuleList", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/bank-matching-rules", RID_BANK_RULES_SAVE(), "", "bank-matching-rules", 0, "BankRuleSave", "BankRule", "201", "")
+    app = fmr_route_meta(app, "PATCH", "/v1/bank-matching-rules/{id}", RID_BANK_RULES_UPDATE(), "", "bank-matching-rules", 0, "BankRuleSave", "BankRule", "200", "")
+    app = fmr_route_meta(app, "DELETE", "/v1/bank-matching-rules/{id}", RID_BANK_RULES_DELETE(), "", "bank-matching-rules", 0, "", "-", "204", "")
+    app = fmr_route_meta(app, "POST", "/v1/bank-matching-rules/defaults", RID_BANK_RULES_DEFAULTS(), "", "bank-matching-rules", 0, "", "BankRuleList", "200", "")
     app = fmr_route_meta(app, "GET", "/v1/dividend-distributions", RID_DDIST_INDEX(), "", "dividends", 0, "", "DividendDistList", "200", "")
     app = fmr_route_meta(app, "POST", "/v1/dividend-distributions", RID_DDIST_CREATE(), "", "dividends", 0, "DividendDistCreate", "DividendDist", "201", "")
     app = fmr_route_meta(app, "GET", "/v1/dividend-distributions/{id}", RID_DDIST_SHOW(), "", "dividends", 0, "", "DividendDist", "200", "")
@@ -471,6 +478,12 @@ fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     if id == RID_BANK_TRANSACTIONS_REALLOCATE() { return act_bank_transactions_reallocate(ctx, db)? }
     if id == RID_BANK_TRANSACTIONS_DELETE() { return act_bank_transactions_delete(ctx, db)? }
     if id == RID_BANK_TRANSACTIONS_SUGGEST() { return act_bank_transactions_suggest(ctx, db)? }
+    if id == RID_BANK_TRANSACTIONS_AUTO() { return act_bank_rules_auto(ctx, db)? }
+    if id == RID_BANK_RULES_INDEX() { return act_bank_rules_index(ctx, db)? }
+    if id == RID_BANK_RULES_SAVE() { return act_bank_rules_save(ctx, db)? }
+    if id == RID_BANK_RULES_UPDATE() { return act_bank_rules_save(ctx, db)? }
+    if id == RID_BANK_RULES_DELETE() { return act_bank_rules_delete(ctx, db)? }
+    if id == RID_BANK_RULES_DEFAULTS() { return act_bank_rules_defaults(ctx, db)? }
     if id == RID_DDIST_INDEX() { return act_ddist_index(ctx, db)? }
     if id == RID_DDIST_CREATE() { return act_ddist_create(ctx, db)? }
     if id == RID_DDIST_SHOW() { return act_ddist_show(ctx, db)? }

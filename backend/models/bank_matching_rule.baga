@@ -1,0 +1,114 @@
+// models/bank_matching_rule.baga — правила за разпознаване на банкови
+// транзакции по ключови думи (порт на secret/baraba BankMatchingRule).
+// Ключовите думи се търсят в описанието и името на контрагента; по-висок
+// приоритет печели при няколко съвпадения. direction е any/debit/credit.
+import "ormbaga/orm.baga"
+import "fmrbaga/jsonx.baga"
+import "kvtime.baga"
+import "std/str/str.baga"
+
+fn bank_rule_table() -> str {
+    return "bank_matching_rules"
+}
+
+fn bank_rule_cols() -> Vec<str> {
+    let c: Vec<str> = vec_new()
+    vec_push(c, "id")
+    vec_push(c, "company_id")
+    vec_push(c, "name")
+    vec_push(c, "keywords")
+    vec_push(c, "direction")
+    vec_push(c, "priority")
+    vec_push(c, "is_active")
+    vec_push(c, "account_id")
+    vec_push(c, "counterpart_id")
+    vec_push(c, "created_at")
+    return c
+}
+
+// Правилата на фирмата, най-висок приоритет отгоре.
+fn bank_rule_by_company(db: OrmDb, company_id: i64) -> OrmQuery !IO !Net {
+    let sc: Vec<str> = vec_new()
+    vec_push(sc, "priority")
+    let dirs: Vec<i64> = vec_new()
+    vec_push(dirs, 1)
+    return kv_where_dir(db, bank_rule_table(), "company_id", int_to_str(company_id), bank_rule_cols(), sc, dirs)?
+}
+
+fn bank_rule_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
+    return kv_select_by_id(db, bank_rule_table(), id, bank_rule_cols())?
+}
+
+fn bank_rule_create(db: OrmDb, company_id: i64, name: str, keywords: str, direction: str, priority: i64, is_active: i64, account_id: i64, counterpart_id: i64) -> OrmQuery !IO !Net !Time {
+    let cols: Vec<str> = vec_new()
+    vec_push(cols, "company_id")
+    vec_push(cols, "name")
+    vec_push(cols, "keywords")
+    vec_push(cols, "direction")
+    vec_push(cols, "priority")
+    vec_push(cols, "is_active")
+    vec_push(cols, "account_id")
+    vec_push(cols, "counterpart_id")
+    vec_push(cols, "created_at")
+    let vals: Vec<str> = vec_new()
+    vec_push(vals, int_to_str(company_id))
+    vec_push(vals, name)
+    vec_push(vals, keywords)
+    vec_push(vals, direction)
+    vec_push(vals, int_to_str(priority))
+    vec_push(vals, int_to_str(is_active))
+    vec_push(vals, int_to_str(account_id))
+    vec_push(vals, int_to_str(counterpart_id))
+    vec_push(vals, kv_now_iso()?)
+    return orm_insert_returning_strs(db, bank_rule_table(), cols, vals)?
+}
+
+fn bank_rule_update(db: OrmDb, id: i64, name: str, keywords: str, direction: str, priority: i64, is_active: i64, account_id: i64, counterpart_id: i64) -> OrmExec !IO !Net {
+    let cols: Vec<str> = vec_new()
+    vec_push(cols, "name")
+    vec_push(cols, "keywords")
+    vec_push(cols, "direction")
+    vec_push(cols, "priority")
+    vec_push(cols, "is_active")
+    vec_push(cols, "account_id")
+    vec_push(cols, "counterpart_id")
+    let vals: Vec<str> = vec_new()
+    vec_push(vals, name)
+    vec_push(vals, keywords)
+    vec_push(vals, direction)
+    vec_push(vals, int_to_str(priority))
+    vec_push(vals, int_to_str(is_active))
+    vec_push(vals, int_to_str(account_id))
+    vec_push(vals, int_to_str(counterpart_id))
+    return orm_update_by_id(db, bank_rule_table(), id, cols, vals)?
+}
+
+fn bank_rule_delete(db: OrmDb, id: i64) -> OrmExec !IO !Net {
+    return orm_delete_by_id(db, bank_rule_table(), id)?
+}
+
+fn bank_rule_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_str(o, "name", orm_cell_by(q, row, "name"))
+    o = jobj_str(o, "keywords", orm_cell_by(q, row, "keywords"))
+    o = jobj_str(o, "direction", orm_cell_by(q, row, "direction"))
+    o = jobj_i64(o, "priority", orm_cell_by_i64(q, row, "priority"))
+    o = jobj_i64(o, "is_active", orm_cell_by_i64(q, row, "is_active"))
+    o = jobj_i64(o, "account_id", orm_cell_by_i64(q, row, "account_id"))
+    o = jobj_i64(o, "counterpart_id", orm_cell_by_i64(q, row, "counterpart_id"))
+    return o
+}
+
+fn bank_rule_list_json(q: OrmQuery) -> JObj {
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        arr = jarr_obj(arr, bank_rule_to_json(q, i))
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", orm_nrows(q))
+    return o
+}

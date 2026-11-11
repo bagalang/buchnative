@@ -37,6 +37,7 @@ function BankTransactionsInner() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [pendingContent, setPendingContent] = useState("");
   const [importing, setImporting] = useState(false);
+  const [autoBusy, setAutoBusy] = useState(false);
 
   const [bookTx, setBookTx] = useState<BankTransaction | null>(null);
   const [bookContra, setBookContra] = useState(0);
@@ -159,6 +160,31 @@ function BankTransactionsInner() {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setImporting(false);
+    }
+  };
+
+  const handleAutoAllocate = async () => {
+    setAutoBusy(true);
+    setError("");
+    setSuccess("");
+    try {
+      const r = await api.post<{
+        matched: number;
+        unmatched: number;
+        errors: number;
+        counterpart_hits: number;
+      }>("/v1/bank-transactions/auto-allocate");
+      setSuccess(
+        t("bank_rules.auto_done")
+          .replace("{m}", String(r.matched))
+          .replace("{u}", String(r.unmatched))
+          .replace("{e}", String(r.errors))
+      );
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAutoBusy(false);
     }
   };
 
@@ -331,6 +357,17 @@ function BankTransactionsInner() {
           >
             {t("bank_tx.import_file")}
           </button>
+          <button
+            className="btn"
+            onClick={handleAutoAllocate}
+            disabled={autoBusy}
+            type="button"
+          >
+            {t("bank_rules.auto")}
+          </button>
+          <a className="btn" href="/bank-matching-rules">
+            {t("nav.bank_rules")}
+          </a>
         </div>
       </div>
 
