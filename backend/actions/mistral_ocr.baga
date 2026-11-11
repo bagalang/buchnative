@@ -5,6 +5,7 @@ import "mistral.baga"
 import "fmrbaga/jsonx.baga"
 import "std/json/json.baga"
 import "std/net/http_client.baga"
+import "utf8_clip.baga"
 import "std/str/str.baga"
 
 struct ScanResult {
@@ -149,10 +150,7 @@ fn unit_norm(s: str) -> str {
 fn http_err_note(prefix: str, resp: HttpResponse) -> str {
     let mut s = concat(prefix, " HTTP ")
     s = concat(s, int_to_str(resp.status))
-    let mut b = resp.body
-    if len(b) > 360 {
-        b = substr(b, 0, 360)
-    }
+    let b = utf8_clip(resp.body, 360)
     return concat(concat(s, ": "), b)
 }
 

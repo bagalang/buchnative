@@ -1,0 +1,24 @@
+// actions/utf8_clip.baga — подрязване на низ до n байта на граница на UTF-8
+// символ. substr е по байтове и разполовява кирилски букви → невалиден UTF-8
+// в JSON/XML отговори. Чиста функция (без IO).
+import "std/str/str.baga"
+
+fn utf8_clip(s: str, n: i64) -> str {
+    if n <= 0 {
+        return ""
+    }
+    if len(s) <= n {
+        return s
+    }
+    let mut pos: i64 = 0
+    let mut running: i64 = 1
+    while running == 1 {
+        let w = str_utf8_width(s, pos)
+        if pos + w > n {
+            running = 0
+        } else {
+            pos = pos + w
+        }
+    }
+    return substr(s, 0, pos)
+}

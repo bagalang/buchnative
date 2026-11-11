@@ -20,6 +20,7 @@ import "fmrbaga/action.baga"
 import "fmrbaga/jsonx.baga"
 import "ormbaga/orm.baga"
 import "std/json/json.baga"
+import "utf8_clip.baga"
 import "std/str/str.baga"
 import "bagadecimal/src/decimal.baga"
 
@@ -217,6 +218,10 @@ fn bank_rule_match(db: OrmDb, company_id: i64, text: str, amount: str) -> BankRu
         positive = 1
     }
     let mut i: i64 = 0
+    // kv_sort реди текстови колони по низ; приоритетът е число, затова тук
+    // избираме числово най-високото съвпадение (не първото от заявката).
+    let mut best = bank_rule_hit_none()
+    let mut best_pri: i64 = 0 - 1000000
     while i < orm_nrows(rules) {
         if orm_cell_by_i64(rules, i, "is_active") != 0 {
             let dir = orm_cell_by(rules, i, "direction")
@@ -230,19 +235,23 @@ fn bank_rule_match(db: OrmDb, company_id: i64, text: str, amount: str) -> BankRu
             if dir_ok == 1 {
                 let kws = orm_cell_by(rules, i, "keywords")
                 if bn_rule_has_keyword(text, kws) == 1 {
-                    return BankRuleHit {
-                        found: 1,
-                        rule_id: orm_cell_by_i64(rules, i, "id"),
-                        name: orm_cell_by(rules, i, "name"),
-                        account_id: orm_cell_by_i64(rules, i, "account_id"),
-                        counterpart_id: orm_cell_by_i64(rules, i, "counterpart_id")
+                    let pri = orm_cell_by_i64(rules, i, "priority")
+                    if best.found == 0 || pri > best_pri {
+                        best = BankRuleHit {
+                            found: 1,
+                            rule_id: orm_cell_by_i64(rules, i, "id"),
+                            name: orm_cell_by(rules, i, "name"),
+                            account_id: orm_cell_by_i64(rules, i, "account_id"),
+                            counterpart_id: orm_cell_by_i64(rules, i, "counterpart_id")
+                        }
+                        best_pri = pri
                     }
                 }
             }
         }
         i = i + 1
     }
-    return bank_rule_hit_none()
+    return best
 }
 
 // Контрагент по име (нормализирано, без правни форми).
@@ -275,10 +284,6 @@ fn bank_rule_counterpart(db: OrmDb, company_id: i64, name: str) -> i64 !IO !Net 
 
 // ── CRUD ──────────────────────────────────────────────────────────────────
 
-fn bank_rules_require(ctx: FmrCtx, db: OrmDb, perm: str) -> ActAuth !IO !Net {
-    return act_require_perm(ctx, db, perm)
-}
-
 // jopt_i64 като в material_issue.baga (jopt_* не са в jsonx).
 fn bn_jopt_i64(doc: JsonDoc, obj: i64, key: str, def: i64) -> JField {
     if json_get(doc, obj, key) < 0 {
@@ -288,7 +293,7 @@ fn bn_jopt_i64(doc: JsonDoc, obj: i64, key: str, def: i64) -> JField {
 }
 
 fn act_bank_rules_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
-    let auth = bank_rules_require(ctx, db, "bank:read")
+    let auth = act_require_auth(ctx, db)
     if auth.ok == 0 {
         return auth.out
     }
@@ -301,7 +306,7 @@ fn act_bank_rules_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
 }
 
 fn act_bank_rules_save(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
-    let auth = bank_rules_require(ctx, db, "bank:write")
+    let auth = act_require_auth(ctx, db)
     if auth.ok == 0 {
         return auth.out
     }
@@ -385,7 +390,7 @@ fn act_bank_rules_save(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
 }
 
 fn act_bank_rules_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
-    let auth = bank_rules_require(ctx, db, "bank:write")
+    let auth = act_require_auth(ctx, db)
     if auth.ok == 0 {
         return auth.out
     }
@@ -410,7 +415,7 @@ fn act_bank_rules_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
 
 // Създава стандартните правила за фирмата (пропуска вече съществуващите по име).
 fn act_bank_rules_defaults(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
-    let auth = bank_rules_require(ctx, db, "bank:write")
+    let auth = act_require_auth(ctx, db)
     if auth.ok == 0 {
         return auth.out
     }
@@ -499,7 +504,7 @@ fn bn_needs_processing(txs: OrmQuery, row: i64, bank_account: OrmQuery) -> i64 !
 }
 
 fn act_bank_rules_auto(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
-    let auth = bank_rules_require(ctx, db, "bank:write")
+    let auth = act_require_auth(ctx, db)
     if auth.ok == 0 {
         return auth.out
     }
@@ -580,10 +585,7 @@ fn act_bank_rules_auto(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
 }
 
 fn bn_snippet(s: str) -> str {
-    if len(s) > 80 {
-        return substr(s, 0, 80)
-    }
-    return s
+    return utf8_clip(s, 80)
 }
 
 fn bn_detail(id: i64, status: str, rule: str, text: str) -> JObj {

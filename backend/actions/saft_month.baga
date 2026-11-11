@@ -9,6 +9,7 @@ import "../models/counterpart.baga"
 import "vat_fmt.baga"
 import "bagadecimal/src/decimal.baga"
 import "xmlbaga/xml.baga"
+import "utf8_clip.baga"
 import "std/str/str.baga"
 
 struct SftPay {
@@ -39,7 +40,7 @@ fn sft_clip(s: str, n: i64) -> str {
     if len(t) <= n {
         return t
     }
-    return substr(t, 0, n)
+    return utf8_clip(t, n)
 }
 
 fn sft_digits(s: str) -> i64 {

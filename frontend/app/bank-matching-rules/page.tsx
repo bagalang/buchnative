@@ -67,7 +67,9 @@ function BankRulesInner() {
         api.get<ListResponse<Account>>("/v1/accounts?limit=1000"),
         api.get<ListResponse<Counterpart>>("/v1/counterparts?limit=1000"),
       ]);
-      setRules(r.items ?? []);
+      setRules(
+        [...(r.items ?? [])].sort((a, b) => b.priority - a.priority)
+      );
       setAccounts(a.items ?? []);
       setCounterparts(c.items ?? []);
     } catch (e) {
