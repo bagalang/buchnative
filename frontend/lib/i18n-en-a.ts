@@ -271,6 +271,7 @@ export const enA = {
   "vat.manual_save": "Save cells",
   "vat.manual_saved": "Cells saved",
   "settings.tab.closing": "Closing",
+  "settings.tab.stock": "Stock",
   "per.close_month": "Close month",
   "closing.already_done": "This month is already closed. Delete the entry from the journal to close again.",
   "closing.preview_total": "Turnover",

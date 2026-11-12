@@ -1,0 +1,100 @@
+// models/stock_rule.baga — правила за изписване на склада (по фирма).
+//
+// Всяко правило свързва складова сметка с насрещна (разходна) сметка за
+// даден вид: goods (стоки), production (продукция), material (материали).
+// Продукцията носи и междинна сметка. Номера на сметки не се подставят
+// автоматично — потребителят ги избира. Може да има повече от едно правило
+// за един и същ вид. Порт на ytbuch stock_account_rules.
+
+import "ormbaga/orm.baga"
+import "fmrbaga/jsonx.baga"
+import "std/str/str.baga"
+
+fn sr_table() -> str {
+    return "stock_account_rules"
+}
+
+fn sr_cols() -> Vec<str> {
+    let c: Vec<str> = vec_new()
+    vec_push(c, "id")
+    vec_push(c, "company_id")
+    vec_push(c, "kind")
+    vec_push(c, "inventory_account_id")
+    vec_push(c, "offset_account_id")
+    vec_push(c, "clearing_account_id")
+    return c
+}
+
+fn sr_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
+    return kv_select_by_id(db, sr_table(), id, sr_cols())?
+}
+
+fn sr_by_company(db: OrmDb, company_id: i64) -> OrmQuery !IO !Net {
+    let sc: Vec<str> = vec_new()
+    vec_push(sc, "id")
+    let dirs: Vec<i64> = vec_new()
+    vec_push(dirs, 0)
+    return kv_where_dir(db, sr_table(), "company_id", int_to_str(company_id), sr_cols(), sc, dirs)?
+}
+
+fn sr_create(db: OrmDb, company_id: i64, kind: str, inventory_account_id: i64, offset_account_id: i64, clearing_account_id: i64) -> OrmQuery !IO !Net {
+    let cols: Vec<str> = vec_new()
+    vec_push(cols, "company_id")
+    vec_push(cols, "kind")
+    vec_push(cols, "inventory_account_id")
+    vec_push(cols, "offset_account_id")
+    vec_push(cols, "clearing_account_id")
+    let vals: Vec<str> = vec_new()
+    vec_push(vals, int_to_str(company_id))
+    vec_push(vals, kind)
+    vec_push(vals, int_to_str(inventory_account_id))
+    vec_push(vals, int_to_str(offset_account_id))
+    vec_push(vals, int_to_str(clearing_account_id))
+    return orm_insert_returning_strs(db, sr_table(), cols, vals)?
+}
+
+fn sr_delete(db: OrmDb, id: i64) -> OrmExec !IO !Net {
+    return kv_delete_by_id(db, sr_table(), id)?
+}
+
+fn sr_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_i64(o, "company_id", orm_cell_by_i64(q, row, "company_id"))
+    o = jobj_str(o, "kind", orm_cell_by(q, row, "kind"))
+    o = jobj_i64(o, "inventory_account_id", orm_cell_by_i64(q, row, "inventory_account_id"))
+    o = jobj_i64(o, "offset_account_id", orm_cell_by_i64(q, row, "offset_account_id"))
+    o = jobj_i64(o, "clearing_account_id", orm_cell_by_i64(q, row, "clearing_account_id"))
+    return o
+}
+
+fn sr_list_json(q: OrmQuery) -> JObj {
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        arr = jarr_obj(arr, sr_to_json(q, i))
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", orm_nrows(q))
+    return o
+}
+
+// Насрещната (разходна) сметка за материал по складова сметка — за
+// автоматично попълване при изписване на материали. 0 ако няма правило.
+fn sr_material_offset(q: OrmQuery, inventory_id: i64) -> i64 {
+    if inventory_id <= 0 {
+        return 0
+    }
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        if orm_cell_by(q, i, "kind") == "material" {
+            if orm_cell_by_i64(q, i, "inventory_account_id") == inventory_id {
+                return orm_cell_by_i64(q, i, "offset_account_id")
+            }
+        }
+        i = i + 1
+    }
+    return 0
+}

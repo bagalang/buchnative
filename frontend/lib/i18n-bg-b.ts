@@ -602,4 +602,18 @@ export const bgB = {
   "security.disable": "Изключи 2FA",
   "security.disabled": "2FA е изключена",
   "security.disable_hint": "Парола и текущ TOTP или резервен код.",
+  "stock.rules.title": "Правила за изписване",
+  "stock.rules.hint":
+    "Всяко правило свързва складова сметка с насрещна. За продукция има и междинна сметка. Номера не се попълват автоматично. Може да има повече от едно правило за един и същ вид. При изписване на материали без изрична разходна сметка се ползва правилото за съответната складова сметка.",
+  "stock.rules.kind": "Вид",
+  "stock.rules.kind.goods": "Стоки",
+  "stock.rules.kind.production": "Продукция",
+  "stock.rules.kind.material": "Материали",
+  "stock.rules.inventory": "Складова сметка",
+  "stock.rules.offset": "Насрещна сметка",
+  "stock.rules.clearing": "Междинна сметка",
+  "stock.rules.add": "Добави правило",
+  "stock.rules.empty": "Няма правила",
+  "stock.rules.pick": "Изберете сметка",
+  "stock.rules.delete_confirm": "Изтриване на правилото?",
 };

@@ -238,3 +238,7 @@ fn RID_EXCHANGE_RATES_CROSS() -> i64 { return 302 }
 
 fn RID_FX_OPEN_ITEMS() -> i64 { return 303 }
 fn RID_FX_REVALUE() -> i64 { return 304 }
+
+fn RID_STOCK_RULES_INDEX() -> i64 { return 305 }
+fn RID_STOCK_RULES_CREATE() -> i64 { return 306 }
+fn RID_STOCK_RULES_DELETE() -> i64 { return 307 }

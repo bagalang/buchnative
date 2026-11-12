@@ -275,6 +275,7 @@ export const bgA = {
   "vat.manual_save": "Запиши клетките",
   "vat.manual_saved": "Клетките са записани",
   "settings.tab.closing": "Приключване",
+  "settings.tab.stock": "Склад",
   "per.close_month": "Приключи",
   "closing.already_done": "Този месец вече е приключен. Изтрийте записа от дневника, за да приключите отново.",
   "closing.preview_total": "Оборот",

@@ -601,4 +601,18 @@ export const enB = {
   "security.disable": "Disable 2FA",
   "security.disabled": "2FA is off",
   "security.disable_hint": "Password and a current TOTP or backup code.",
+  "stock.rules.title": "Write-off rules",
+  "stock.rules.hint":
+    "Each rule links an inventory account to an offset account. Production also has a clearing account. Account numbers are not auto-filled. There can be more than one rule per kind. When issuing materials without an explicit expense account, the rule for the inventory account is used.",
+  "stock.rules.kind": "Kind",
+  "stock.rules.kind.goods": "Goods",
+  "stock.rules.kind.production": "Production",
+  "stock.rules.kind.material": "Materials",
+  "stock.rules.inventory": "Inventory account",
+  "stock.rules.offset": "Offset account",
+  "stock.rules.clearing": "Clearing account",
+  "stock.rules.add": "Add rule",
+  "stock.rules.empty": "No rules",
+  "stock.rules.pick": "Pick an account",
+  "stock.rules.delete_confirm": "Delete this rule?",
 };

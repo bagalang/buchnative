@@ -1,0 +1,140 @@
+// actions/stock_rules.baga — правила за изписване на склада (настройки на
+// фирмата). CRUD: коя складова сметка към коя насрещна се изписва, по вид
+// (goods/production/material). Продукцията носи и междинна сметка.
+// Порт на ytbuch stock_rules. Ползва се и при изписване на материали.
+
+import "../models/stock_rule.baga"
+import "../models/account.baga"
+import "active_company.baga"
+import "acl.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+fn sr_jopt_i64(doc: JsonDoc, obj: i64, key: str, def: i64) -> JField {
+    if json_get(doc, obj, key) < 0 {
+        return jfield_ok_i64(def, int_to_str(def))
+    }
+    return jreq_i64(doc, obj, key)
+}
+
+fn sr_kind_ok(kind: str) -> i64 {
+    if kind == "goods" {
+        return 1
+    }
+    if kind == "production" {
+        return 1
+    }
+    if kind == "material" {
+        return 1
+    }
+    return 0
+}
+
+fn act_stock_rules_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:read")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let q = sr_by_company(ac.db, ac.id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    return act_ok(orm_db_q(q), sr_list_json(q))
+}
+
+fn act_stock_rules_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:write")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    if ac.id <= 0 {
+        return act_err(ac.db, 422, "няма избрана активна фирма")
+    }
+    let kind_f = jreq_str(b.doc, b.root, "kind")
+    if kind_f.ok == 0 {
+        return act_422_field(ac.db, "kind", kind_f)
+    }
+    let kind = str_trim(kind_f.val)
+    if sr_kind_ok(kind) == 0 {
+        return act_err(ac.db, 422, "видът е goods, production или material")
+    }
+    let inv = sr_jopt_i64(b.doc, b.root, "inventory_account_id", 0).num
+    let off = sr_jopt_i64(b.doc, b.root, "offset_account_id", 0).num
+    let mut clr = sr_jopt_i64(b.doc, b.root, "clearing_account_id", 0).num
+    if kind != "production" {
+        clr = 0
+    }
+    let mut d = ac.db
+    let ia = account_find(d, inv)?
+    if orm_ok_q(ia) == 0 || orm_nrows(ia) < 1 {
+        return act_err(orm_db_q(ia), 422, "складовата сметка е задължителна")
+    }
+    d = orm_db_q(ia)
+    let oa = account_find(d, off)?
+    if orm_ok_q(oa) == 0 || orm_nrows(oa) < 1 {
+        return act_err(orm_db_q(oa), 422, "насрещната сметка е задължителна")
+    }
+    d = orm_db_q(oa)
+    if kind == "production" {
+        let ca = account_find(d, clr)?
+        if orm_ok_q(ca) == 0 || orm_nrows(ca) < 1 {
+            return act_err(orm_db_q(ca), 422, "междинната сметка е задължителна за продукция")
+        }
+        d = orm_db_q(ca)
+    }
+    let ins = sr_create(d, ac.id, kind, inv, off, clr)?
+    if orm_ok_q(ins) == 0 || orm_nrows(ins) < 1 {
+        return act_err(orm_db_q(ins), 500, "rule insert failed")
+    }
+    return act_created(orm_db_q(ins), sr_to_json(ins, 0))
+}
+
+fn act_stock_rules_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_perm(ctx, db, "accounting:write")?
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let q = sr_find(db, id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "правилото не е намерено")
+    }
+    let ac = active_company_id(orm_db_q(q), auth.ctx.user_sub)?
+    if orm_cell_by_i64(q, 0, "company_id") != ac.id {
+        return act_404(ac.db, "правилото не е намерено")
+    }
+    let del = sr_delete(ac.db, id)?
+    if orm_ok(del) == 0 {
+        return act_err(orm_db_exec(del), 500, orm_err_exec(del))
+    }
+    return act_no_content(orm_db_exec(del))
+}

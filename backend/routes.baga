@@ -24,6 +24,7 @@ import "actions/invoices_ubl.baga"
 import "actions/invoices_post.baga"
 import "actions/invoices_special.baga"
 import "actions/material_issue.baga"
+import "actions/stock_rules.baga"
 import "actions/profile.baga"
 import "actions/stock.baga"
 import "actions/health.baga"
@@ -161,6 +162,9 @@ fn fmr_build_app() -> FmrApp !IO {
     app = fmr_route_meta(app, "DELETE", "/v1/material-issues/{id}", RID_MI_DELETE(), "", "material-issues", 0, "", "-", "204", "")
     app = fmr_route_meta(app, "POST", "/v1/material-issues/{id}/confirm", RID_MI_CONFIRM(), "", "material-issues", 0, "", "MaterialIssue", "200", "")
     app = fmr_route_meta(app, "POST", "/v1/material-issues/{id}/unpost", RID_MI_UNPOST(), "", "material-issues", 0, "", "MaterialIssue", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/stock/rules", RID_STOCK_RULES_INDEX(), "", "stock-rules", 0, "", "StockRuleList", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/stock/rules", RID_STOCK_RULES_CREATE(), "", "stock-rules", 0, "StockRuleCreate", "StockRule", "201", "")
+    app = fmr_route_meta(app, "DELETE", "/v1/stock/rules/{id}", RID_STOCK_RULES_DELETE(), "", "stock-rules", 0, "", "-", "204", "")
     app = fmr_route_meta(app, "POST", "/v1/invoices/{id}/issue-protocol", RID_INVOICES_ISSUE_PROTOCOL(), "", "invoices", 0, "IssueProtocol", "Invoice", "201", "")
     app = fmr_route_meta(app, "POST", "/v1/invoices/{id}/issue-customs", RID_INVOICES_ISSUE_CUSTOMS(), "", "invoices", 0, "IssueCustoms", "Invoice", "201", "")
     app = fmr_route_meta(app, "POST", "/v1/me/name", RID_ME_NAME(), "", "profile", 0, "ProfileName", "Message", "200", "")
@@ -397,6 +401,9 @@ fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     if id == RID_MI_DELETE() { return act_mi_delete(ctx, db)? }
     if id == RID_MI_CONFIRM() { return act_mi_confirm(ctx, db)? }
     if id == RID_MI_UNPOST() { return act_mi_unpost(ctx, db)? }
+    if id == RID_STOCK_RULES_INDEX() { return act_stock_rules_index(ctx, db)? }
+    if id == RID_STOCK_RULES_CREATE() { return act_stock_rules_create(ctx, db)? }
+    if id == RID_STOCK_RULES_DELETE() { return act_stock_rules_delete(ctx, db)? }
     if id == RID_INVOICES_ISSUE_PROTOCOL() { return act_invoices_issue_protocol(ctx, db)? }
     if id == RID_INVOICES_ISSUE_CUSTOMS() { return act_invoices_issue_customs(ctx, db)? }
     if id == RID_ME_NAME() { return act_me_name(ctx, db)? }

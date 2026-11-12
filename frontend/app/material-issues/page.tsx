@@ -36,6 +36,14 @@ interface Line {
   inventory_account_id?: number;
 }
 
+interface StockRule {
+  id: number;
+  kind: string;
+  inventory_account_id: number;
+  offset_account_id: number;
+  clearing_account_id: number;
+}
+
 interface Doc {
   id: number;
   number: string;
@@ -52,6 +60,7 @@ function MiInner() {
   const [docs, setDocs] = useState<Doc[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [stockRules, setStockRules] = useState<StockRule[]>([]);
   const [locations, setLocations] = useState<CompanyLocation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -72,15 +81,17 @@ function MiInner() {
     setLoading(true);
     setError("");
     try {
-      const [d, p, a, loc] = await Promise.all([
+      const [d, p, a, loc, sr] = await Promise.all([
         api.get<ListResponse<Doc>>("/v1/material-issues"),
         api.get<ListResponse<Product>>("/v1/products"),
-        api.get<ListResponse<Account>>("/v1/accounts"),
+        api.get<ListResponse<Account>>("/v1/accounts?limit=1000"),
         fetchCompanyLocations(),
+        api.get<ListResponse<StockRule>>("/v1/stock/rules").catch(() => ({ items: [] as StockRule[], count: 0 })),
       ]);
       setDocs(d.items ?? []);
       setProducts(p.items ?? []);
       setAccounts(a.items ?? []);
+      setStockRules(sr.items ?? []);
       setLocations(loc);
       if (loc.length > 0 && form.location_id === 0) {
         setForm({ ...form, location_id: loc[0].id });
@@ -254,9 +265,18 @@ function MiInner() {
                       onChange={(e) => {
                         const pid = Number(e.target.value);
                         const p = products.find((x) => x.id === pid);
+                        const invAcc = p?.inventory_account_id ?? 0;
+                        // Без изрична разходна сметка → правило за материал.
+                        const rule = stockRules.find(
+                          (r) => r.kind === "material" && r.inventory_account_id === invAcc
+                        );
                         setLine(i, {
                           product_id: pid,
-                          inventory_account_id: p?.inventory_account_id ?? 0,
+                          inventory_account_id: invAcc,
+                          account_id:
+                            lines[i].account_id > 0
+                              ? lines[i].account_id
+                              : rule?.offset_account_id ?? 0,
                         });
                       }}
                     >

@@ -9,6 +9,7 @@ import { RequireAuth } from "../../components/RequireAuth";
 import { useI18n } from "../../components/I18nProvider";
 import { DocumentSeriesTab, DocSeries } from "../../components/DocumentSeriesTab";
 import { ClosingSettingsTab } from "../../components/ClosingSettingsTab";
+import { SettingsStockTab } from "../../components/SettingsStockTab";
 import { FsFormulasTab } from "../../components/FsFormulasTab";
 import { SettingsCompanyTab } from "../../components/SettingsCompanyTab";
 import { SettingsSaftTab } from "../../components/SettingsSaftTab";
@@ -50,7 +51,7 @@ function parseKeys(raw: unknown): { mistral_api_key: string; zhipu_api_key: stri
 function SettingsInner() {
   const { t } = useI18n();
   const [activeId, setActiveId] = useState(0);
-  const [tab, setTab] = useState<0 | 1 | 2 | 3 | 4>(0);
+  const [tab, setTab] = useState<0 | 1 | 2 | 3 | 4 | 5>(0);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [splitting, setSplitting] = useState(false);
@@ -508,6 +509,13 @@ function SettingsInner() {
         >
           {t("settings.tab.closing")}
         </button>
+        <button
+          type="button"
+          className={`tab${tab === 5 ? " tab-active" : ""}`}
+          onClick={() => setTab(5)}
+        >
+          {t("settings.tab.stock")}
+        </button>
       </div>
 
       {tab === 0 && (
@@ -581,6 +589,7 @@ function SettingsInner() {
 
       {tab === 3 && <FsFormulasTab />}
       {tab === 4 && <ClosingSettingsTab />}
+      {tab === 5 && <SettingsStockTab />}
     </>
   );
 }
