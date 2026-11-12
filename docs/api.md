@@ -63,7 +63,15 @@ VIES (нужен JWT; ключът е на **активната** фирма):
 | POST | `/v1/invoices/{id}/post` |
 | GET | `/v1/invoices/{id}/print?format=pdf\|docx\|odt` |
 | GET | `/v1/invoices/{id}/ubl` |
-| GET/POST | `/v1/journal`, GET/PUT `/v1/journal/{id}` |
+| GET/POST | `/v1/journal`, GET/PUT/DELETE `/v1/journal/{id}` |
+| POST | `/v1/journal/bulk/delete` `{ids: […]}` |
+
+`GET /v1/journal` филтри (сървърни, с пагинация `limit`/`offset` и `total`):
+`q` (описание/документ/контрагент), `date_from`, `date_to`, `vat_type`
+(`purchase`/`sales`/`no_vat`), `counterpart_id`, `account_id` (редове по
+сметката). Всеки ред носи количество и курс (универсална статия):
+`fx_quantity`, `fx_rate`, `currency`; `amount` е в основната валута. За
+основната валута (EUR) `fx_quantity=amount`, `fx_rate=1`.
 
 Печатът връща файл `{номер}_{вид}.ext`: `0000000078_invoice.pdf`, `…_credit_note.docx`, `…_debit_note.odt`.
 
@@ -76,6 +84,16 @@ VIES (нужен JWT; ключът е на **активната** фирма):
 | POST | `/v1/internal-docs/{id}/confirm` — **без** journal_entries |
 | GET | `/v1/internal-docs/{id}/print?format=` |
 | GET | `/v1/inventory/at-location?location_id=` |
+| CRUD | `/v1/material-issues` — изписване на материали (чернова → потвърден) |
+| POST | `/v1/material-issues/{id}/confirm` — изважда от склада (WAC/FIFO/LIFO) + запис Дт разход / Кт складова |
+| POST | `/v1/material-issues/{id}/unpost` — връща количеството + трие записа |
+| GET/POST | `/v1/stock/rules`, DELETE `/v1/stock/rules/{id}` — правила за изписване |
+
+`material-issues` ред: `{product_id, quantity, account_id?}`. Без изрична
+разходна сметка се ползва правило за материал по складовата сметка на
+артикула. `stock/rules` (настройки „Склад"): `{kind: goods|production|material,
+inventory_account_id, offset_account_id, clearing_account_id?}` — коя складова
+сметка към коя насрещна се изписва; междинна сметка само за продукция.
 
 ## Периоди и начални салда
 
@@ -147,7 +165,10 @@ JSON на екрана (сумите с точка); файлът е XHTML та�
 | POST | `/v1/saft/movement-mappings/defaults` `{kind}` — само ако няма редове за този вид |
 | PATCH/DELETE | `/v1/saft/movement-mappings/{id}` |
 | GET | `/v1/exchange-rates`, `/v1/exchange-rates/rate?currency=&date=` |
+| GET | `/v1/exchange-rates/cross?from=&to=&date=` — кръстосан курс през EUR (ЕЦБ, as-of) |
 | POST | `/v1/exchange-rates/import` |
+| GET | `/v1/fx/open-items?date=` — отворени валутни позиции към дата |
+| POST | `/v1/fx/revalue` `{date}` — преоценка; курсови разлики по 624/724 |
 | CRUD | `/v1/fixed-asset-categories`, `/v1/fixed-assets` |
 | POST | `/v1/fixed-assets/depreciation/preview` и `/post` |
 | POST | `/v1/fixed-assets/{id}/revalue\|move\|conserve\|end-conserve\|dispose` |

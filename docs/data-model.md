@@ -28,8 +28,10 @@ PK: таблицата има брояч `kv:t:<таблица>:seq` (RESP `INCR
 | `counterparts` | Клиент / доставчик; `currency` = валута по подразбиране на разчетната сметка (default EUR); `vies_address` суров, `street_name` / `building_number` / `region` за SAF-T |
 | `products` | Стоки/услуги; складов флаг, сметки, фирмена наличност |
 | `inventory_lots` | Партиди + `location_id` |
+| `material_issues` / `material_issue_lines` | Изписване на материали (чернова → потвърден); редът носи количество, себестойност, разходна (`account_id`) и складова сметка; потвърждението изважда от склада + запис Дт разход / Кт складова |
+| `stock_account_rules` | Правила за изписване по фирма: `kind` (goods/production/material) + `inventory_account_id` → `offset_account_id`; `clearing_account_id` само за продукция. При изписване без изрична разходна сметка се ползва правилото за материал |
 | `invoices` / `invoice_lines` | Данъчни документи + `location_id`; `currency` + `currency_rate` (ЕЦБ, за 1 EUR) — сумите са във валутата на фактурата |
-| `journal_entries` / `journal_lines` | Дневник; редът има `location_id`; валутните редове имат `currency` + `fx_quantity` + `fx_rate`, а `amount` е в основната валута на фирмата (`companies.currency`): `amount = fx_quantity × fx_rate` (2 знака); `fx_quantity=0` е преоценъчен ред |
+| `journal_entries` / `journal_lines` | Дневник; редът има `location_id`; **универсална статия** — всеки ред носи `fx_quantity` + `fx_rate` (+ `currency` за чужда валута), а `amount` е в основната валута на фирмата (`companies.currency`): `amount = fx_quantity × fx_rate` (2 знака). За основната валута (EUR) `fx_quantity=amount`, `fx_rate=1` (стойността съвпада с количеството); `fx_quantity=0` е преоценъчен ред. Чужда валута само по `is_currency` сметка |
 | `vat_return_lines` | Клетки на ППДДС |
 | `fixed_assets` / `fixed_asset_categories` / `fixed_asset_events` | ДМА; активът има `location_id` |
 | `internal_docs` / `internal_doc_lines` | Вътрешен протокол |
