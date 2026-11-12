@@ -98,21 +98,13 @@ struct FxAtt {
 }
 
 // Валутните полета за конкретен journal ред: само ако транзакцията е във валута
-// И сметката е валутна. Знакът на количеството следва посоката на реда
-// (кредит → минус), за да отвореното количество излиза със знак.
-fn fx_att_line(fx: FxLineData, acc_is_currency: i64, direction: str) -> FxAtt {
+// И сметката е валутна. Количеството се пази БЕЗ знак — знакът по посока
+// (дебит +, кредит −) се прилага при агрегиране на отворените позиции
+// (fx_open_groups), точно както при ръчния запис и фактурите. Обръщане тук
+// би довело до двойно отрицание за кредитните редове.
+fn fx_att_line(fx: FxLineData, acc_is_currency: i64) -> FxAtt {
     if fx.currency == "" || acc_is_currency == 0 {
         return FxAtt { currency: "", fx_quantity: "", fx_rate: "" }
     }
-    let mut q = fx.fx_quantity
-    if direction == "credit" {
-        let qp = dec_parse(fx.fx_quantity)
-        if qp.ok == 1 {
-            let neg = dec_sub(dec_zero(), qp.value)
-            if neg.ok == 1 {
-                q = dec_to_string(neg.value)
-            }
-        }
-    }
-    return FxAtt { currency: fx.currency, fx_quantity: q, fx_rate: fx.fx_rate }
+    return FxAtt { currency: fx.currency, fx_quantity: fx.fx_quantity, fx_rate: fx.fx_rate }
 }

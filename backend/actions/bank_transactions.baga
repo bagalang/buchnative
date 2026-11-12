@@ -331,8 +331,8 @@ fn act_bank_transactions_import(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time
                     if orm_nrows(cacc) > 0 {
                         cacc_cur = orm_cell_by_i64(cacc, 0, "is_currency")
                     }
-                    let fa_d = fx_att_line(fx, dacc_cur, "debit")
-                    let fa_c = fx_att_line(fx, cacc_cur, "credit")
+                    let fa_d = fx_att_line(fx, dacc_cur)
+                    let fa_c = fx_att_line(fx, cacc_cur)
                     let eq = journal_entry_insert(db2, tx.date, "bank", 0, desc, "no_vat", 0, tx.contra_name, "", tx.reference, tx.date, "", base_s, "0", ac.id)?
                     if orm_ok_q(eq) == 0 || orm_nrows(eq) < 1 {
                         return act_err_rb(orm_db_q(eq), 500, "journal entry insert failed")

@@ -154,8 +154,8 @@ fn bank_tx_book_one(db: OrmDb, ac_id: i64, tx_id: i64, contra_account_id: i64, c
     if orm_nrows(cacc) > 0 {
         cacc_cur = orm_cell_by_i64(cacc, 0, "is_currency")
     }
-    let fa_d = fx_att_line(fx, dacc_cur, "debit")
-    let fa_c = fx_att_line(fx, cacc_cur, "credit")
+    let fa_d = fx_att_line(fx, dacc_cur)
+    let fa_c = fx_att_line(fx, cacc_cur)
     let bgn = bb_begin(d0)?
     if orm_ok(bgn) == 0 {
         return bank_book_result_err(orm_err_exec(bgn), 500, orm_db_exec(bgn))
