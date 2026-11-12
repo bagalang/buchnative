@@ -114,12 +114,14 @@ JSON на екрана (сумите с точка); файлът е XHTML та�
 | Метод | Път |
 |--------|-----|
 | CRUD | `/v1/bank-accounts` |
-| GET | `/v1/bank-transactions?bank_account_id=&status=` |
+| GET | `/v1/bank-transactions?bank_account_id=&status=&date_from=&date_to=` |
 | POST | `/v1/bank-transactions/preview` `{bank_account_id, filename, content_base64}` |
 | POST | `/v1/bank-transactions/import` — същият payload; записва новите |
 | POST | `/v1/bank-transactions/{id}/book` `{contra_account_id, counterpart_id?}` (или стария `{debit_account_id, credit_account_id}`) |
 | POST | `/v1/bank-transactions/{id}/reallocate` `{account_id, counterpart_id?}` |
-| DELETE | `/v1/bank-transactions/{id}` |
+| POST | `/v1/bank-transactions/{id}/unbook` — връща в чернова (изтрива записа) |
+| DELETE | `/v1/bank-transactions/{id}` — изтрива транзакцията и свързания запис |
+| POST | `/v1/bank-transactions/bulk` `{action: "unbook"\|"delete", ids: […]}` — групово, в една транзакция |
 
 Формати на извлечението: OBB XML, ISO camt.053, PostBank XML, MT-940, CSV.
 Прегледът маркира дубликати преди импорт.

@@ -230,3 +230,6 @@ fn RID_BANK_RULES_UPDATE() -> i64 { return 296 }
 fn RID_BANK_RULES_DELETE() -> i64 { return 297 }
 fn RID_BANK_RULES_DEFAULTS() -> i64 { return 298 }
 fn RID_BANK_TRANSACTIONS_AUTO() -> i64 { return 299 }
+
+fn RID_BANK_TRANSACTIONS_UNBOOK() -> i64 { return 300 }
+fn RID_BANK_TRANSACTIONS_BULK() -> i64 { return 301 }

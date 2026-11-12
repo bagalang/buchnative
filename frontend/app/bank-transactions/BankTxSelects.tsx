@@ -58,6 +58,11 @@ export function AccountSelect({
   onSearch: (v: string) => void;
   onChange: (v: number) => void;
 }) {
+  // Текущата сметка трябва да е в списъка, дори когато филтърът я
+  // изпусне — иначе select-а лъжливо показва „изберете сметка“.
+  const opts = filterAccounts(chartAccounts, search);
+  const current = value > 0 ? chartAccounts.find((a) => a.id === value) : undefined;
+  const list = current && !opts.some((a) => a.id === current.id) ? [current, ...opts] : opts;
   return (
     <div>
       <input
@@ -73,7 +78,7 @@ export function AccountSelect({
         onChange={(e) => onChange(Number(e.target.value))}
       >
         <option value={0}>{t("bank_tx.pick_account")}</option>
-        {filterAccounts(chartAccounts, search).map((a) => (
+        {list.map((a) => (
           <option key={a.id} value={a.id}>
             {a.number} {a.name}
           </option>

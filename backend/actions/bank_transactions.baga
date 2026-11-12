@@ -4,6 +4,7 @@
 import "../models/bank_account.baga"
 import "../models/bank_transaction.baga"
 import "../models/journal.baga"
+import "bank_tx_book.baga"
 import "bank_parse.baga"
 import "active_company.baga"
 import "txn.baga"
@@ -40,12 +41,21 @@ fn act_bank_transactions_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     // Филтър по статус (new/booked/allocated) — в приложението, за да не се
     // разчита на две '=' условия в BoilaSQL.
     let status = fmr_query(ctx, "status")
+    let date_from = str_trim(fmr_query(ctx, "date_from"))
+    let date_to = str_trim(fmr_query(ctx, "date_to"))
     let mut arr = jarr_new()
     let mut i: i64 = 0
     while i < orm_nrows(q) {
         let booked = orm_cell_by_i64(q, i, "is_booked")
         let allocated = orm_cell_by_i64(q, i, "is_allocated")
         let mut keep: i64 = 1
+        let d = orm_cell_by(q, i, "txn_date")
+        if date_from != "" && d < date_from {
+            keep = 0
+        }
+        if date_to != "" && d > date_to {
+            keep = 0
+        }
         if status == "new" {
             if booked != 0 {
                 keep = 0
@@ -354,40 +364,131 @@ fn act_bank_transactions_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if orm_ok_db(db) == 0 {
         return act_err(db, 503, "database unavailable")
     }
-    let tq = bank_tx_find(db, id)?
-    if orm_ok_q(tq) == 0 {
-        return act_err(orm_db_q(tq), 500, orm_err_q(tq))
-    }
-    if orm_nrows(tq) < 1 {
-        return act_404(orm_db_q(tq), "Транзакцията не е намерена")
-    }
-    let ac = active_company_id(orm_db_q(tq), auth.ctx.user_sub)?
-    if orm_cell_by_i64(tq, 0, "company_id") != ac.id {
-        return act_404(ac.db, "Транзакцията не е намерена")
-    }
-    let entry_id = orm_cell_by_i64(tq, 0, "journal_entry_id")
-    let mut d0 = orm_db_q(tq)
-    let bgn = bb_begin(d0)?
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    let bgn = bb_begin(ac.db)?
     if orm_ok(bgn) == 0 {
         return act_err(orm_db_exec(bgn), 500, orm_err_exec(bgn))
     }
-    let mut db2 = orm_db_exec(bgn)
-    // Изтрий свързания счетоводен запис (редове + запис).
-    if entry_id > 0 {
-        let jdel = journal_delete_entry(db2, entry_id)?
-        if orm_ok(jdel) == 0 {
-            return act_err_rb(orm_db_exec(jdel), 500, orm_err_exec(jdel))
-        }
-        db2 = orm_db_exec(jdel)
+    let mut d = orm_db_exec(bgn)
+    let r = bank_tx_delete_one(d, ac.id, id)?
+    if r.ok == 0 {
+        return act_err_rb(r.db, r.status, r.err)
     }
-    let del = bank_tx_delete(db2, id)?
-    if orm_ok(del) == 0 {
-        return act_err_rb(orm_db_exec(del), 500, orm_err_exec(del))
-    }
-    db2 = orm_db_exec(del)
-    let cmt = bb_commit(db2)?
+    d = r.db
+    let cmt = bb_commit(d)?
     if orm_ok(cmt) == 0 {
         return act_err_rb(orm_db_exec(cmt), 500, orm_err_exec(cmt))
     }
     return act_no_content(orm_db_exec(cmt))
+}
+
+// Връщане в чернова: маха счетоводния запис и нулира флаговете на транзакцията.
+fn act_bank_transactions_unbook(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let id = fmr_param_i64(ctx, "id")
+    if id <= 0 {
+        return act_err(db, 400, "invalid id")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    let bgn = bb_begin(ac.db)?
+    if orm_ok(bgn) == 0 {
+        return act_err(orm_db_exec(bgn), 500, orm_err_exec(bgn))
+    }
+    let mut d = orm_db_exec(bgn)
+    let r = bank_tx_unbook_one(d, ac.id, id)?
+    if r.ok == 0 {
+        return act_err_rb(r.db, r.status, r.err)
+    }
+    d = r.db
+    let cmt = bb_commit(d)?
+    if orm_ok(cmt) == 0 {
+        return act_err_rb(orm_db_exec(cmt), 500, orm_err_exec(cmt))
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "message", "транзакцията е върната в чернова")
+    return act_ok(orm_db_exec(cmt), o)
+}
+
+// Групово връщане в чернова/изтриване по списък от id-та (селекция в списъка).
+fn act_bank_transactions_bulk(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let action = jreq_str(b.doc, b.root, "action")
+    if action.ok == 0 {
+        return act_422_field(db, "action", action)
+    }
+    if action.val != "unbook" && action.val != "delete" {
+        return act_err(db, 422, "action трябва да е unbook/delete")
+    }
+    let node = json_get(b.doc, b.root, "ids")
+    if node < 0 {
+        return act_err(db, 422, "липсва ids")
+    }
+    if json_tag(b.doc, node) != 5 {
+        return act_err(db, 422, "ids трябва да е масив")
+    }
+    let n = json_count(b.doc, node)
+    if n < 1 {
+        return act_err(db, 422, "ids е празен")
+    }
+    if n > 500 {
+        return act_err(db, 422, "ids е твърде дълъг (макс 500)")
+    }
+    let ac = active_company_id(db, auth.ctx.user_sub)?
+    let bgn = bb_begin(ac.db)?
+    if orm_ok(bgn) == 0 {
+        return act_err(orm_db_exec(bgn), 500, orm_err_exec(bgn))
+    }
+    let mut d = orm_db_exec(bgn)
+    let mut i: i64 = 0
+    let mut done: i64 = 0
+    while i < n {
+        let el = json_at(b.doc, node, i)
+        if json_tag(b.doc, el) != 3 {
+            return act_err_rb(d, 422, concat("ids[", concat(int_to_str(i), "] не е число")))
+        }
+        let id = parse_int(json_serialize(b.doc, el))
+        if action.val == "unbook" {
+            let r = bank_tx_unbook_one(d, ac.id, id)?
+            if r.ok == 0 {
+                return act_err_rb(r.db, r.status, r.err)
+            }
+            d = r.db
+        } else {
+            let r = bank_tx_delete_one(d, ac.id, id)?
+            if r.ok == 0 {
+                return act_err_rb(r.db, r.status, r.err)
+            }
+            d = r.db
+        }
+        done = done + 1
+        i = i + 1
+    }
+    let cmt = bb_commit(d)?
+    if orm_ok(cmt) == 0 {
+        return act_err_rb(orm_db_exec(cmt), 500, orm_err_exec(cmt))
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "action", action.val)
+    o = jobj_i64(o, "processed", done)
+    return act_ok(orm_db_exec(cmt), o)
 }

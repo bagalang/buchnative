@@ -279,3 +279,69 @@ fn bank_tx_reallocate_one(db: OrmDb, ac_id: i64, tx_id: i64, new_account_id: i64
     }
     return bank_book_result_ok(orm_db_exec(cmt), entry_id)
 }
+
+// Изтриване на една транзакция заедно със счетоводния запис. Работи в
+// транзакцията на извикващия (единично или групово).
+fn bank_tx_delete_one(db: OrmDb, ac_id: i64, id: i64) -> BankBookResult !IO !Net {
+    let tq = bank_tx_find(db, id)?
+    if orm_ok_q(tq) == 0 {
+        return bank_book_result_err(orm_err_q(tq), 500, orm_db_q(tq))
+    }
+    if orm_nrows(tq) < 1 {
+        return bank_book_result_err("Транзакцията не е намерена", 404, orm_db_q(tq))
+    }
+    if orm_cell_by_i64(tq, 0, "company_id") != ac_id {
+        return bank_book_result_err("Транзакцията не е намерена", 404, orm_db_q(tq))
+    }
+    let entry_id = orm_cell_by_i64(tq, 0, "journal_entry_id")
+    let mut d = orm_db_q(tq)
+    if entry_id > 0 {
+        let jdel = journal_delete_entry(d, entry_id)?
+        if orm_ok(jdel) == 0 {
+            return bank_book_result_err(orm_err_exec(jdel), 500, orm_db_exec(jdel))
+        }
+        d = orm_db_exec(jdel)
+    }
+    let del = bank_tx_delete(d, id)?
+    if orm_ok(del) == 0 {
+        return bank_book_result_err(orm_err_exec(del), 500, orm_db_exec(del))
+    }
+    return bank_book_result_ok(orm_db_exec(del), 0)
+}
+
+// Връщане в чернова на една транзакция: маха записа и нулира флаговете.
+// Работи в транзакцията на извикващия (единично или групово).
+fn bank_tx_unbook_one(db: OrmDb, ac_id: i64, id: i64) -> BankBookResult !IO !Net {
+    let tq = bank_tx_find(db, id)?
+    if orm_ok_q(tq) == 0 {
+        return bank_book_result_err(orm_err_q(tq), 500, orm_db_q(tq))
+    }
+    if orm_nrows(tq) < 1 {
+        return bank_book_result_err("Транзакцията не е намерена", 404, orm_db_q(tq))
+    }
+    if orm_cell_by_i64(tq, 0, "company_id") != ac_id {
+        return bank_book_result_err("Транзакцията не е намерена", 404, orm_db_q(tq))
+    }
+    let entry_id = orm_cell_by_i64(tq, 0, "journal_entry_id")
+    let mut d = orm_db_q(tq)
+    if entry_id > 0 {
+        let jdel = journal_delete_entry(d, entry_id)?
+        if orm_ok(jdel) == 0 {
+            return bank_book_result_err(orm_err_exec(jdel), 500, orm_db_exec(jdel))
+        }
+        d = orm_db_exec(jdel)
+    }
+    let cols = vec_new()
+    vec_push(cols, "is_booked")
+    vec_push(cols, "is_allocated")
+    vec_push(cols, "journal_entry_id")
+    let vals = vec_new()
+    vec_push(vals, "0")
+    vec_push(vals, "0")
+    vec_push(vals, "0")
+    let up = orm_update_by_id(d, bank_tx_table(), id, cols, vals)?
+    if orm_ok(up) == 0 {
+        return bank_book_result_err(orm_err_exec(up), 500, orm_db_exec(up))
+    }
+    return bank_book_result_ok(orm_db_exec(up), 0)
+}
