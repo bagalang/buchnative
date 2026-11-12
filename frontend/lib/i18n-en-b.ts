@@ -482,6 +482,11 @@ export const enB = {
   "journal.fx_quantity": "Currency qty",
   "journal.fx_rate": "Rate",
   "journal.fx_fetch": "ECB rate",
+  "journal.quantity": "Quantity",
+  "journal.quantity_hint":
+    "Quantity in the line's currency. Value = quantity × rate. For EUR (rate 1) the value equals the quantity.",
+  "journal.value_derived_hint":
+    "Value in base currency = quantity × rate (derived, not entered)",
   "journal.filter.date_from": "From date",
   "journal.filter.date_to": "To date",
   "journal.filter.all_vat": "All VAT types",

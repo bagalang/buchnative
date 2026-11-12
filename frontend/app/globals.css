@@ -481,6 +481,13 @@ textarea {
   margin-top: -4px;
 }
 
+.journal-value-derived {
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  cursor: default;
+}
+
 @media (max-width: 720px) {
   .journal-fx-row {
     grid-template-columns: 1fr;

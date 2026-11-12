@@ -483,6 +483,11 @@ export const bgB = {
   "journal.fx_quantity": "Количество валута",
   "journal.fx_rate": "Курс",
   "journal.fx_fetch": "Курс от ЕЦБ",
+  "journal.quantity": "Количество",
+  "journal.quantity_hint":
+    "Количество във валутата на реда. Стойността = количество × курс. За EUR (курс 1) стойността съвпада с количеството.",
+  "journal.value_derived_hint":
+    "Стойност в основната валута = количество × курс (производна, не се въвежда)",
   "journal.filter.date_from": "От дата",
   "journal.filter.date_to": "До дата",
   "journal.filter.all_vat": "Всички ДДС типове",

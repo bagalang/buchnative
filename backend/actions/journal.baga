@@ -69,10 +69,43 @@ fn journal_line_fx_parse(b: JBody, elem: i64, acc_is_currency: i64, base: str, a
     let fq_in = str_trim(jopt_str(b.doc, elem, "fx_quantity", "").val)
     let fr_in = str_trim(jopt_str(b.doc, elem, "fx_rate", "").val)
     if cur == "" {
-        if fq_in != "" || fr_in != "" {
-            return line_fx_err("fx_quantity/fx_rate се попълват само при валута, различна от основната")
+        // Универсална статия (Option B): базовият ред също има количество и
+        // курс — количество=amount, курс=1 (стойността съвпада с количеството).
+        let mut fq = fq_in
+        let mut fr = fr_in
+        if fq == "" {
+            fq = amount
         }
-        return LineFx { ok: 1, err: "", currency: "", fx_quantity: "", fx_rate: "" }
+        if fr == "" {
+            fr = "1"
+        }
+        let qp = dec_parse(fq)
+        if qp.ok == 0 {
+            return line_fx_err(concat("невалидно fx_quantity: ", fq))
+        }
+        let rp = dec_parse(fr)
+        if rp.ok == 0 {
+            return line_fx_err(concat("невалиден fx_rate: ", fr))
+        }
+        if dec_cmp(rp.value, dec_zero()) <= 0 {
+            return line_fx_err("fx_rate трябва да е положителен")
+        }
+        let ap = dec_parse(amount)
+        if ap.ok == 0 {
+            return line_fx_err(concat("невалидна сума: ", amount))
+        }
+        let m = dec_mul(qp.value, rp.value)
+        if m.ok == 0 {
+            return line_fx_err(m.err)
+        }
+        let r2 = dec_round_dp(m.value, 2)
+        if r2.ok == 0 {
+            return line_fx_err(r2.err)
+        }
+        if dec_cmp(r2.value, ap.value) != 0 {
+            return line_fx_err(concat("amount трябва да е fx_quantity × fx_rate до 2 знака (очаквани ", concat(dec_to_string(r2.value), ")")))
+        }
+        return LineFx { ok: 1, err: "", currency: "", fx_quantity: fq, fx_rate: fr }
     }
     if len(cur) != 3 {
         return line_fx_err("currency трябва да е ISO код от 3 букви (напр. USD)")

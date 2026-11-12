@@ -102,17 +102,19 @@ fn journal_line_to_json(q: OrmQuery, row: i64) -> JObj {
     if va != "" {
         o = jobj_str(o, "vat_amount", va)
     }
+    // Универсална статия: всеки ред носи количество/курс (базов: qty=amount,
+    // курс=1), затова се връщат и при празна валута.
     let cur = orm_cell_by(q, row, "currency")
     if cur != "" {
         o = jobj_str(o, "currency", cur)
-        let fq = orm_cell_by(q, row, "fx_quantity")
-        if fq != "" {
-            o = jobj_str(o, "fx_quantity", fq)
-        }
-        let fr = orm_cell_by(q, row, "fx_rate")
-        if fr != "" {
-            o = jobj_str(o, "fx_rate", fr)
-        }
+    }
+    let fq = orm_cell_by(q, row, "fx_quantity")
+    if fq != "" {
+        o = jobj_str(o, "fx_quantity", fq)
+    }
+    let fr = orm_cell_by(q, row, "fx_rate")
+    if fr != "" {
+        o = jobj_str(o, "fx_rate", fr)
     }
     let cp = orm_cell_by_i64(q, row, "counterpart_id")
     if cp > 0 {
@@ -257,7 +259,20 @@ fn journal_line_insert(db: OrmDb, entry_id: i64, account_id: i64, direction: str
 // С валутни данни: currency (празно = основна валута), fx_quantity (сума във
 // валутата), fx_rate (единици основна валута за 1 единица от currency).
 // amount остава в основната валута: amount = fx_quantity × fx_rate (2 знака).
+// Универсална статия (Option B): всеки ред има количество/курс. За базов ред
+// (currency="") количество=amount, курс=1, така че стойността съвпада с
+// количеството. Чужда валута носи изрични fx_quantity/fx_rate.
 fn journal_line_insert_fx(db: OrmDb, entry_id: i64, account_id: i64, direction: str, amount: str, vat_amount: str, currency: str, fx_quantity: str, fx_rate: str, counterpart_id: i64, product_id: i64, location_id: i64) -> OrmExec !IO !Net {
+    let mut fq = fx_quantity
+    let mut fr = fx_rate
+    if currency == "" {
+        if fq == "" {
+            fq = amount
+        }
+        if fr == "" {
+            fr = "1"
+        }
+    }
     let cols: Vec<str> = vec_new()
     vec_push(cols, "entry_id")
     vec_push(cols, "account_id")
@@ -277,8 +292,8 @@ fn journal_line_insert_fx(db: OrmDb, entry_id: i64, account_id: i64, direction: 
     vec_push(vals, amount)
     vec_push(vals, vat_amount)
     vec_push(vals, currency)
-    vec_push(vals, fx_quantity)
-    vec_push(vals, fx_rate)
+    vec_push(vals, fq)
+    vec_push(vals, fr)
     vec_push(vals, int_to_str(counterpart_id))
     vec_push(vals, int_to_str(product_id))
     vec_push(vals, int_to_str(location_id))
