@@ -344,3 +344,131 @@ fn kvpage_invoices_count(db: OrmDb, table: str, col: str, val: str, cols: Vec<st
     vec_push(mi, 2)
     return kvpage_apply_count(q, ei, ev, needle, mi, 9, cm)
 }
+
+// ── Дневник: филтри по дати, ДДС тип, контрагент, сметка + търсене ─────────
+// journal_entry_cols: id=0, entry_date=1, description=4, vat_type=5,
+// counterpart_id=6, counterpart_name=7, document_number=9.
+
+// Множество от entry_id-та, които имат ред по дадена сметка (за филтъра).
+fn kvpage_journal_acc_set(db: OrmDb, line_table: str, account_id: i64) -> Map<i64, i64> !IO !Net {
+    let m: Map<i64, i64> = map_new()
+    if account_id <= 0 {
+        return m
+    }
+    let lc: Vec<str> = vec_new()
+    vec_push(lc, "entry_id")
+    vec_push(lc, "account_id")
+    let lq = kv_select_all(db, line_table, lc)?
+    if orm_ok_q(lq) == 1 {
+        let mut i: i64 = 0
+        while i < orm_nrows(lq) {
+            if orm_cell_by_i64(lq, i, "account_id") == account_id {
+                map_set(m, orm_cell_by_i64(lq, i, "entry_id"), 1)
+            }
+            i = i + 1
+        }
+    }
+    return m
+}
+
+// Индекси на редовете, които минават всички филтри (без странициране).
+fn kvpage_journal_match(q: OrmQuery, needle: str, date_from: str, date_to: str, vat_type: str, cp_id: str, acc_set: Map<i64, i64>, use_acc: i64, cm: Map<i64, str>) -> Vec<i64> {
+    let out: Vec<i64> = vec_new()
+    let s = kvpage_lower(str_trim(needle))
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        let mut ok = 1
+        let ed = orm_cell_by(q, i, "entry_date")
+        if date_from != "" && ed < date_from {
+            ok = 0
+        }
+        if date_to != "" && ed > date_to {
+            ok = 0
+        }
+        if vat_type != "" && orm_cell_by(q, i, "vat_type") != vat_type {
+            ok = 0
+        }
+        if cp_id != "" && orm_cell_by(q, i, "counterpart_id") != cp_id {
+            ok = 0
+        }
+        if use_acc == 1 && map_has(acc_set, orm_cell_by_i64(q, i, "id")) == 0 {
+            ok = 0
+        }
+        if ok == 1 && s != "" {
+            let mut hit = 0
+            if str_find(kvpage_lower(orm_cell_by(q, i, "description")), s) >= 0 {
+                hit = 1
+            }
+            if str_find(kvpage_lower(orm_cell_by(q, i, "document_number")), s) >= 0 {
+                hit = 1
+            }
+            if str_find(kvpage_lower(orm_cell_by(q, i, "counterpart_name")), s) >= 0 {
+                hit = 1
+            }
+            if hit == 0 && map_len(cm) > 0 && map_has(cm, orm_cell_by_i64(q, i, "counterpart_id")) == 1 {
+                hit = 1
+            }
+            if hit == 0 {
+                ok = 0
+            }
+        }
+        if ok == 1 {
+            vec_push(out, i)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn kvpage_journal(db: OrmDb, table: str, col: str, val: str, cols: Vec<str>, line_table: str, limit: i64, offset: i64, needle: str, date_from: str, date_to: str, vat_type: str, cp_id: str, account_id: i64) -> OrmQuery !IO !Net {
+    let q = kvpage_where(db, table, col, val, cols, 0, 0)?
+    if orm_ok_q(q) == 0 {
+        return q
+    }
+    let acc_set = kvpage_journal_acc_set(db, line_table, account_id)?
+    let cm = kvpage_name_map(db, needle)
+    let mut use_acc: i64 = 0
+    if account_id > 0 {
+        use_acc = 1
+    }
+    let idx = kvpage_journal_match(q, needle, date_from, date_to, vat_type, cp_id, acc_set, use_acc, cm)
+    let cells: Vec<str> = vec_new()
+    let nulls: Vec<i64> = vec_new()
+    let mut k = offset
+    if k < 0 {
+        k = 0
+    }
+    let mut taken: i64 = 0
+    let n = vec_len(idx)
+    while k < n {
+        if limit > 0 && taken >= limit {
+            k = n
+        } else {
+            let row = vec_get(idx, k)
+            let mut c: i64 = 0
+            while c < vec_len(cols) {
+                vec_push(cells, orm_cell(q, row, c))
+                vec_push(nulls, 0)
+                c = c + 1
+            }
+            taken = taken + 1
+            k = k + 1
+        }
+    }
+    return kv_query_ok(orm_db_q(q), cols, cells, nulls, taken)
+}
+
+fn kvpage_journal_count(db: OrmDb, table: str, col: str, val: str, cols: Vec<str>, line_table: str, needle: str, date_from: str, date_to: str, vat_type: str, cp_id: str, account_id: i64) -> i64 !IO !Net {
+    let q = kvpage_where(db, table, col, val, cols, 0, 0)?
+    if orm_ok_q(q) == 0 {
+        return 0
+    }
+    let acc_set = kvpage_journal_acc_set(db, line_table, account_id)?
+    let cm = kvpage_name_map(db, needle)
+    let mut use_acc: i64 = 0
+    if account_id > 0 {
+        use_acc = 1
+    }
+    let idx = kvpage_journal_match(q, needle, date_from, date_to, vat_type, cp_id, acc_set, use_acc, cm)
+    return vec_len(idx)
+}

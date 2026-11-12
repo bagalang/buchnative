@@ -145,7 +145,7 @@ fn fmr_build_app() -> FmrApp !IO {
     app = fmr_route_meta(app, "POST", "/v1/invoices/{id}/post", RID_INVOICES_POST(), "", "invoices", 0, "", "JournalEntry", "201", "")
     app = fmr_route_meta(app, "GET", "/v1/invoices/{id}/print", RID_INVOICES_PRINT(), "", "invoices", 0, "", "-", "200", "format:s,copy:s")
     app = fmr_route_meta(app, "GET", "/v1/invoices/{id}/ubl", RID_INVOICES_UBL(), "", "invoices", 0, "", "-", "200", "")
-    app = fmr_route_meta(app, "GET", "/v1/journal", RID_JOURNAL_INDEX(), "", "journal", 0, "", "JournalList", "200", "limit,offset")
+    app = fmr_route_meta(app, "GET", "/v1/journal", RID_JOURNAL_INDEX(), "", "journal", 0, "", "JournalList", "200", "limit,offset,q,date_from,date_to,vat_type,counterpart_id,account_id")
     app = fmr_route_meta(app, "POST", "/v1/journal", RID_JOURNAL_CREATE(), "", "journal", 0, "JournalCreate", "JournalEntry", "201", "")
     app = fmr_route_meta(app, "GET", "/v1/journal/{id}", RID_JOURNAL_SHOW(), "", "journal", 0, "", "JournalEntry", "200", "")
     app = fmr_route_meta(app, "PUT", "/v1/journal/{id}", RID_JOURNAL_UPDATE(), "", "journal", 0, "JournalUpdate", "JournalEntry", "200", "")

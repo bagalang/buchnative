@@ -133,16 +133,17 @@ fn act_journal_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     let page = act_page(ctx, 50, 200)
     let ac = active_company_id(db, auth.ctx.user_sub)?
     let qs = str_trim(fmr_query(ctx, "q"))
-    let mc: Vec<i64> = vec_new()
-    vec_push(mc, 4)
-    vec_push(mc, 9)
-    vec_push(mc, 7)
-    let q = kvpage_search(ac.db, journal_entry_table(), "company_id", int_to_str(ac.id), journal_entry_cols(), page.limit, page.offset, qs, mc)?
+    let date_from = str_trim(fmr_query(ctx, "date_from"))
+    let date_to = str_trim(fmr_query(ctx, "date_to"))
+    let vat_type = str_trim(fmr_query(ctx, "vat_type"))
+    let cp_id = str_trim(fmr_query(ctx, "counterpart_id"))
+    let account_id = parse_int(fmr_query(ctx, "account_id"))
+    let q = kvpage_journal(ac.db, journal_entry_table(), "company_id", int_to_str(ac.id), journal_entry_cols(), journal_line_table(), page.limit, page.offset, qs, date_from, date_to, vat_type, cp_id, account_id)?
     if orm_ok_q(q) == 0 {
         return act_err(orm_db_q(q), 500, orm_err_q(q))
     }
     let mut o = journal_list_json_co(q, ac.id)
-    o = jobj_i64(o, "total", kvpage_search_count(ac.db, journal_entry_table(), "company_id", int_to_str(ac.id), journal_entry_cols(), qs, mc)?)
+    o = jobj_i64(o, "total", kvpage_journal_count(ac.db, journal_entry_table(), "company_id", int_to_str(ac.id), journal_entry_cols(), journal_line_table(), qs, date_from, date_to, vat_type, cp_id, account_id)?)
     o = jobj_i64(o, "limit", page.limit)
     o = jobj_i64(o, "offset", page.offset)
     return act_ok(orm_db_q(q), o)

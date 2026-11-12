@@ -10,6 +10,7 @@ import { formatBgDate, todayIso } from "../../lib/dates";
 import { useI18n } from "../../components/I18nProvider";
 import { RequireAuth } from "../../components/RequireAuth";
 import { IconButton } from "../../components/IconButton";
+import { AccountPicker } from "../../components/AccountPicker";
 
 interface JournalEntry {
   id: number;
@@ -23,6 +24,7 @@ interface JournalEntry {
   document_number?: string;
   document_date?: string;
   vat_period?: string;
+  total_amount?: string;
 }
 
 interface JournalLine {
@@ -86,6 +88,15 @@ const VAT_TYPE_LABEL: Record<string, string> = {
   no_vat: "journal.tab.no_vat",
 };
 
+function fmtAmount(v: string | undefined): string {
+  const n = Number(v);
+  if (Number.isNaN(n)) return v ?? "";
+  return n.toLocaleString("bg-BG", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
 function toDateInput(raw: string | undefined): string {
   if (!raw) return "";
   const s = String(raw).trim();
@@ -114,6 +125,11 @@ function JournalInner() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [q, setQ] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [vatType, setVatType] = useState("");
+  const [filterCpId, setFilterCpId] = useState("");
+  const [filterAccId, setFilterAccId] = useState("");
   const [selected, setSelected] = useState<number[]>([]);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [offset, setOffset] = useState(0);
@@ -173,6 +189,39 @@ function JournalInner() {
     }
   };
 
+  const isManual = (en: JournalEntry) =>
+    en.document_type === "manual" || !en.document_type;
+
+  const hasFilters =
+    q !== "" ||
+    dateFrom !== "" ||
+    dateTo !== "" ||
+    vatType !== "" ||
+    filterCpId !== "" ||
+    filterAccId !== "";
+
+  const clearFilters = () => {
+    setQ("");
+    setDateFrom("");
+    setDateTo("");
+    setVatType("");
+    setFilterCpId("");
+    setFilterAccId("");
+    setOffset(0);
+  };
+
+  const handleDelete = async (en: JournalEntry, e?: MouseEvent) => {
+    e?.stopPropagation();
+    if (!window.confirm(t("journal.delete_confirm"))) return;
+    setError("");
+    try {
+      await api.del(`/v1/journal/${en.id}`);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   // Търсенето е на сървъра — локалното филтриране иначе търси само в
   // свалената страница и списъкът мълча се обреже на 50 реда.
   const load = useCallback(async () => {
@@ -184,6 +233,11 @@ function JournalInner() {
         offset: String(offset),
         q,
       });
+      if (dateFrom) p.set("date_from", dateFrom);
+      if (dateTo) p.set("date_to", dateTo);
+      if (vatType) p.set("vat_type", vatType);
+      if (filterCpId) p.set("counterpart_id", filterCpId);
+      if (filterAccId) p.set("account_id", filterAccId);
       const data = await api.get<ListResponse<JournalEntry>>(`/v1/journal?${p.toString()}`);
       setEntries(data.items ?? []);
       setTotal(data.total ?? 0);
@@ -193,13 +247,13 @@ function JournalInner() {
     } finally {
       setLoading(false);
     }
-  }, [limit, offset, q]);
+  }, [limit, offset, q, dateFrom, dateTo, vatType, filterCpId, filterAccId]);
 
   const loadRefs = useCallback(async () => {
     try {
-      const a = await api.get<ListResponse<Account>>("/v1/accounts");
+      const a = await api.get<ListResponse<Account>>("/v1/accounts?limit=1000");
       setAccounts(a.items ?? []);
-      const c = await api.get<ListResponse<Counterpart>>("/v1/counterparts");
+      const c = await api.get<ListResponse<Counterpart>>("/v1/counterparts?limit=1000");
       setCounterparts(c.items ?? []);
     } catch {
       /* празни списъци */
@@ -365,6 +419,10 @@ function JournalInner() {
   const handleSave = async (e: FormEvent) => {
     e.preventDefault();
     if (loadingEntry) return;
+    if (lines.some((l) => !l.accountId)) {
+      setFormError(t("journal.pick_account"));
+      return;
+    }
     setSaving(true);
     setFormError("");
     try {
@@ -422,12 +480,68 @@ function JournalInner() {
 
       {error && <div className="error-text">{error}</div>}
       <div className="card" style={{ marginBottom: 12 }}>
-        <input
-          className="input"
-          value={q}
-          onChange={(e) => { setQ(e.target.value); setOffset(0); }}
-          placeholder={t("common.search")}
-        />
+        <div className="journal-filters">
+          <input
+            className="input journal-filter-search"
+            value={q}
+            onChange={(e) => { setQ(e.target.value); setOffset(0); }}
+            placeholder={t("common.search")}
+          />
+          <input
+            className="input journal-filter-date"
+            type="date"
+            value={dateFrom}
+            onChange={(e) => { setDateFrom(e.target.value); setOffset(0); }}
+            title={t("journal.filter.date_from")}
+            aria-label={t("journal.filter.date_from")}
+          />
+          <input
+            className="input journal-filter-date"
+            type="date"
+            value={dateTo}
+            onChange={(e) => { setDateTo(e.target.value); setOffset(0); }}
+            title={t("journal.filter.date_to")}
+            aria-label={t("journal.filter.date_to")}
+          />
+          <select
+            className="select journal-filter-vat"
+            value={vatType}
+            onChange={(e) => { setVatType(e.target.value); setOffset(0); }}
+            aria-label={t("journal.vat_type")}
+          >
+            <option value="">{t("journal.filter.all_vat")}</option>
+            <option value="purchase">{t("journal.tab.purchase")}</option>
+            <option value="sales">{t("journal.tab.sales")}</option>
+            <option value="no_vat">{t("journal.tab.no_vat")}</option>
+          </select>
+          <select
+            className="select journal-filter-cp"
+            value={filterCpId}
+            onChange={(e) => { setFilterCpId(e.target.value); setOffset(0); }}
+            aria-label={t("journal.counterpart")}
+          >
+            <option value="">{t("journal.filter.all_counterparts")}</option>
+            {counterparts.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+          <div className="journal-filter-acct">
+            <AccountPicker
+              accounts={accounts}
+              value={Number(filterAccId) || 0}
+              onChange={(id) => { setFilterAccId(id ? String(id) : ""); setOffset(0); }}
+              placeholder={t("journal.filter.all_accounts")}
+              allowClear
+            />
+          </div>
+          {hasFilters && (
+            <button className="btn btn-sm" type="button" onClick={clearFilters}>
+              {t("journal.filter.clear")}
+            </button>
+          )}
+        </div>
       </div>
 
       {selected.length > 0 && (
@@ -475,6 +589,7 @@ function JournalInner() {
                   <th>{t("journal.description")}</th>
                   <th>{t("journal.counterpart")}</th>
                   <th>{t("journal.vat_type")}</th>
+                  <th style={{ textAlign: "right" }}>{t("journal.amount")}</th>
                   <th>{t("common.actions")}</th>
                 </tr>
               </thead>
@@ -509,6 +624,11 @@ function JournalInner() {
                         {t(VAT_TYPE_LABEL[en.vat_type] ?? "journal.tab.no_vat")}
                       </span>
                     </td>
+                    <td style={{ textAlign: "right" }}>
+                      <span className="journal-amount">
+                        {fmtAmount(en.total_amount)} {baseCurrency}
+                      </span>
+                    </td>
                     <td onClick={(e) => e.stopPropagation()}>
                       <div className="icon-actions">
                         <IconButton
@@ -516,6 +636,14 @@ function JournalInner() {
                           title={t("common.edit")}
                           onClick={(e) => void openEdit(en, e)}
                         />
+                        {isManual(en) && (
+                          <IconButton
+                            icon="delete"
+                            danger
+                            title={t("common.delete")}
+                            onClick={(e) => void handleDelete(en, e)}
+                          />
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -664,22 +792,13 @@ function JournalInner() {
                 </div>
                 {lines.map((l, i) => (
                   <div key={i} className="journal-line-row">
-                    <select
-                      className="select"
-                      value={l.accountId}
-                      onChange={(e) => setLine(i, "accountId", e.target.value)}
-                      required
+                    <AccountPicker
+                      accounts={accounts}
+                      value={Number(l.accountId) || 0}
+                      onChange={(id) => setLine(i, "accountId", id ? String(id) : "")}
+                      placeholder={`${t("journal.account")}…`}
                       disabled={loadingEntry}
-                    >
-                      <option value="" disabled>
-                        {t("journal.account")}…
-                      </option>
-                      {accounts.map((a) => (
-                        <option key={a.id} value={a.id}>
-                          {a.number} {a.name}
-                        </option>
-                      ))}
-                    </select>
+                    />
                     <select
                       className="select"
                       value={l.direction}
