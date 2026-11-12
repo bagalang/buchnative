@@ -45,6 +45,7 @@ import "actions/periods.baga"
 import "actions/opening_balances.baga"
 import "actions/active_company.baga"
 import "actions/exchange_rates.baga"
+import "actions/fx_report.baga"
 import "actions/bank_accounts.baga"
 import "actions/bank_transactions.baga"
 import "actions/bank_transactions_ops.baga"
@@ -196,7 +197,10 @@ fn fmr_build_app() -> FmrApp !IO {
     app = fmr_route_meta(app, "PUT", "/v1/active-company", RID_ACTIVE_COMPANY_SET(), "", "active-company", 0, "ActiveCompanySet", "Company", "200", "")
     app = fmr_route_meta(app, "GET", "/v1/exchange-rates", RID_EXCHANGE_RATES_INDEX(), "", "exchange-rates", 0, "", "ExchangeRateList", "200", "date")
     app = fmr_route_meta(app, "GET", "/v1/exchange-rates/rate", RID_EXCHANGE_RATES_RATE(), "", "exchange-rates", 0, "", "ExchangeRate", "200", "currency:s,date:s")
+    app = fmr_route_meta(app, "GET", "/v1/exchange-rates/cross", RID_EXCHANGE_RATES_CROSS(), "", "exchange-rates", 0, "", "ExchangeRateCross", "200", "from:s,to:s,date:s")
     app = fmr_route_meta(app, "POST", "/v1/exchange-rates/import", RID_EXCHANGE_RATES_IMPORT(), "", "exchange-rates", 0, "ExchangeRateImport", "ExchangeRateImportResult", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/fx/open-items", RID_FX_OPEN_ITEMS(), "", "fx", 0, "", "FxOpenItems", "200", "date:s")
+    app = fmr_route_meta(app, "POST", "/v1/fx/revalue", RID_FX_REVALUE(), "", "fx", 0, "FxRevalue", "FxRevalueResult", "200", "")
     app = fmr_route_meta(app, "GET", "/v1/internal-docs", RID_IDOC_INDEX(), "", "internal-docs", 0, "", "InternalDocList", "200", "")
     app = fmr_route_meta(app, "POST", "/v1/internal-docs", RID_IDOC_CREATE(), "", "internal-docs", 0, "InternalDocCreate", "InternalDoc", "201", "")
     app = fmr_route_meta(app, "GET", "/v1/internal-docs/next-number", RID_IDOC_NEXT(), "", "internal-docs", 0, "", "InternalDocNumber", "200", "")
@@ -429,7 +433,10 @@ fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     if id == RID_ACTIVE_COMPANY_SET() { return act_active_company_set(ctx, db)? }
     if id == RID_EXCHANGE_RATES_INDEX() { return act_exchange_rates_index(ctx, db)? }
     if id == RID_EXCHANGE_RATES_RATE() { return act_exchange_rates_rate(ctx, db)? }
+    if id == RID_EXCHANGE_RATES_CROSS() { return act_exchange_rates_cross(ctx, db)? }
     if id == RID_EXCHANGE_RATES_IMPORT() { return act_exchange_rates_import(ctx, db)? }
+    if id == RID_FX_OPEN_ITEMS() { return act_fx_open_items(ctx, db)? }
+    if id == RID_FX_REVALUE() { return act_fx_revalue(ctx, db)? }
     if id == RID_IDOC_INDEX() { return act_idoc_index(ctx, db)? }
     if id == RID_IDOC_CREATE() { return act_idoc_create(ctx, db)? }
     if id == RID_IDOC_SHOW() { return act_idoc_show(ctx, db)? }

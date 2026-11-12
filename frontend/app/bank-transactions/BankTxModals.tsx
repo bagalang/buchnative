@@ -4,6 +4,73 @@ import { useEffect, useState } from "react";
 import { BankTransaction, Counterpart, Account, JeLine, Preview } from "./types";
 import { fmtAmount, isPositive } from "./helpers";
 import { AccountSelect, CounterpartSelect } from "./BankTxSelects";
+import { api, getActiveCompany } from "../../lib/api";
+
+// При валутна транзакция (валута ≠ основната на фирмата) показва кръстосания
+// курс от ЕЦБ as-of датата и сумата в основната валута — същото пресмятане,
+// което backend-ът прави при осчетоводяване.
+function FxPreview({ t, tx }: { t: (k: string) => string; tx: BankTransaction }) {
+  const [base, setBase] = useState("");
+  const [rate, setRate] = useState("");
+  const [rateDate, setRateDate] = useState("");
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    getActiveCompany()
+      .then((c) => {
+        const cur = (c as { currency?: unknown }).currency;
+        if (!cancelled && typeof cur === "string" && cur) setBase(cur);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setRate("");
+    setErr("");
+    const cur = (tx.currency || "").trim().toUpperCase();
+    if (!cur || !tx.transaction_date) return;
+    getActiveCompany()
+      .then(async (c) => {
+        const b = ((c as { currency?: unknown }).currency as string) || "EUR";
+        if (cur === b) return;
+        const r = await api.get<{ rate: string; rate_date: string }>(
+          `/v1/exchange-rates/cross?from=${encodeURIComponent(cur)}&to=${encodeURIComponent(b)}&date=${tx.transaction_date}`
+        );
+        if (cancelled) return;
+        setBase(b);
+        setRate(r.rate);
+        setRateDate(r.rate_date);
+      })
+      .catch((e) => {
+        if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tx.id, tx.currency, tx.transaction_date]);
+
+  const cur = (tx.currency || "").trim().toUpperCase();
+  if (!cur || !base || cur === base) return null;
+  const amt = parseFloat(tx.amount);
+  const r = parseFloat(rate);
+  const baseAmt = !Number.isNaN(amt) && !Number.isNaN(r) ? (Math.abs(amt) * r).toFixed(2) : "";
+  return (
+    <div className="field" style={{ marginBottom: 12 }}>
+      <label className="label">{t("bank_tx.fx_preview")}</label>
+      <div className="muted" style={{ fontSize: 13 }}>
+        {rate
+          ? `${fmtAmount(tx.amount)} ${cur} × ${rate} = ${baseAmt} ${base}` +
+            (rateDate ? ` (${t("bank_tx.fx_asof")} ${rateDate})` : "")
+          : err || t("bank_tx.fx_loading")}
+      </div>
+    </div>
+  );
+}
 
 export function BankTxModals(props: {
   t: (k: string) => string;
@@ -103,6 +170,9 @@ export function BankTxModals(props: {
         direction: l.direction,
         amount: l.amount,
         vat_amount: "0",
+        ...(l.currency
+          ? { currency: l.currency, fx_quantity: l.fx_quantity ?? "", fx_rate: l.fx_rate ?? "" }
+          : {}),
       })),
     });
     setEditSaving(false);
@@ -293,6 +363,7 @@ export function BankTxModals(props: {
           >
             <h2 className="modal-title">{t("bank_tx.book_title")}</h2>
             {txSummary(bookTx)}
+            <FxPreview t={t} tx={bookTx} />
             {bookTx.description ? (
               <p className="muted" style={{ marginBottom: 12 }}>
                 {bookTx.description}
@@ -460,6 +531,11 @@ export function BankTxModals(props: {
                               setEditLine(ln.id, { amount: e.target.value })
                             }
                           />
+                          {ln.currency ? (
+                            <div className="muted" style={{ fontSize: 12 }}>
+                              {ln.fx_quantity} {ln.currency} × {ln.fx_rate}
+                            </div>
+                          ) : null}
                         </td>
                       </tr>
                     ))}
@@ -489,9 +565,19 @@ export function BankTxModals(props: {
                           </td>
                           <td style={{ textAlign: "right" }}>
                             {ln.direction === "debit" ? fmtAmount(ln.amount) : ""}
+                            {ln.currency ? (
+                              <div className="muted" style={{ fontSize: 12 }}>
+                                {ln.fx_quantity} {ln.currency} × {ln.fx_rate}
+                              </div>
+                            ) : null}
                           </td>
                           <td style={{ textAlign: "right" }}>
                             {ln.direction === "credit" ? fmtAmount(ln.amount) : ""}
+                            {ln.currency ? (
+                              <div className="muted" style={{ fontSize: 12 }}>
+                                {ln.fx_quantity} {ln.currency} × {ln.fx_rate}
+                              </div>
+                            ) : null}
                           </td>
                         </tr>
                       ))}

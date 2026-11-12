@@ -468,6 +468,9 @@ export const bgA = {
   "bank_tx.booked": "Транзакцията е осчетоводена.",
   "bank_tx.reallocated": "Транзакцията е разнесена.",
   "bank_tx.book_title": "Ръчно осчетоводяване",
+  "bank_tx.fx_preview": "Валутен курс (ЕЦБ) и сума в основната валута",
+  "bank_tx.fx_asof": "курс от",
+  "bank_tx.fx_loading": "Зареждане на курса…",
   "bank_tx.book_hint": "Изберете контрагент и кореспондираща сметка:",
   "bank_tx.debit": "Дебит",
   "bank_tx.credit": "Кредит",
@@ -530,6 +533,7 @@ export const bgA = {
   "counterparts.post_code": "Пощенски код",
   "counterparts.email": "Имейл",
   "counterparts.phone": "Телефон",
+  "counterparts.currency": "Валута по подразбиране",
   "counterparts.is_client": "Клиент",
   "counterparts.is_supplier": "Доставчик",
   // стоки и услуги

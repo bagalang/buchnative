@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useState, FormEvent, MouseEvent } from "react";
 import { Pager } from "../../components/Pager";
-import { api, ListResponse } from "../../lib/api";
+import { api, ListResponse, getActiveCompany } from "../../lib/api";
 import { formatBgDate, todayIso } from "../../lib/dates";
 import { useI18n } from "../../components/I18nProvider";
 import { RequireAuth } from "../../components/RequireAuth";
@@ -31,6 +31,9 @@ interface JournalLine {
   direction: string;
   amount: string;
   vat_amount?: string;
+  currency?: string;
+  fx_quantity?: string;
+  fx_rate?: string;
   account_number?: string;
   account_name?: string;
   location_id?: number;
@@ -41,12 +44,14 @@ interface Account {
   id: number;
   number: string;
   name: string;
+  is_currency?: boolean;
 }
 
 interface Counterpart {
   id: number;
   name: string;
   counterpart_type: string;
+  currency?: string;
 }
 
 type Tab = "purchase" | "sales" | "no_vat";
@@ -56,6 +61,9 @@ interface LineDraft {
   direction: "debit" | "credit";
   amount: string;
   vatAmount: string;
+  currency: string;
+  fxQuantity: string;
+  fxRate: string;
   locationId: number;
   productId: number;
 }
@@ -65,6 +73,9 @@ const emptyLine = (): LineDraft => ({
   direction: "debit",
   amount: "",
   vatAmount: "",
+  currency: "",
+  fxQuantity: "",
+  fxRate: "",
   locationId: 0,
   productId: 0,
 });
@@ -123,6 +134,16 @@ function JournalInner() {
   const [lines, setLines] = useState<LineDraft[]>([emptyLine()]);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
+  const [baseCurrency, setBaseCurrency] = useState("EUR");
+
+  useEffect(() => {
+    getActiveCompany()
+      .then((c) => {
+        const cur = (c as { currency?: unknown }).currency;
+        if (typeof cur === "string" && cur) setBaseCurrency(cur);
+      })
+      .catch(() => {});
+  }, []);
 
   const toggleOne = (id: number, on: boolean) => {
     setSelected((prev) => (on ? [...prev, id] : prev.filter((x) => x !== id)));
@@ -223,6 +244,9 @@ function JournalInner() {
       direction: l.direction === "credit" ? ("credit" as const) : ("debit" as const),
       amount: l.amount ?? "",
       vatAmount: l.vat_amount && l.vat_amount !== "0" ? l.vat_amount : "",
+      currency: l.currency ?? "",
+      fxQuantity: l.fx_quantity ?? "",
+      fxRate: l.fx_rate ?? "",
       locationId: l.location_id ?? 0,
       productId: l.product_id ?? 0,
     }));
@@ -250,12 +274,63 @@ function JournalInner() {
 
   const setLine = (
     i: number,
-    f: "accountId" | "direction" | "amount" | "vatAmount",
+    f:
+      | "accountId"
+      | "direction"
+      | "amount"
+      | "vatAmount"
+      | "currency"
+      | "fxQuantity"
+      | "fxRate",
     v: string
   ) =>
     setLines((prev) =>
-      prev.map((l, idx) => (idx === i ? { ...l, [f]: v } : l))
+      prev.map((l, idx) => {
+        if (idx !== i) return l;
+        const next = { ...l, [f]: v };
+        // amount в основната валута = количество × курс (2 знака), когато и
+        // двете са попълнени — backend-ът проверява същото.
+        if ((f === "fxQuantity" || f === "fxRate") && next.fxQuantity && next.fxRate) {
+          const q = parseFloat(next.fxQuantity);
+          const r = parseFloat(next.fxRate);
+          if (!Number.isNaN(q) && !Number.isNaN(r)) {
+            next.amount = (q * r).toFixed(2);
+          }
+        }
+        return next;
+      })
     );
+
+  // Курс от ЕЦБ (кръстосан през EUR) as-of датата на записа; преизчислява сумата.
+  const fetchFxRate = async (i: number) => {
+    const l = lines[i];
+    const cur = l.currency.trim().toUpperCase();
+    if (!cur || !entryDate) return;
+    try {
+      const r = await api.get<{ rate: string; rate_date: string }>(
+        `/v1/exchange-rates/cross?from=${encodeURIComponent(cur)}&to=${encodeURIComponent(baseCurrency)}&date=${entryDate}`
+      );
+      setLines((prev) =>
+        prev.map((x, idx) => {
+          if (idx !== i) return x;
+          const next = { ...x, fxRate: r.rate };
+          if (x.fxQuantity) {
+            const q = parseFloat(x.fxQuantity);
+            const rr = parseFloat(r.rate);
+            if (!Number.isNaN(q) && !Number.isNaN(rr)) {
+              next.amount = (q * rr).toFixed(2);
+            }
+          }
+          return next;
+        })
+      );
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const accountIsCurrency = (id: string) =>
+    accounts.find((a) => String(a.id) === id)?.is_currency === true;
 
   const addLine = () => setLines((prev) => [...prev, emptyLine()]);
 
@@ -301,14 +376,26 @@ function JournalInner() {
         document_number: documentNumber,
         document_date: documentDate,
         vat_period: tab === "no_vat" ? "" : vatPeriod,
-        lines: lines.map((l) => ({
-          account_id: Number(l.accountId),
-          direction: l.direction,
-          amount: l.amount,
-          vat_amount: l.vatAmount || "0",
-          location_id: l.locationId || 0,
-          product_id: l.productId || 0,
-        })),
+        lines: lines.map((l) => {
+          const cur = l.currency.trim().toUpperCase();
+          const fx =
+            cur && cur !== baseCurrency
+              ? {
+                  currency: cur,
+                  fx_quantity: l.fxQuantity,
+                  fx_rate: l.fxRate,
+                }
+              : {};
+          return {
+            account_id: Number(l.accountId),
+            direction: l.direction,
+            amount: l.amount,
+            vat_amount: l.vatAmount || "0",
+            ...fx,
+            location_id: l.locationId || 0,
+            product_id: l.productId || 0,
+          };
+        }),
       };
       if (editingId) {
         await api.put(`/v1/journal/${editingId}`, payload);
@@ -509,7 +596,17 @@ function JournalInner() {
                   <select
                     className="select"
                     value={counterpartId}
-                    onChange={(e) => setCounterpartId(e.target.value)}
+                    onChange={(e) => {
+                      setCounterpartId(e.target.value);
+                      // Валутата на контрагента е default за редовете без валута.
+                      const cp = counterparts.find((c) => String(c.id) === e.target.value);
+                      const cur = (cp?.currency ?? "EUR").toUpperCase();
+                      if (cur && cur !== baseCurrency) {
+                        setLines((prev) =>
+                          prev.map((l) => (l.currency === "" ? { ...l, currency: cur } : l))
+                        );
+                      }
+                    }}
                     disabled={loadingEntry}
                   >
                     <option value="">—</option>
@@ -623,6 +720,48 @@ function JournalInner() {
                     >
                       ✕
                     </button>
+                    {accountIsCurrency(l.accountId) && (
+                      <div className="journal-fx-row">
+                        <input
+                          className="input"
+                          placeholder={t("journal.currency")}
+                          title={t("journal.currency")}
+                          maxLength={3}
+                          value={l.currency}
+                          onChange={(e) =>
+                            setLine(i, "currency", e.target.value.toUpperCase())
+                          }
+                          disabled={loadingEntry}
+                        />
+                        <input
+                          className="input"
+                          inputMode="decimal"
+                          placeholder={t("journal.fx_quantity")}
+                          title={t("journal.fx_quantity")}
+                          value={l.fxQuantity}
+                          onChange={(e) => setLine(i, "fxQuantity", e.target.value)}
+                          disabled={loadingEntry}
+                        />
+                        <input
+                          className="input"
+                          inputMode="decimal"
+                          placeholder={t("journal.fx_rate")}
+                          title={t("journal.fx_rate")}
+                          value={l.fxRate}
+                          onChange={(e) => setLine(i, "fxRate", e.target.value)}
+                          disabled={loadingEntry}
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          onClick={() => void fetchFxRate(i)}
+                          disabled={loadingEntry || !l.currency || !entryDate}
+                          title={t("journal.fx_fetch")}
+                        >
+                          {t("journal.fx_fetch")}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

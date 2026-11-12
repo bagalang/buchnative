@@ -233,3 +233,8 @@ fn RID_BANK_TRANSACTIONS_AUTO() -> i64 { return 299 }
 
 fn RID_BANK_TRANSACTIONS_UNBOOK() -> i64 { return 300 }
 fn RID_BANK_TRANSACTIONS_BULK() -> i64 { return 301 }
+
+fn RID_EXCHANGE_RATES_CROSS() -> i64 { return 302 }
+
+fn RID_FX_OPEN_ITEMS() -> i64 { return 303 }
+fn RID_FX_REVALUE() -> i64 { return 304 }

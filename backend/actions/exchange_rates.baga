@@ -12,6 +12,7 @@ import "xmlbaga/xml.baga"
 import "std/net/http_client.baga"
 import "std/os/os.baga"
 import "std/crypto/pkey.baga"
+import "std/str/str.baga"
 
 fn ecb_url_daily() -> str {
     return "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"
@@ -111,6 +112,42 @@ fn act_exchange_rates_rate(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     o = jobj_str(o, "rate", orm_cell_by(q, row, "rate"))
     o = jobj_str(o, "base", "EUR")
     return act_ok(orm_db_q(q), o)
+}
+
+// Кръстосан курс: ?from=USD&to=BGN&date=2026-11-12 → единици BGN за 1 USD,
+// през EUR (ЕЦБ курсовете са за 1 EUR), as-of към най-близката предходна дата.
+fn act_exchange_rates_cross(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let from = str_trim(fmr_query(ctx, "from"))
+    if from == "" {
+        return act_err(db, 400, "from е задължителен")
+    }
+    let to = str_trim(fmr_query(ctx, "to"))
+    if to == "" {
+        return act_err(db, 400, "to е задължителен")
+    }
+    let date = fmr_query(ctx, "date")
+    if date == "" {
+        return act_err(db, 400, "date е задължителен (YYYY-MM-DD)")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let c = exchange_rate_cross(db, from, to, date)?
+    if c.ok == 0 {
+        return act_404(c.db, c.err)
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "from", c.from)
+    o = jobj_str(o, "to", c.to)
+    o = jobj_str(o, "rate", c.rate)
+    o = jobj_str(o, "rate_date", c.rate_date)
+    o = jobj_str(o, "requested_date", date)
+    o = jobj_str(o, "base", "EUR")
+    return act_ok(c.db, o)
 }
 
 // Импорт от ЕЦБ: body {mode: "daily"|"history"} (по подразбиране daily).

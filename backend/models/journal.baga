@@ -47,6 +47,9 @@ fn journal_line_cols() -> Vec<str> {
     vec_push(c, "direction")
     vec_push(c, "amount")
     vec_push(c, "vat_amount")
+    vec_push(c, "currency")
+    vec_push(c, "fx_quantity")
+    vec_push(c, "fx_rate")
     vec_push(c, "counterpart_id")
     vec_push(c, "product_id")
     vec_push(c, "location_id")
@@ -98,6 +101,18 @@ fn journal_line_to_json(q: OrmQuery, row: i64) -> JObj {
     let va = orm_cell_by(q, row, "vat_amount")
     if va != "" {
         o = jobj_str(o, "vat_amount", va)
+    }
+    let cur = orm_cell_by(q, row, "currency")
+    if cur != "" {
+        o = jobj_str(o, "currency", cur)
+        let fq = orm_cell_by(q, row, "fx_quantity")
+        if fq != "" {
+            o = jobj_str(o, "fx_quantity", fq)
+        }
+        let fr = orm_cell_by(q, row, "fx_rate")
+        if fr != "" {
+            o = jobj_str(o, "fx_rate", fr)
+        }
     }
     let cp = orm_cell_by_i64(q, row, "counterpart_id")
     if cp > 0 {
@@ -234,13 +249,24 @@ fn journal_entry_insert(db: OrmDb, entry_date: str, document_type: str, document
 }
 
 // Вмъква journal_line; counterpart_id/product_id са с нищо (0 → без стойност).
+// Без валутни данни: currency="" означава основната валута на фирмата.
 fn journal_line_insert(db: OrmDb, entry_id: i64, account_id: i64, direction: str, amount: str, vat_amount: str, counterpart_id: i64, product_id: i64, location_id: i64) -> OrmExec !IO !Net {
+    return journal_line_insert_fx(db, entry_id, account_id, direction, amount, vat_amount, "", "", "", counterpart_id, product_id, location_id)
+}
+
+// С валутни данни: currency (празно = основна валута), fx_quantity (сума във
+// валутата), fx_rate (единици основна валута за 1 единица от currency).
+// amount остава в основната валута: amount = fx_quantity × fx_rate (2 знака).
+fn journal_line_insert_fx(db: OrmDb, entry_id: i64, account_id: i64, direction: str, amount: str, vat_amount: str, currency: str, fx_quantity: str, fx_rate: str, counterpart_id: i64, product_id: i64, location_id: i64) -> OrmExec !IO !Net {
     let cols: Vec<str> = vec_new()
     vec_push(cols, "entry_id")
     vec_push(cols, "account_id")
     vec_push(cols, "direction")
     vec_push(cols, "amount")
     vec_push(cols, "vat_amount")
+    vec_push(cols, "currency")
+    vec_push(cols, "fx_quantity")
+    vec_push(cols, "fx_rate")
     vec_push(cols, "counterpart_id")
     vec_push(cols, "product_id")
     vec_push(cols, "location_id")
@@ -250,12 +276,15 @@ fn journal_line_insert(db: OrmDb, entry_id: i64, account_id: i64, direction: str
     vec_push(vals, direction)
     vec_push(vals, amount)
     vec_push(vals, vat_amount)
+    vec_push(vals, currency)
+    vec_push(vals, fx_quantity)
+    vec_push(vals, fx_rate)
     vec_push(vals, int_to_str(counterpart_id))
     vec_push(vals, int_to_str(product_id))
     vec_push(vals, int_to_str(location_id))
     let nulls: Vec<i64> = vec_new()
     let mut i: i64 = 0
-    while i < 8 {
+    while i < 11 {
         vec_push(nulls, 0)
         i = i + 1
     }
@@ -308,6 +337,47 @@ fn journal_lines_list_json(q: OrmQuery) -> JArr {
         i = i + 1
     }
     return arr
+}
+
+// Всички journal_lines с валутните полета + датата и фирмата от заглавния ред
+// (за справката отворени валутни позиции и преоценката).
+fn journal_lines_fx_all(db: OrmDb) -> OrmQuery !IO !Net {
+    let base: Vec<str> = vec_new()
+    vec_push(base, "id")
+    vec_push(base, "entry_id")
+    vec_push(base, "account_id")
+    vec_push(base, "direction")
+    vec_push(base, "amount")
+    vec_push(base, "currency")
+    vec_push(base, "fx_quantity")
+    vec_push(base, "fx_rate")
+    vec_push(base, "counterpart_id")
+    let lq = kv_select_all_order(db, journal_line_table(), "id", base)?
+    if orm_ok_q(lq) == 0 {
+        return lq
+    }
+    let ecols: Vec<str> = vec_new()
+    vec_push(ecols, "id")
+    vec_push(ecols, "entry_date")
+    vec_push(ecols, "company_id")
+    let eq = kv_select_all(orm_db_q(lq), journal_entry_table(), ecols)?
+    if orm_ok_q(eq) == 0 {
+        return lq
+    }
+    let show: Vec<str> = vec_new()
+    vec_push(show, "id")
+    vec_push(show, "entry_id")
+    vec_push(show, "account_id")
+    vec_push(show, "direction")
+    vec_push(show, "amount")
+    vec_push(show, "currency")
+    vec_push(show, "fx_quantity")
+    vec_push(show, "fx_rate")
+    vec_push(show, "counterpart_id")
+    let keys = kv_col_values(lq, "entry_id")
+    let with_date = kv_attach(lq, show, keys, kv_map_of(eq, "id", "entry_date"), "entry_date")
+    let cols2 = kv_cols_plus(show, "entry_date")
+    return kv_attach(with_date, cols2, keys, kv_map_of(eq, "id", "company_id"), "company_id")
 }
 
 // KV изтрива по PK, затова редовете на записа минават през индекса на entry_id.

@@ -134,6 +134,52 @@ fn kv_mig_account_eur(db: OrmDb, table: str, cols: Vec<str>, vals: Vec<str>, nul
     return 1
 }
 
+// Контрагентите стават мултивалутни: валута по подразбиране на разчетната
+// сметка е EUR (празното се чете като EUR и при четене).
+fn kv_mig_counterpart_currency(db: OrmDb, table: str, cols: Vec<str>, vals: Vec<str>, nulls: Vec<i64>, id: str) -> i64 !Net !IO !Time {
+    return kv_mig_set_default(cols, vals, nulls, "currency", "EUR")
+}
+
+// Валутни сметки: групи 4xx (разчети) и 5xx (парични средства / финансови
+// активи) се маркират с is_currency=1 — по тях се води количество във валута.
+fn kv_mig_account_is_currency(db: OrmDb, table: str, cols: Vec<str>, vals: Vec<str>, nulls: Vec<i64>, id: str) -> i64 !Net !IO !Time {
+    let mut ni: i64 = 0 - 1
+    let mut ci: i64 = 0 - 1
+    let mut i: i64 = 0
+    while i < vec_len(cols) {
+        if vec_get(cols, i) == "number" {
+            ni = i
+        }
+        if vec_get(cols, i) == "is_currency" {
+            ci = i
+        }
+        i = i + 1
+    }
+    if ni < 0 {
+        return 0
+    }
+    let num = vec_get(vals, ni)
+    if len(num) < 1 {
+        return 0
+    }
+    let g0 = char_at(num, 0)
+    if g0 != 52 && g0 != 53 {
+        return 0
+    }
+    if ci >= 0 {
+        if vec_get(nulls, ci) == 0 && vec_get(vals, ci) == "1" {
+            return 0
+        }
+        vec_set(vals, ci, "1")
+        vec_set(nulls, ci, 0)
+        return 1
+    }
+    vec_push(cols, "is_currency")
+    vec_push(vals, "1")
+    vec_push(nulls, 0)
+    return 1
+}
+
 // Празен списък е нормалното състояние на ново приложение: схемата се движи
 // с кода, а миграция се добавя само при промяна, която иска преизчисление.
 fn buchnative_kv_migrations() -> KvMigrations {
@@ -145,6 +191,8 @@ fn buchnative_kv_migrations() -> KvMigrations {
     // Амортизационните записи по-рано се вмъкваха с company_id=0.
     m = kv_migrations_add(m, "journal_entries", 20261109004, "journal_entry_company_id", kv_mig_default_company)
     m = kv_migrations_add(m, "accounts", 20261111001, "account_503_eur", kv_mig_account_eur)
+    m = kv_migrations_add(m, "accounts", 20261112001, "account_is_currency", kv_mig_account_is_currency)
+    m = kv_migrations_add(m, "counterparts", 20261112001, "counterpart_currency_eur", kv_mig_counterpart_currency)
     return m
 }
 

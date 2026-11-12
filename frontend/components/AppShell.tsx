@@ -42,6 +42,7 @@ const NAV_ITEMS = [
   { href: "/vat", key: "nav.vat" },
   { href: "/dividends", key: "nav.dividends" },
   { href: "/exchange-rates", key: "nav.exchange_rates" },
+  { href: "/fx", key: "nav.fx" },
   { href: "/saft", key: "nav.saft" },
   { href: "/saft-movement-mappings", key: "nav.saft_mappings" },
   { href: "/nomenclatures", key: "nav.nomenclatures" },

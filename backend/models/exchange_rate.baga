@@ -7,6 +7,7 @@
 import "ormbaga/orm.baga"
 import "fmrbaga/jsonx.baga"
 import "std/str/str.baga"
+import "bagadecimal/src/decimal.baga"
 
 fn exchange_rate_table() -> str {
     return "exchange_rates"
@@ -170,4 +171,75 @@ fn exchange_rate_upsert(db: OrmDb, q: OrmQuery, currency: str, rate: str, date: 
         vec_push(out, 1)
     }
     return orm_db_exec(ins)
+}
+
+// ── кръстосани курсове (през EUR) ────────────────────────────────────────
+//
+// ЕЦБ дава единици от валутата за 1 EUR. Кръстосан курс "единици от `to` за
+// 1 единица от `from`" = per_eur(to) / per_eur(from), as-of към date.
+
+struct FxCross {
+    db: OrmDb,
+    ok: i64,
+    err: str,
+    rate: str,
+    rate_date: str,
+    from: str,
+    to: str
+}
+
+fn fx_cross_err(db: OrmDb, err: str, from: str, to: str) -> FxCross {
+    return FxCross { db: db, ok: 0, err: err, rate: "", rate_date: "", from: from, to: to }
+}
+
+// Единици от currency за 1 EUR, as-of date (най-близката предходна дата).
+fn exchange_rate_per_eur(db: OrmDb, currency: str, date: str) -> FxCross !IO !Net {
+    if currency == "EUR" {
+        return FxCross { db: db, ok: 1, err: "", rate: "1", rate_date: date, from: currency, to: "EUR" }
+    }
+    let q = exchange_rate_by_currency(db, currency)?
+    if orm_ok_q(q) == 0 {
+        return fx_cross_err(orm_db_q(q), orm_err_q(q), currency, "EUR")
+    }
+    let row = exchange_rate_asof_pick(q, date)
+    if row < 0 {
+        return fx_cross_err(orm_db_q(q), concat("няма курс за ", currency), currency, "EUR")
+    }
+    return FxCross { db: orm_db_q(q), ok: 1, err: "", rate: orm_cell_by(q, row, "rate"), rate_date: orm_cell_by(q, row, "date"), from: currency, to: "EUR" }
+}
+
+// Кръстосан курс: единици от `to` за 1 единица от `from`, закръглен до 8 знака.
+fn exchange_rate_cross(db: OrmDb, from: str, to: str, date: str) -> FxCross !IO !Net {
+    if from == to {
+        return FxCross { db: db, ok: 1, err: "", rate: "1", rate_date: date, from: from, to: to }
+    }
+    let a = exchange_rate_per_eur(db, from, date)?
+    if a.ok == 0 {
+        return fx_cross_err(a.db, a.err, from, to)
+    }
+    let b = exchange_rate_per_eur(a.db, to, date)?
+    if b.ok == 0 {
+        return fx_cross_err(b.db, b.err, from, to)
+    }
+    let pa = dec_parse(a.rate)
+    if pa.ok == 0 {
+        return fx_cross_err(b.db, concat("невалиден курс за ", a.from), from, to)
+    }
+    let pb = dec_parse(b.rate)
+    if pb.ok == 0 {
+        return fx_cross_err(b.db, concat("невалиден курс за ", b.from), from, to)
+    }
+    let dv = dec_div(pb.value, pa.value)
+    if dv.ok == 0 {
+        return fx_cross_err(b.db, dv.err, from, to)
+    }
+    let rr = dec_round_dp(dv.value, 8)
+    if rr.ok == 0 {
+        return fx_cross_err(b.db, rr.err, from, to)
+    }
+    let mut d = b.rate_date
+    if er_str_cmp(a.rate_date, d) > 0 {
+        d = a.rate_date
+    }
+    return FxCross { db: b.db, ok: 1, err: "", rate: dec_to_string(rr.value), rate_date: d, from: from, to: to }
 }

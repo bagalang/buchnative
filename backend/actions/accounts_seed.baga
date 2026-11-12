@@ -62,7 +62,17 @@ fn account_seed_from_saft(db: OrmDb) -> AccountSeed !IO !Net !Time {
         if account_seed_has(nums, code) == 1 {
             skipped = skipped + 1
         } else {
-            let ins = account_create(d, code, name, code, "none", 0, 1)?
+            // Валутна сметка: групи 4xx (разчети) и 5xx (парични средства и
+            // финансови активи) — по тях се води количество във валута.
+            let group = saft_nom_at(p, 4)
+            let mut is_cur: i64 = 0
+            if len(group) > 0 {
+                let g0 = char_at(group, 0)
+                if g0 == 52 || g0 == 53 {
+                    is_cur = 1
+                }
+            }
+            let ins = account_create(d, code, name, code, "none", is_cur, 0, 1)?
             if orm_ok_q(ins) == 0 {
                 return account_seed_fail(orm_db_q(ins), orm_err_q(ins))
             }

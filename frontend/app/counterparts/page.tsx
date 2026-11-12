@@ -76,8 +76,9 @@ const config: CrudConfig = {
     { name: "contact_person", labelKey: "counterparts.contact_person", type: "text" },
     { name: "email", labelKey: "counterparts.email", type: "text" },
     { name: "phone", labelKey: "counterparts.phone", type: "text" },
+    { name: "currency", labelKey: "counterparts.currency", type: "text", default: "EUR" },
   ],
-  columns: ["name", "counterpart_type", "eik", "city"],
+  columns: ["name", "counterpart_type", "eik", "currency", "city"],
 };
 
 export default function CounterpartsPage() {

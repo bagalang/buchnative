@@ -85,6 +85,7 @@ fn act_counterparts_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let contact_person = jopt_str(b.doc, b.root, "contact_person", "")
     let email = jopt_str(b.doc, b.root, "email", "")
     let phone = jopt_str(b.doc, b.root, "phone", "")
+    let currency = jopt_str(b.doc, b.root, "currency", "EUR")
     if orm_ok_db(db) == 0 {
         return act_err(db, 503, "database unavailable")
     }
@@ -111,7 +112,7 @@ fn act_counterparts_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
             return act_err(orm_db_q(vq), 409, concat("ДДС номер ", concat(vat_t, " вече се използва")))
         }
     }
-    let ins = counterpart_create(accp.db, name.val, counterpart_type.val, eik.val, vat_number.val, address.val, vies_address.val, city.val, country.val, post_code.val, street_name.val, building_number.val, rn.code, address_building.val, additional_address_detail.val, tn.code, contact_person.val, email.val, phone.val, accp.id)?
+    let ins = counterpart_create(accp.db, name.val, counterpart_type.val, eik.val, vat_number.val, address.val, vies_address.val, city.val, country.val, post_code.val, street_name.val, building_number.val, rn.code, address_building.val, additional_address_detail.val, tn.code, contact_person.val, email.val, phone.val, currency.val, accp.id)?
     if orm_ok(ins) == 0 {
         return act_err(orm_db_exec(ins), 409, orm_err_exec(ins))
     }
@@ -363,6 +364,14 @@ fn act_counterparts_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         }
         vec_push(cols, "phone")
         vec_push(vals, phone.val)
+    }
+    let currency = jopt_str(b.doc, b.root, "currency", "")
+    if currency.present == 1 {
+        if currency.ok == 0 {
+            return act_422_field(db, "currency", currency)
+        }
+        vec_push(cols, "currency")
+        vec_push(vals, currency.val)
     }
     if orm_ok_db(db) == 0 {
         return act_err(db, 503, "database unavailable")

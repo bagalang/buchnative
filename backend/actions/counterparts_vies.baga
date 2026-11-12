@@ -247,7 +247,7 @@ fn act_counterparts_vies_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Rand
             return act_err(orm_db_q(eq), 409, concat("ЕИК ", concat(eik, " вече се използва")))
         }
     }
-    let ins = counterpart_create(acv.db, name, counterpart_type.val, eik, vat, addr, addr, city, country, post, parts.street_name, parts.building_number, parts.region, parts.address_building, parts.additional_address_detail, parts.address_type, "", "", "", acv.id)?
+    let ins = counterpart_create(acv.db, name, counterpart_type.val, eik, vat, addr, addr, city, country, post, parts.street_name, parts.building_number, parts.region, parts.address_building, parts.additional_address_detail, parts.address_type, "", "", "", "EUR", acv.id)?
     if orm_ok(ins) == 0 {
         return act_err(orm_db_exec(ins), 409, orm_err_exec(ins))
     }

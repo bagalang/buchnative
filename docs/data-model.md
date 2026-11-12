@@ -24,18 +24,18 @@ PK: таблицата има брояч `kv:t:<таблица>:seq` (RESP `INCR
 | `production_orders` / `production_order_lines` | Производствена поръчка + материали |
 | `ultimate_parents` | Крайни предприятия-майки |
 | `document_series` | Кочани; `document_types` е CSV от кодове |
-| `accounts` | Сметкоплан; `analytic_type`: none / counterpart / product |
-| `counterparts` | Клиент / доставчик; `vies_address` суров, `street_name` / `building_number` / `region` за SAF-T |
+| `accounts` | Сметкоплан; `analytic_type`: none / counterpart / product; `is_currency=1` = валутна сметка (4xx/5xx) |
+| `counterparts` | Клиент / доставчик; `currency` = валута по подразбиране на разчетната сметка (default EUR); `vies_address` суров, `street_name` / `building_number` / `region` за SAF-T |
 | `products` | Стоки/услуги; складов флаг, сметки, фирмена наличност |
 | `inventory_lots` | Партиди + `location_id` |
-| `invoices` / `invoice_lines` | Данъчни документи + `location_id` |
-| `journal_entries` / `journal_lines` | Дневник; редът има `location_id` |
+| `invoices` / `invoice_lines` | Данъчни документи + `location_id`; `currency` + `currency_rate` (ЕЦБ, за 1 EUR) — сумите са във валутата на фактурата |
+| `journal_entries` / `journal_lines` | Дневник; редът има `location_id`; валутните редове имат `currency` + `fx_quantity` + `fx_rate`, а `amount` е в основната валута на фирмата (`companies.currency`): `amount = fx_quantity × fx_rate` (2 знака); `fx_quantity=0` е преоценъчен ред |
 | `vat_return_lines` | Клетки на ППДДС |
 | `fixed_assets` / `fixed_asset_categories` / `fixed_asset_events` | ДМА; активът има `location_id` |
 | `internal_docs` / `internal_doc_lines` | Вътрешен протокол |
 | `accounting_periods` | Месец: open/closed; липсващ ред = отворен |
 | `opening_balances` | Начално салдо за фискална година по сметка |
-| `exchange_rates` | ЕЦБ курсове по дата |
+| `exchange_rates` | ЕЦБ курсове по дата (за 1 EUR); кръстосан курс през EUR: `GET /v1/exchange-rates/cross?from=&to=&date=` |
 | `settings` | Ключ/стойност (активна фирма). OCR/Mistral ключът е в `companies.settings`, не тук |
 | `users` / `roles` | CRUD екрани `/users` `/roles`; правата още не се налагат на API |
 | `bank_accounts` / `bank_transactions` | Банкови сметки + извлечения; `company_id` на транзакциите |

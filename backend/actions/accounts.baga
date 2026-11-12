@@ -10,6 +10,14 @@ import "fmrbaga/jsonx.baga"
 import "ormbaga/orm.baga"
 import "std/json/json.baga"
 
+// jopt_i64 като в material_issue.baga (jopt_* не са в jsonx).
+fn ac_jopt_i64(doc: JsonDoc, obj: i64, key: str, def: i64) -> JField {
+    if json_get(doc, obj, key) < 0 {
+        return jfield_ok_i64(def, int_to_str(def))
+    }
+    return jreq_i64(doc, obj, key)
+}
+
 fn act_accounts_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     let auth = act_require_auth(ctx, db)
     if auth.ok == 0 {
@@ -53,6 +61,10 @@ fn act_accounts_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     }
     let saft_account_type = jopt_str(b.doc, b.root, "saft_account_type", "")
     let analytic_type = jopt_str(b.doc, b.root, "analytic_type", "none")
+    let isc = ac_jopt_i64(b.doc, b.root, "is_currency", 0)
+    if isc.ok == 0 {
+        return act_422_field(db, "is_currency", isc)
+    }
     // parent_id: липсва → NULL; грешен тип → 422.
     let pid = jreq_i64(b.doc, b.root, "parent_id")
     let mut parent_id: i64 = 0
@@ -76,7 +88,7 @@ fn act_accounts_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if orm_nrows(dup) > 0 {
         return act_err(orm_db_q(dup), 409, concat("сметка ", concat(number.val, " вече съществува")))
     }
-    let ins = account_create(orm_db_q(dup), number.val, name.val, saft_account_type.val, analytic_type.val, parent_id, parent_null)?
+    let ins = account_create(orm_db_q(dup), number.val, name.val, saft_account_type.val, analytic_type.val, isc.num, parent_id, parent_null)?
     if orm_ok_q(ins) == 0 || orm_nrows(ins) < 1 {
         return act_err(orm_db_q(ins), 500, "account insert failed")
     }
@@ -176,6 +188,15 @@ fn act_accounts_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         }
         vec_push(cols, "analytic_type")
         vec_push(vals, analytic_type.val)
+        vec_push(nulls, 0)
+    }
+    let isc = ac_jopt_i64(b.doc, b.root, "is_currency", 0)
+    if json_get(b.doc, b.root, "is_currency") >= 0 {
+        if isc.ok == 0 {
+            return act_422_field(db, "is_currency", isc)
+        }
+        vec_push(cols, "is_currency")
+        vec_push(vals, int_to_str(isc.num))
         vec_push(nulls, 0)
     }
     // parent_id: присъства → стойност или null (JSON null → NULL в БД).

@@ -63,6 +63,11 @@ fn counterpart_to_json(q: OrmQuery, row: i64) -> JObj {
     o = jobj_str(o, "contact_person", orm_cell_by(q, row, "contact_person"))
     o = jobj_str(o, "email", orm_cell_by(q, row, "email"))
     o = jobj_str(o, "phone", orm_cell_by(q, row, "phone"))
+    let mut cur = orm_cell_by(q, row, "currency")
+    if cur == "" {
+        cur = "EUR"
+    }
+    o = jobj_str(o, "currency", cur)
     o = jobj_i64(o, "company_id", orm_cell_by_i64(q, row, "company_id"))
     let ca = orm_cell_by(q, row, "created_at")
     if ca != "" {
@@ -93,6 +98,7 @@ fn counterpart_cols() -> Vec<str> {
     vec_push(c, "contact_person")
     vec_push(c, "email")
     vec_push(c, "phone")
+    vec_push(c, "currency")
     vec_push(c, "company_id")
     vec_push(c, "created_at")
     return c
@@ -128,7 +134,9 @@ fn counterpart_by_vat_co(db: OrmDb, company_id: i64, vat_number: str) -> OrmQuer
     return kv_where2_star(db, counterpart_table(), "company_id", int_to_str(company_id), "vat_number", vat_number)?
 }
 
-fn counterpart_create(db: OrmDb, name: str, counterpart_type: str, eik: str, vat_number: str, address: str, vies_address: str, city: str, country: str, post_code: str, street_name: str, building_number: str, region: str, address_building: str, additional_address_detail: str, address_type: str, contact_person: str, email: str, phone: str, company_id: i64) -> OrmExec !IO !Net !Time {
+// currency е валутата по подразбиране на разчетната сметка с контрагента
+// (мултивалутни 4xx, default EUR); празно се чете като EUR.
+fn counterpart_create(db: OrmDb, name: str, counterpart_type: str, eik: str, vat_number: str, address: str, vies_address: str, city: str, country: str, post_code: str, street_name: str, building_number: str, region: str, address_building: str, additional_address_detail: str, address_type: str, contact_person: str, email: str, phone: str, currency: str, company_id: i64) -> OrmExec !IO !Net !Time {
     let ic = counterpart_is_client(counterpart_type)
     let is_ = counterpart_is_supplier(counterpart_type)
     let cols: Vec<str> = vec_new()
@@ -151,6 +159,7 @@ fn counterpart_create(db: OrmDb, name: str, counterpart_type: str, eik: str, vat
     vec_push(cols, "contact_person")
     vec_push(cols, "email")
     vec_push(cols, "phone")
+    vec_push(cols, "currency")
     vec_push(cols, "company_id")
     vec_push(cols, "created_at")
     let vals: Vec<str> = vec_new()
@@ -173,6 +182,7 @@ fn counterpart_create(db: OrmDb, name: str, counterpart_type: str, eik: str, vat
     vec_push(vals, contact_person)
     vec_push(vals, email)
     vec_push(vals, phone)
+    vec_push(vals, currency)
     vec_push(vals, int_to_str(company_id))
     vec_push(vals, kv_now_iso()?)
     let nulls: Vec<i64> = vec_new()

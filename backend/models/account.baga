@@ -21,6 +21,7 @@ fn account_cols() -> Vec<str> {
     vec_push(c, "name")
     vec_push(c, "saft_account_type")
     vec_push(c, "analytic_type")
+    vec_push(c, "is_currency")
     vec_push(c, "parent_id")
     vec_push(c, "created_at")
     return c
@@ -38,6 +39,7 @@ fn account_to_json(q: OrmQuery, row: i64) -> JObj {
     o = jobj_str(o, "name", orm_cell_by(q, row, "name"))
     o = jobj_str(o, "saft_account_type", orm_cell_by(q, row, "saft_account_type"))
     o = jobj_str(o, "analytic_type", orm_cell_by(q, row, "analytic_type"))
+    o = jobj_bool(o, "is_currency", orm_cell_by_i64(q, row, "is_currency"))
     let pid = orm_cell_by_i64(q, row, "parent_id")
     if pid > 0 {
         o = jobj_i64(o, "parent_id", pid)
@@ -63,12 +65,15 @@ fn account_all(db: OrmDb) -> OrmQuery !IO !Net {
 
 // parent_null==1 → parent_id е NULL (йерархичен корен). id се раздава от
 // брояча на таблицата и се връща в реда (като RETURNING).
-fn account_create(db: OrmDb, number: str, name: str, saft_account_type: str, analytic_type: str, parent_id: i64, parent_null: i64) -> OrmQuery !IO !Net !Time {
+// is_currency=1 маркира валутна сметка (4xx разчети, 5xx парични средства) —
+// по нея редовете в дневника могат да носят валута/количество/курс.
+fn account_create(db: OrmDb, number: str, name: str, saft_account_type: str, analytic_type: str, is_currency: i64, parent_id: i64, parent_null: i64) -> OrmQuery !IO !Net !Time {
     let cols: Vec<str> = vec_new()
     vec_push(cols, "number")
     vec_push(cols, "name")
     vec_push(cols, "saft_account_type")
     vec_push(cols, "analytic_type")
+    vec_push(cols, "is_currency")
     vec_push(cols, "parent_id")
     vec_push(cols, "created_at")
     let vals: Vec<str> = vec_new()
@@ -76,9 +81,11 @@ fn account_create(db: OrmDb, number: str, name: str, saft_account_type: str, ana
     vec_push(vals, name)
     vec_push(vals, saft_account_type)
     vec_push(vals, analytic_type)
+    vec_push(vals, int_to_str(is_currency))
     vec_push(vals, int_to_str(parent_id))
     vec_push(vals, kv_now_iso()?)
     let nulls: Vec<i64> = vec_new()
+    vec_push(nulls, 0)
     vec_push(nulls, 0)
     vec_push(nulls, 0)
     vec_push(nulls, 0)

@@ -6,6 +6,7 @@ import "../models/bank_transaction.baga"
 import "../models/account.baga"
 import "../models/journal.baga"
 import "../models/counterpart.baga"
+import "../models/fx.baga"
 import "bank_suggest.baga"
 import "active_company.baga"
 import "txn.baga"
@@ -82,6 +83,7 @@ fn act_bank_transactions_book(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let mut d0 = orm_db_q(tq)
     let tx_date = orm_cell_by(tq, 0, "txn_date")
     let tx_amount = orm_cell_by(tq, 0, "amount")
+    let tx_currency = orm_cell_by(tq, 0, "currency")
     let tx_desc = orm_cell_by(tq, 0, "description")
     let tx_contra = orm_cell_by(tq, 0, "counterpart_name")
     let tx_ref = orm_cell_by(tq, 0, "reference")
@@ -94,8 +96,26 @@ fn act_bank_transactions_book(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if dec_is_negative(ap.value) != 0 {
         is_deposit = 0
     }
-    let abs = dec_abs(ap.value)
-    let abs_s = dec_to_string(abs)
+    // Валута на банковата сметка; при валутна сметка — курс ЕЦБ as-of датата
+    // и сума в основната валута за journal редовете.
+    let baq0 = bank_account_find(d0, ba_id)?
+    if orm_ok_q(baq0) == 0 {
+        return act_err(orm_db_q(baq0), 500, orm_err_q(baq0))
+    }
+    if orm_nrows(baq0) < 1 {
+        return act_404(orm_db_q(baq0), "Банковата сметка не е намерена")
+    }
+    let mut ba_currency = orm_cell_by(baq0, 0, "currency")
+    if ba_currency == "" {
+        ba_currency = tx_currency
+    }
+    d0 = orm_db_q(baq0)
+    let fx = bank_tx_fx(d0, ac.id, ba_currency, tx_amount, tx_date)?
+    if fx.ok == 0 {
+        return act_err(fx.db, 422, fx.err)
+    }
+    d0 = fx.db
+    let base_s = fx.base_amount
     let mut debit_id: i64 = 0
     let mut credit_id: i64 = 0
     let mut debit_cp: i64 = 0
@@ -163,23 +183,43 @@ fn act_bank_transactions_book(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if tx_contra != "" {
         desc = concat(concat(desc, " - "), tx_contra)
     }
+    let dacc = account_find(d0, debit_id)?
+    if orm_ok_q(dacc) == 0 {
+        return act_err(orm_db_q(dacc), 500, orm_err_q(dacc))
+    }
+    d0 = orm_db_q(dacc)
+    let mut dacc_cur = 0
+    if orm_nrows(dacc) > 0 {
+        dacc_cur = orm_cell_by_i64(dacc, 0, "is_currency")
+    }
+    let cacc = account_find(d0, credit_id)?
+    if orm_ok_q(cacc) == 0 {
+        return act_err(orm_db_q(cacc), 500, orm_err_q(cacc))
+    }
+    d0 = orm_db_q(cacc)
+    let mut cacc_cur = 0
+    if orm_nrows(cacc) > 0 {
+        cacc_cur = orm_cell_by_i64(cacc, 0, "is_currency")
+    }
+    let fa_d = fx_att_line(fx, dacc_cur, "debit")
+    let fa_c = fx_att_line(fx, cacc_cur, "credit")
     let bgn = bb_begin(d0)?
     if orm_ok(bgn) == 0 {
-        return act_err(orm_db_exec(bgn), 500, orm_err_exec(bgn))
+        return act_err_rb(orm_db_exec(bgn), 500, orm_err_exec(bgn))
     }
     let mut db2 = orm_db_exec(bgn)
-    let eq = journal_entry_insert(db2, tx_date, "bank", 0, desc, "no_vat", counterpart_id, cp_name, cp_vat, tx_ref, tx_date, "", abs_s, "0", ac.id)?
+    let eq = journal_entry_insert(db2, tx_date, "bank", 0, desc, "no_vat", counterpart_id, cp_name, cp_vat, tx_ref, tx_date, "", base_s, "0", ac.id)?
     if orm_ok_q(eq) == 0 || orm_nrows(eq) < 1 {
         return act_err_rb(orm_db_q(eq), 500, "journal entry insert failed")
     }
     let entry_id = orm_cell_by_i64(eq, 0, "id")
     db2 = orm_db_q(eq)
-    let l1 = journal_line_insert(db2, entry_id, debit_id, "debit", abs_s, "0", debit_cp, 0, 0)?
+    let l1 = journal_line_insert_fx(db2, entry_id, debit_id, "debit", base_s, "0", fa_d.currency, fa_d.fx_quantity, fa_d.fx_rate, debit_cp, 0, 0)?
     if orm_ok(l1) == 0 {
         return act_err_rb(orm_db_exec(l1), 500, orm_err_exec(l1))
     }
     db2 = orm_db_exec(l1)
-    let l2 = journal_line_insert(db2, entry_id, credit_id, "credit", abs_s, "0", credit_cp, 0, 0)?
+    let l2 = journal_line_insert_fx(db2, entry_id, credit_id, "credit", base_s, "0", fa_c.currency, fa_c.fx_quantity, fa_c.fx_rate, credit_cp, 0, 0)?
     if orm_ok(l2) == 0 {
         return act_err_rb(orm_db_exec(l2), 500, orm_err_exec(l2))
     }

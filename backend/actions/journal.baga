@@ -9,6 +9,8 @@ import "../models/journal.baga"
 import "../models/account.baga"
 import "../models/kvpage.baga"
 import "../models/counterpart.baga"
+import "../models/company.baga"
+import "../models/fx.baga"
 import "txn.baga"
 import "periods.baga"
 import "acl.baga"
@@ -22,6 +24,103 @@ import "ormbaga/orm.baga"
 import "std/json/json.baga"
 import "std/str/str.baga"
 import "bagadecimal/src/decimal.baga"
+
+// ── валутни полета на ред ─────────────────────────────────────────────────
+//
+// currency (ISO код, главни букви; "" = основната валута на фирмата), fx_quantity
+// (сума във валутата на реда), fx_rate (единици основна валута за 1 единица
+// от currency). amount остава в основната валута и трябва да е
+// fx_quantity × fx_rate, закръглено до 2 знака. Валута се позволява само по
+// валутна сметка (accounts.is_currency=1); валутата на фирмата се свежда до "".
+
+struct LineFx {
+    ok: i64,
+    err: str,
+    currency: str,
+    fx_quantity: str,
+    fx_rate: str
+}
+
+fn line_fx_err(err: str) -> LineFx {
+    return LineFx { ok: 0, err: err, currency: "", fx_quantity: "", fx_rate: "" }
+}
+
+fn fx_norm_code(s0: str) -> str {
+    let s = str_trim(s0)
+    let mut out = ""
+    let mut i: i64 = 0
+    while i < len(s) {
+        let c = char_at(s, i)
+        if c >= 97 && c <= 122 {
+            out = concat(out, chr(c - 32))
+        } else {
+            out = concat(out, chr(c))
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn journal_line_fx_parse(b: JBody, elem: i64, acc_is_currency: i64, base: str, amount: str) -> LineFx {
+    let mut cur = fx_norm_code(jopt_str(b.doc, elem, "currency", "").val)
+    if cur == base {
+        cur = ""
+    }
+    let fq_in = str_trim(jopt_str(b.doc, elem, "fx_quantity", "").val)
+    let fr_in = str_trim(jopt_str(b.doc, elem, "fx_rate", "").val)
+    if cur == "" {
+        if fq_in != "" || fr_in != "" {
+            return line_fx_err("fx_quantity/fx_rate се попълват само при валута, различна от основната")
+        }
+        return LineFx { ok: 1, err: "", currency: "", fx_quantity: "", fx_rate: "" }
+    }
+    if len(cur) != 3 {
+        return line_fx_err("currency трябва да е ISO код от 3 букви (напр. USD)")
+    }
+    if acc_is_currency == 0 {
+        return line_fx_err("сметката не е валутна (is_currency=0) — валута не се допуска по нея")
+    }
+    if fq_in == "" || fr_in == "" {
+        return line_fx_err("при валута fx_quantity и fx_rate са задължителни")
+    }
+    let qp = dec_parse(fq_in)
+    if qp.ok == 0 {
+        return line_fx_err(concat("невалидно fx_quantity: ", fq_in))
+    }
+    let rp = dec_parse(fr_in)
+    if rp.ok == 0 {
+        return line_fx_err(concat("невалиден fx_rate: ", fr_in))
+    }
+    if dec_cmp(rp.value, dec_zero()) <= 0 {
+        return line_fx_err("fx_rate трябва да е положителен")
+    }
+    let ap = dec_parse(amount)
+    if ap.ok == 0 {
+        return line_fx_err(concat("невалидна сума: ", amount))
+    }
+    let m = dec_mul(qp.value, rp.value)
+    if m.ok == 0 {
+        return line_fx_err(m.err)
+    }
+    let r2 = dec_round_dp(m.value, 2)
+    if r2.ok == 0 {
+        return line_fx_err(r2.err)
+    }
+    // fx_quantity=0 е преоценъчен ред (само base сумата се променя) — без проверка.
+    if dec_is_zero(qp.value) == 0 && dec_cmp(r2.value, ap.value) != 0 {
+        return line_fx_err(concat("amount трябва да е fx_quantity × fx_rate до 2 знака (очаквани ", concat(dec_to_string(r2.value), ")")))
+    }
+    return LineFx { ok: 1, err: "", currency: cur, fx_quantity: fq_in, fx_rate: fr_in }
+}
+
+// Основната валута на активната фирма (празно → EUR, като при създаване на фирма).
+fn journal_base_currency(db: OrmDb, company_id: i64) -> str !IO !Net {
+    let bc = company_base_currency(db, company_id)?
+    if bc.ok == 0 {
+        return "EUR"
+    }
+    return bc.cur
+}
 
 fn act_journal_index(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     let auth = act_require_perm(ctx, db, "accounting:read")?
@@ -131,6 +230,7 @@ fn act_journal_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         return act_err(pc.db, 422, pc.err)
     }
     let mut db2 = pc.db
+    let base_cur = journal_base_currency(db2, ac.id)?
     // Снимка на контрагента (за ДДС дневниците).
     let mut counterpart_name = ""
     let mut counterpart_vat_number = ""
@@ -165,6 +265,9 @@ fn act_journal_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let line_dirs: Vec<str> = vec_new()
     let line_amounts: Vec<str> = vec_new()
     let line_vats: Vec<str> = vec_new()
+    let line_curs: Vec<str> = vec_new()
+    let line_fqs: Vec<str> = vec_new()
+    let line_frs: Vec<str> = vec_new()
     let mut i: i64 = 0
     while i < n {
         let elem = json_at(b.doc, lines_node, i)
@@ -202,6 +305,10 @@ fn act_journal_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         if vatp.ok == 0 {
             return act_err(db2, 422, concat("невалидно ДДС: ", vat.val))
         }
+        let fx = journal_line_fx_parse(b, elem, orm_cell_by_i64(aq, 0, "is_currency"), base_cur, amount.val)
+        if fx.ok == 0 {
+            return act_err(db2, 422, concat("lines[", concat(int_to_str(i), concat("]: ", fx.err))))
+        }
         if dir.val == "debit" {
             let d2 = dec_add(debit_total, amt.value)
             if d2.ok == 0 {
@@ -224,6 +331,9 @@ fn act_journal_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         vec_push(line_dirs, dir.val)
         vec_push(line_amounts, amount.val)
         vec_push(line_vats, vat.val)
+        vec_push(line_curs, fx.currency)
+        vec_push(line_fqs, fx.fx_quantity)
+        vec_push(line_frs, fx.fx_rate)
         i = i + 1
     }
     if dec_cmp(debit_total, credit_total) != 0 {
@@ -245,7 +355,7 @@ fn act_journal_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     db2 = orm_db_q(eq)
     i = 0
     while i < n {
-        let li = journal_line_insert(db2, entry_id, vec_get(line_accs, i), vec_get(line_dirs, i), vec_get(line_amounts, i), vec_get(line_vats, i), counterpart_id, 0, 0)?
+        let li = journal_line_insert_fx(db2, entry_id, vec_get(line_accs, i), vec_get(line_dirs, i), vec_get(line_amounts, i), vec_get(line_vats, i), vec_get(line_curs, i), vec_get(line_fqs, i), vec_get(line_frs, i), counterpart_id, 0, 0)?
         if orm_ok(li) == 0 {
             return act_err_rb(orm_db_exec(li), 500, orm_err_exec(li))
         }
@@ -340,6 +450,7 @@ fn act_journal_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         return act_err(pc.db, 422, pc.err)
     }
     let mut db2 = pc.db
+    let base_cur = journal_base_currency(db2, ac.id)?
     let mut counterpart_name = ""
     let mut counterpart_vat_number = ""
     if counterpart_id > 0 {
@@ -374,6 +485,9 @@ fn act_journal_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let line_vats: Vec<str> = vec_new()
     let line_locs: Vec<i64> = vec_new()
     let line_prods: Vec<i64> = vec_new()
+    let line_curs: Vec<str> = vec_new()
+    let line_fqs: Vec<str> = vec_new()
+    let line_frs: Vec<str> = vec_new()
     let mut i: i64 = 0
     while i < n {
         let elem = json_at(b.doc, lines_node, i)
@@ -410,6 +524,10 @@ fn act_journal_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         let vatp = dec_parse(vat.val)
         if vatp.ok == 0 {
             return act_err(db2, 422, concat("невалидно ДДС: ", vat.val))
+        }
+        let fx = journal_line_fx_parse(b, elem, orm_cell_by_i64(aq, 0, "is_currency"), base_cur, amount.val)
+        if fx.ok == 0 {
+            return act_err(db2, 422, concat("lines[", concat(int_to_str(i), concat("]: ", fx.err))))
         }
         if dir.val == "debit" {
             let d2 = dec_add(debit_total, amt.value)
@@ -451,6 +569,9 @@ fn act_journal_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         vec_push(line_vats, vat.val)
         vec_push(line_locs, location_id)
         vec_push(line_prods, product_id)
+        vec_push(line_curs, fx.currency)
+        vec_push(line_fqs, fx.fx_quantity)
+        vec_push(line_frs, fx.fx_rate)
         i = i + 1
     }
     if dec_cmp(debit_total, credit_total) != 0 {
@@ -473,7 +594,7 @@ fn act_journal_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     db2 = orm_db_exec(del)
     i = 0
     while i < n {
-        let li = journal_line_insert(db2, id, vec_get(line_accs, i), vec_get(line_dirs, i), vec_get(line_amounts, i), vec_get(line_vats, i), counterpart_id, vec_get(line_prods, i), vec_get(line_locs, i))?
+        let li = journal_line_insert_fx(db2, id, vec_get(line_accs, i), vec_get(line_dirs, i), vec_get(line_amounts, i), vec_get(line_vats, i), vec_get(line_curs, i), vec_get(line_fqs, i), vec_get(line_frs, i), counterpart_id, vec_get(line_prods, i), vec_get(line_locs, i))?
         if orm_ok(li) == 0 {
             return act_err_rb(orm_db_exec(li), 500, orm_err_exec(li))
         }

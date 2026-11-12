@@ -1,0 +1,118 @@
+// models/fx.baga — валутна логика за дневника и банката.
+//
+// Канон: amount на всеки ред в journal_lines е в основната валута на фирмата
+// (companies.currency). Редовете по валутни сметки (accounts.is_currency=1)
+// носят допълнително currency / fx_quantity / fx_rate, като
+// amount = fx_quantity × fx_rate (2 знака), а знакът на fx_quantity следва
+// знака на amount. Отворено количество = Σ (debit ? +fx_quantity : −fx_quantity).
+// Курсът е кръстосан през EUR от ЕЦБ, as-of към датата на операцията.
+
+import "ormbaga/orm.baga"
+import "exchange_rate.baga"
+import "company.baga"
+import "std/str/str.baga"
+import "bagadecimal/src/decimal.baga"
+
+struct FxCur {
+    db: OrmDb,
+    ok: i64,
+    cur: str
+}
+
+// Основната валута на фирмата (празно → EUR, като при създаване на фирма).
+fn company_base_currency(db: OrmDb, company_id: i64) -> FxCur !IO !Net {
+    if company_id <= 0 {
+        return FxCur { db: db, ok: 1, cur: "EUR" }
+    }
+    let cq = company_find(db, company_id)?
+    if orm_ok_q(cq) == 0 {
+        return FxCur { db: orm_db_q(cq), ok: 0, cur: "" }
+    }
+    if orm_nrows(cq) < 1 {
+        return FxCur { db: orm_db_q(cq), ok: 1, cur: "EUR" }
+    }
+    let mut cur = orm_cell_by(cq, 0, "currency")
+    if cur == "" {
+        cur = "EUR"
+    }
+    return FxCur { db: orm_db_q(cq), ok: 1, cur: cur }
+}
+
+struct FxLineData {
+    ok: i64,
+    err: str,
+    db: OrmDb,
+    currency: str,
+    fx_rate: str,
+    base_amount: str,
+    fx_quantity: str
+}
+
+fn fx_line_err(db: OrmDb, err: str) -> FxLineData {
+    return FxLineData { ok: 0, err: err, db: db, currency: "", fx_rate: "", base_amount: "", fx_quantity: "" }
+}
+
+// Валутните данни за банкова транзакция: ако валутата на сметката е основната
+// (или празна) → currency="" и base_amount = |amount|. Иначе кръстосан курс
+// ЕЦБ as-of tx_date (основна валута за 1 единица от валутата на сметката) и
+// base_amount = |amount| × курс, закръглено до 2 знака.
+fn bank_tx_fx(db: OrmDb, company_id: i64, account_currency: str, amount: str, tx_date: str) -> FxLineData !IO !Net {
+    let bc = company_base_currency(db, company_id)?
+    if bc.ok == 0 {
+        return fx_line_err(bc.db, "фирмата липсва")
+    }
+    let mut d0 = bc.db
+    let cur = str_trim(account_currency)
+    let ap = dec_parse(amount)
+    if ap.ok == 0 {
+        return fx_line_err(d0, concat("невалидна сума на транзакцията: ", amount))
+    }
+    let qty = dec_abs(ap.value)
+    if cur == "" || cur == bc.cur {
+        return FxLineData { ok: 1, err: "", db: d0, currency: "", fx_rate: "", base_amount: dec_to_string(qty), fx_quantity: "" }
+    }
+    let c = exchange_rate_cross(d0, cur, bc.cur, tx_date)?
+    if c.ok == 0 {
+        return fx_line_err(c.db, concat(concat("няма курс ", cur), concat(concat(" към ", tx_date), concat(": ", c.err))))
+    }
+    d0 = c.db
+    let rp = dec_parse(c.rate)
+    if rp.ok == 0 {
+        return fx_line_err(d0, "невалиден кръстосан курс")
+    }
+    let m = dec_mul(qty, rp.value)
+    if m.ok == 0 {
+        return fx_line_err(d0, m.err)
+    }
+    let r2 = dec_round_dp(m.value, 2)
+    if r2.ok == 0 {
+        return fx_line_err(d0, r2.err)
+    }
+    return FxLineData { ok: 1, err: "", db: d0, currency: cur, fx_rate: c.rate, base_amount: dec_to_string(r2.value), fx_quantity: dec_to_string(qty) }
+}
+
+struct FxAtt {
+    currency: str,
+    fx_quantity: str,
+    fx_rate: str
+}
+
+// Валутните полета за конкретен journal ред: само ако транзакцията е във валута
+// И сметката е валутна. Знакът на количеството следва посоката на реда
+// (кредит → минус), за да отвореното количество излиза със знак.
+fn fx_att_line(fx: FxLineData, acc_is_currency: i64, direction: str) -> FxAtt {
+    if fx.currency == "" || acc_is_currency == 0 {
+        return FxAtt { currency: "", fx_quantity: "", fx_rate: "" }
+    }
+    let mut q = fx.fx_quantity
+    if direction == "credit" {
+        let qp = dec_parse(fx.fx_quantity)
+        if qp.ok == 1 {
+            let neg = dec_sub(dec_zero(), qp.value)
+            if neg.ok == 1 {
+                q = dec_to_string(neg.value)
+            }
+        }
+    }
+    return FxAtt { currency: fx.currency, fx_quantity: q, fx_rate: fx.fx_rate }
+}

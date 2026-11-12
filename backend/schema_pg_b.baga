@@ -325,6 +325,43 @@ fn buchnative_migrations_b() -> MigrationSet {
         "ALTER TABLE counterparts ADD COLUMN vies_address TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE counterparts DROP COLUMN vies_address"
     )
+    // Мултивалутност: валута по подразбиране на разчетната сметка (default EUR),
+    // флаг „валутна сметка" в сметкоплана, валута/количество/курс на ред в дневника.
+    set = migrate_add(
+        set,
+        20261112001,
+        "add_counterparts_currency",
+        "ALTER TABLE counterparts ADD COLUMN currency TEXT NOT NULL DEFAULT 'EUR'",
+        "ALTER TABLE counterparts DROP COLUMN currency"
+    )
+    set = migrate_add(
+        set,
+        20261112002,
+        "add_accounts_is_currency",
+        "ALTER TABLE accounts ADD COLUMN is_currency BIGINT NOT NULL DEFAULT 0",
+        "ALTER TABLE accounts DROP COLUMN is_currency"
+    )
+    set = migrate_add(
+        set,
+        20261112003,
+        "add_journal_lines_currency",
+        "ALTER TABLE journal_lines ADD COLUMN currency TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE journal_lines DROP COLUMN currency"
+    )
+    set = migrate_add(
+        set,
+        20261112004,
+        "add_journal_lines_fx_quantity",
+        "ALTER TABLE journal_lines ADD COLUMN fx_quantity NUMERIC(18,4) NOT NULL DEFAULT 0",
+        "ALTER TABLE journal_lines DROP COLUMN fx_quantity"
+    )
+    set = migrate_add(
+        set,
+        20261112005,
+        "add_journal_lines_fx_rate",
+        "ALTER TABLE journal_lines ADD COLUMN fx_rate NUMERIC(18,8) NOT NULL DEFAULT 0",
+        "ALTER TABLE journal_lines DROP COLUMN fx_rate"
+    )
     return set
 }
 
