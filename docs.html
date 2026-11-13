@@ -30,9 +30,11 @@
         <li><a href="#smetkoplan">Сметкоплан</a></li>
         <li><a href="#kontragenti">Контрагенти</a></li>
         <li><a href="#fakturi">Фактури</a></li>
+        <li><a href="#skane">Сканиране на документи (AI)</a></li>
         <li><a href="#banki">Банкови транзакции</a></li>
         <li><a href="#dnevnik">Дневник (универсална статия)</a></li>
         <li><a href="#sklad">Склад и материали</a></li>
+        <li><a href="#nomenklaturi">Номенклатури (КН-8)</a></li>
         <li><a href="#spravki">Справки</a></li>
       </ul>
     </aside>
@@ -117,6 +119,25 @@
           с минус по същите сметки, без обръщане на Дт/Кт.</div>
       </section>
 
+      <section class="doc-section" id="skane">
+        <h2><span class="hash">#</span> Сканиране на документи (AI)</h2>
+        <p>Отидете на <strong>Сканиране</strong> и качете PDF, снимка или UBL XML
+          (Peppol, фактура или кредитно известие). Резултатът е чернова с редове —
+          <em>не запис по сметки</em>; преглеждате преди запис.</p>
+        <div class="doc-shot">
+          <img src="docs-img/10-skane.png" alt="Сканиране на документи — buchnative">
+          <div class="cap">Сканиране — качване на PDF/снимка/UBL, избор на тип (покупки/продажби) и ДДС период.</div>
+        </div>
+        <ol class="doc-steps">
+          <li>Изберете <strong>тип документ</strong>: Покупки (входящи) или Продажби (изходящи).</li>
+          <li>Задайте <strong>ДДС период</strong> и качете файла (до 8 МБ).</li>
+          <li>AI (Mistral) разпознава реда; за UBL XML се чете директно, без ключ.</li>
+          <li>Резултатът е <strong>чернова</strong> — проверете и запишете.</li>
+        </ol>
+        <div class="doc-note">Ако нямате Mistral ключ, UBL XML (Peppol BIS) се обработва
+          без него. Ключът се задава в Настройки → Интеграции.</div>
+      </section>
+
       <section class="doc-section" id="banki">
         <h2><span class="hash">#</span> Банкови транзакции</h2>
         <p>Импортирате банково извлечение (OBB XML, ISO camt.053, PostBank XML,
@@ -169,6 +190,29 @@
           <img src="docs-img/08-sklad.png" alt="Склад — buchnative">
           <div class="cap">Склад — наличности и правила.</div>
         </div>
+      </section>
+
+      <section class="doc-section" id="nomenklaturi">
+        <h2><span class="hash">#</span> Номенклатури (КН-8)</h2>
+        <p>При създаване или редакция на артикул в <strong>Стоки и услуги</strong>
+          пишете името на материалния запас в полето <strong>„Код по КН8"</strong> —
+          системата търси в комбинираната номенклатура (КН-8, ~5000 позиции) и
+          предлага подходящ код. Кодът се взема и за справки и SAF-T.</p>
+        <div class="doc-shot">
+          <img src="docs-img/12-stoki.png" alt="Стоки и услуги — търсене на КН-8">
+          <div class="cap">Стоки и услуги — „Код по КН8" с въведено „лаптоп" и предложението 84713000.</div>
+        </div>
+        <div class="doc-shot">
+          <img src="docs-img/11-nomenklaturi.png" alt="SAF-T номенклатури — каталог">
+          <div class="cap">Каталог на номенклатурите (SAF-T, НАП) — търсене по код или име.</div>
+        </div>
+        <ol class="doc-steps">
+          <li>Отворете артикул (нов или редакция) и в полето <strong>„Код по КН8"</strong> въведете името на материала.</li>
+          <li>Натиснете <strong>„Търси"</strong> (или <strong>„От името на артикула"</strong>) — излиза предложение с кода и описанието.</li>
+          <li>Изберете кода — той се запазва в артикула.</li>
+        </ol>
+        <div class="doc-note">Каталогът се отваря и от <strong>Номенклатури</strong> в менюто —
+          кодове по SAF-T BG v1.0.1 (НАП), без редакция.</div>
       </section>
 
       <section class="doc-section" id="spravki">
