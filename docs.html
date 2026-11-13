@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Документация — buhal.sbs</title>
+<meta name="description" content="Потребителска документация на buchnative — счетоводна програма: начало, фирми, сметкоплан, контрагенти, фактури, банки, дневник, склад, справки.">
+<link rel="canonical" href="https://buhal.sbs/docs.html">
+<link rel="stylesheet" href="site.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='42' fill='%2305080c'/%3E%3Ccircle cx='38' cy='46' r='9' fill='%23f0a542'/%3E%3Ccircle cx='62' cy='46' r='9' fill='%23f0a542'/%3E%3C/svg%3E">
+</head>
+<body>
+
+<div class="wrap">
+  <h1 class="page-title">Потребителска документация</h1>
+  <p class="sub">
+    <a href="index.html">← buhal.sbs</a> ·
+    <a href="changelog.html">Версии</a> ·
+    <a href="https://github.com/bagalang/buchnative">github ↗</a>
+  </p>
+  <p class="muted">Как се използва buchnative — стъпка по стъпка, с екранни снимки.
+    Снимките са с демо данни; реалните имена на лица и фирми са зачертани.</p>
+
+  <div class="doc-layout">
+    <aside class="doc-toc">
+      <h3>Съдържание</h3>
+      <ul>
+        <li><a href="#nachalo">Начало</a></li>
+        <li><a href="#firmi">Фирми и настройки</a></li>
+        <li><a href="#smetkoplan">Сметкоплан</a></li>
+        <li><a href="#kontragenti">Контрагенти</a></li>
+        <li><a href="#fakturi">Фактури</a></li>
+        <li><a href="#banki">Банкови транзакции</a></li>
+        <li><a href="#dnevnik">Дневник (универсална статия)</a></li>
+        <li><a href="#sklad">Склад и материали</a></li>
+        <li><a href="#spravki">Справки</a></li>
+      </ul>
+    </aside>
+
+    <div class="doc-content">
+
+      <section class="doc-section" id="nachalo">
+        <h2><span class="hash">#</span> Начало</h2>
+        <p>Влезте с потребителско име и парола. Активната фирма се избира от
+          падащото меню в горната лента — цялото счетоводство е с нея.</p>
+        <div class="doc-shot">
+          <img src="docs-img/01-tablo.png" alt="Табло — buchnative">
+          <div class="cap">Табло — преглед на активната фирма.</div>
+        </div>
+        <ol class="doc-steps">
+          <li>От менюто изберете <strong>Фирми</strong>, за да добавите или редактирате фирма.</li>
+          <li>Задайте <strong>активна фирма</strong> от падащото меню в горната лента.</li>
+          <li>Продължете към <strong>Настройки на фирмата</strong> за реквизити, ДДС и кочани.</li>
+        </ol>
+      </section>
+
+      <section class="doc-section" id="firmi">
+        <h2><span class="hash">#</span> Фирми и настройки</h2>
+        <p>Фирмите са отделни счетоводни субекти: всяка си има ЕИК, ДДС номер,
+          сметкоплан, контрагенти и документи. Настройките се отварят от менюто
+          <strong>Настройки на фирмата</strong>.</p>
+        <div class="doc-shot">
+          <img src="docs-img/02-firmi.png" alt="Фирми — buchnative">
+          <div class="cap">Списък на фирмите (имената са зачертани).</div>
+        </div>
+        <div class="doc-shot">
+          <img src="docs-img/09-nastroyki.png" alt="Настройки на фирмата">
+          <div class="cap">Настройки на фирмата — реквизити, ДДС, кочани, сметкоплан и склад.</div>
+        </div>
+        <ol class="doc-steps">
+          <li>Таб <strong>Фирма</strong> — име, ЕИК, ДДС регистрация, управител, МОЛ, IBAN.</li>
+          <li>Таб <strong>SAF-T / Собственици</strong> — адрес, данъчна основа, метод на оценка (WAC/FIFO/LIFO).</li>
+          <li>Таб <strong>Кочани</strong> — номерация на изходящи документи.</li>
+          <li>Таб <strong>Склад</strong> — правила за изписване (складова → насрещна сметка).</li>
+          <li>Таб <strong>Приключване</strong> — карта за месечно приключване на сметки.</li>
+        </ol>
+      </section>
+
+      <section class="doc-section" id="smetkoplan">
+        <h2><span class="hash">#</span> Сметкоплан</h2>
+        <p>Сметкопланът е списъкът от сметки (кодове по NRA). Използва се при
+          ръчни записи, фактури и справки. Търсачката филтрира по номер или име.</p>
+        <div class="doc-shot">
+          <img src="docs-img/03-smetkoplan.png" alt="Сметкоплан — buchnative">
+          <div class="cap">Сметкоплан — сметки по код.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="kontragenti">
+        <h2><span class="hash">#</span> Контрагенти</h2>
+        <p>Клиенти и доставчици. При добавяне на ДДС номер може да извикате
+          <strong>„Извличай от VIES“</strong> — име и адрес идват от ЕК. Ако фирмата
+          има Mistral ключ, адресът се разделя автоматично за SAF-T.</p>
+        <div class="doc-shot">
+          <img src="docs-img/04-kontragenti.png" alt="Контрагенти — buchnative">
+          <div class="cap">Контрагенти (имената са зачертани).</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="fakturi">
+        <h2><span class="hash">#</span> Фактури</h2>
+        <p>Данъчни документи по ППДДС и проформа. Отивате на
+          <strong>Фактури → Нов документ</strong> и попълвате заглавната информация,
+          получателя и редовете с артикули/услуги.</p>
+        <div class="doc-shot">
+          <img src="docs-img/05-fakturi.png" alt="Нов документ — фактура">
+          <div class="cap">Нов документ — тип, номер, дати, валута, получател, редове.</div>
+        </div>
+        <ol class="doc-steps">
+          <li>Изберете <strong>тип документ</strong> (01 — фактура, 03/13/23 — кредитно/дебитно известие, проформа).</li>
+          <li>Задайте <strong>посока</strong> (изходяща/входяща) и <strong>обект</strong> (склад).</li>
+          <li>В <strong>Получател</strong> изберете контрагент.</li>
+          <li>Добавете <strong>редове</strong> — описание, количество, цена, ДДС.</li>
+          <li>Запишете, след това <strong>постнете</strong> (осчетоводяване) и принтирайте (PDF/DOCX/ODT или UBL).</li>
+        </ol>
+        <div class="doc-note">Сумата може да е отрицателна (сторно/кредитно) — записва се
+          с минус по същите сметки, без обръщане на Дт/Кт.</div>
+      </section>
+
+      <section class="doc-section" id="banki">
+        <h2><span class="hash">#</span> Банкови транзакции</h2>
+        <p>Импортирате банково извлечение (OBB XML, ISO camt.053, PostBank XML,
+          MT-940, CSV), преглеждате с дубликати и осчетоводявате. Филтърът по
+          дати — от/до. За една транзакция: <strong>Преглед</strong> (редакция),
+          <strong>Осчетоводи</strong>, <strong>Разнеси</strong>, <strong>Върни в чернова</strong>,
+          <strong>Изтрий</strong>. За много: чекбоксове и групово връщане/изтриване.</p>
+        <div class="doc-shot">
+          <img src="docs-img/06-bank-transactions.png" alt="Банкови транзакции — buchnative">
+          <div class="cap">Банкови транзакции — филтри, действия, групов избор (имената са зачертани).</div>
+        </div>
+        <ol class="doc-steps">
+          <li>Изберете банкова сметка и натиснете <strong>Импорт файл</strong>.</li>
+          <li>В прегледа проверете <strong>дубликатите</strong> и след това импортирайте.</li>
+          <li>За осчетоводяване изберете кореспондираща сметка (и контрагент).</li>
+          <li>За валутна сметка курсът се взема от ЕЦБ автоматично.</li>
+          <li>За месец назад: филтър по дати → чекбокс в заглавието → <strong>Изтрий</strong>, после импортирайте наново.</li>
+        </ol>
+      </section>
+
+      <section class="doc-section" id="dnevnik">
+        <h2><span class="hash">#</span> Дневник (универсална статия)</h2>
+        <p>Дневникът е универсална счетоводна статия: всеки ред носи
+          <strong>количество</strong> и <strong>курс</strong>, а стойността е производна —
+          <code>amount = fx_quantity × fx_rate</code>. При основната валута (EUR)
+          курс е 1 и стойността съвпада с количеството. Чужда валута е само по
+          валутна сметка; курс от ЕЦБ с бутона <strong>„Курс от ЕЦБ"</strong>.</p>
+        <div class="doc-shot">
+          <img src="docs-img/07-dnevnik.png" alt="Нов запис в дневника">
+          <div class="cap">Нов запис — табове Покупки/Продажби/Без ДДС, редове с количество, валута, курс и стойност.</div>
+        </div>
+        <ol class="doc-steps">
+          <li>Натиснете <strong>Нов запис</strong> и изберете таб: Покупки, Продажби или Без ДДС.</li>
+          <li>Задайте дата, описание, контрагент и ДДС период.</li>
+          <li>За всеки ред изберете сметка и посока (Дебит/Кредит) и въведете <strong>количество</strong>.</li>
+          <li>За чужда валута въведете валута и курс (или извикайте <strong>„Курс от ЕЦБ"</strong>) — стойността се преизчислява.</li>
+          <li>Дебитът и кредитът трябва да балансират (✓), след това запишете.</li>
+        </ol>
+        <div class="doc-note">Филтър в списъка: търсене, от/до дата, ДДС тип,
+          контрагент, сметка. Ръчен запис се изтрива с иконата на реда.</div>
+      </section>
+
+      <section class="doc-section" id="sklad">
+        <h2><span class="hash">#</span> Склад и материали</h2>
+        <p>Складът пази наличности по обект с оценка WAC/FIFO/LIFO. Изписването
+          на материали е документ (чернова → потвърден): изважда от склада и прави
+          запис <code>Дт разход / Кт складова сметка</code>. Без изрична разходна
+          сметка се ползва правило за материал по складовата сметка на артикула.</p>
+        <div class="doc-shot">
+          <img src="docs-img/08-sklad.png" alt="Склад — buchnative">
+          <div class="cap">Склад — наличности и правила.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="spravki">
+        <h2><span class="hash">#</span> Справки</h2>
+        <p>Екран <strong>Справки</strong> връща JSON (сумите с точка) и експорт
+          PDF/XLSX/ODS като таблица. Видове: оборотна ведомост, главна книга,
+          главна книга по кореспонденции, хронологичен журнал, по контрагент,
+          баланс, ОПР, паричен поток, собствен капитал.</p>
+        <div class="doc-note">Датите са ISO <code>YYYY-MM-DD</code>. По контрагент
+          се изисква <code>counterpart_id</code>. Експортът прави сумите числа,
+          за да се четат от българския Excel/Sheets.</div>
+      </section>
+
+      <p class="muted" style="margin-top:24px">За история на версиите вижте
+        <a href="changelog.html">Версии</a>. Въпроси и проблеми:
+        <a href="https://github.com/bagalang/buchnative">github.com/bagalang/buchnative</a>.</p>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

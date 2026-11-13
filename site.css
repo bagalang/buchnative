@@ -260,3 +260,23 @@ footer a { color: var(--green); }
   padding: 1px 5px;
   font-size: 12.5px;
 }
+
+/* ── Потребителска документация ─────────────────────────────────── */
+.doc-layout { display: grid; grid-template-columns: 220px 1fr; gap: 28px; margin-top: 20px; }
+.doc-toc { position: sticky; top: 70px; align-self: start; }
+.doc-toc h3 { color: var(--amber-2); font-size: 13px; margin-bottom: 8px; letter-spacing: 1px; }
+.doc-toc ul { list-style: none; }
+.doc-toc li { margin: 2px 0; }
+.doc-toc a { color: var(--muted); font-size: 13px; }
+.doc-toc a:hover { color: var(--green-2); text-decoration: none; }
+.doc-section { margin-bottom: 42px; scroll-margin-top: 70px; }
+.doc-section h2 { font-size: 20px; margin: 0 0 10px; }
+.doc-section h2 .hash { color: var(--muted); }
+.doc-shot { margin: 14px 0; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); }
+.doc-shot img { display: block; width: 100%; height: auto; }
+.doc-shot .cap { color: var(--muted); font-size: 12px; padding: 6px 10px; border-top: 1px solid var(--line); background: var(--bg-2); }
+.doc-steps { margin: 10px 0 10px 20px; }
+.doc-steps li { margin: 5px 0; font-size: 14px; }
+.doc-note { border-left: 3px solid var(--amber); background: var(--bg-2); padding: 10px 14px; margin: 12px 0; font-size: 13.5px; }
+.doc-note code { background: var(--panel); border: 1px solid var(--line); border-radius: 3px; padding: 1px 5px; font-size: 12.5px; }
+@media (max-width: 860px) { .doc-layout { grid-template-columns: 1fr; } .doc-toc { position: static; } }
