@@ -31,6 +31,12 @@ Route id-тата в `backend/routes.baga` са стабилни — не се �
 | POST/PATCH/DELETE | `/v1/companies/{id}/locations`, `/v1/company-locations/{id}` |
 | също | `beneficial-owners`, `ultimate-parents`, `document-series` |
 
+`company.settings` е JSON обект. Ключът `default_accounts` е карта
+`роля → id на сметка` за автоматизация: `customers`, `suppliers`,
+`vat_purchase`, `vat_sale`, `cash`, `card_purchase`, `card_sale`,
+`revenues`, `expenses`, `inventory`. Осчетоводяването и банковите
+шаблони/предложения ги ползват; липсваща роля пада на стандартния номер.
+
 ## Номенклатури
 
 `/v1/accounts`, `/v1/counterparts`, `/v1/products`, `/v1/units`,

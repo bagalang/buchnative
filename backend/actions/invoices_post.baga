@@ -15,6 +15,7 @@ import "../models/product.baga"
 import "../models/doc_type.baga"
 import "inventory.baga"
 import "periods.baga"
+import "default_accounts.baga"
 import "vat_fmt.baga"
 import "txn.baga"
 import "acl.baga"
@@ -37,21 +38,6 @@ fn resolve_account(db: OrmDb, number: str, out_id: Vec<i64>) -> FmrOut !IO !Net 
     }
     vec_push(out_id, orm_cell_by_i64(q, 0, "id"))
     return act_ok(orm_db_q(q), jobj_new())
-}
-
-fn resolve_account_id(db: OrmDb, preferred_id: i64, fallback: str, out_id: Vec<i64>) -> FmrOut !IO !Net {
-    if preferred_id > 0 {
-        let q = account_find(db, preferred_id)?
-        if orm_ok_q(q) == 0 {
-            return act_err(orm_db_q(q), 500, orm_err_q(q))
-        }
-        if orm_nrows(q) < 1 {
-            return act_err(orm_db_q(q), 422, concat("липсва сметка с id ", int_to_str(preferred_id)))
-        }
-        vec_push(out_id, preferred_id)
-        return act_ok(orm_db_q(q), jobj_new())
-    }
-    return resolve_account(db, fallback, out_id)?
 }
 
 fn post_jl(db: OrmDb, entry_id: i64, account_id: i64, direction: str, amount: str, vat_amount: str, counterpart_id: i64, product_id: i64, location_id: i64) -> InvResult !IO !Net {
@@ -146,6 +132,9 @@ fn invoice_post_one(db: OrmDb, id: i64, user_sub: str) -> FmrOut !IO !Net !Time 
         return act_err(pc.db, 422, pc.err)
     }
     db2 = pc.db
+    let dr = defaults_raw(db2, acp.id)
+    db2 = dr.db
+    let defraw = dr.raw
     if orm_cell_by(iq, 0, "status") == "posted" {
         return act_err(db2, 409, "фактурата е вече постната")
     }
@@ -217,19 +206,19 @@ fn invoice_post_one(db: OrmDb, id: i64, user_sub: str) -> FmrOut !IO !Net !Time 
     }
     db2 = orm_db_q(lq)
     let a411 = vec_new()
-    let r411 = resolve_account(db2, "411", a411)?
+    let r411 = default_resolve(db2, defraw, "customers", "411", a411)?
     if vec_len(a411) == 0 { return r411 }
     db2 = r411.db
     let a401 = vec_new()
-    let r401 = resolve_account(db2, "401", a401)?
+    let r401 = default_resolve(db2, defraw, "suppliers", "401", a401)?
     if vec_len(a401) == 0 { return r401 }
     db2 = r401.db
     let a4531 = vec_new()
-    let r4531 = resolve_account(db2, "4531", a4531)?
+    let r4531 = default_resolve(db2, defraw, "vat_purchase", "4531", a4531)?
     if vec_len(a4531) == 0 { return r4531 }
     db2 = r4531.db
     let a4532 = vec_new()
-    let r4532 = resolve_account(db2, "4532", a4532)?
+    let r4532 = default_resolve(db2, defraw, "vat_sale", "4532", a4532)?
     if vec_len(a4532) == 0 { return r4532 }
     db2 = r4532.db
     let mut vat_type = "no_vat"
@@ -252,10 +241,10 @@ fn invoice_post_one(db: OrmDb, id: i64, user_sub: str) -> FmrOut !IO !Net !Time 
     db2 = orm_db_q(eq)
     // Специални документи: протокол по чл. 117 (09) и митническа декларация (07).
     if direction == "in" && doc_type == "09" {
-        return invoice_post_117(db2, entry_id, id, vat_base)?
+        return invoice_post_117(db2, entry_id, id, vat_base, defraw)?
     }
     if direction == "in" && doc_type == "07" {
-        return invoice_post_customs(db2, entry_id, id, iq)?
+        return invoice_post_customs(db2, entry_id, id, iq, defraw)?
     }
     let acc_cust = vec_get(a411, 0)
     let acc_sup = vec_get(a401, 0)
@@ -300,7 +289,7 @@ fn invoice_post_one(db: OrmDb, id: i64, user_sub: str) -> FmrOut !IO !Net !Time 
                 }
             }
             let ids = vec_new()
-            let rr = resolve_account_id(db2, rev_pref, "702", ids)?
+            let rr = default_resolve_id(db2, defraw, "revenues", rev_pref, "702", ids)?
             if vec_len(ids) == 0 {
                 return act_err_rb(rr.db, 422, "липсва приходна сметка (702)")
             }
@@ -318,7 +307,7 @@ fn invoice_post_one(db: OrmDb, id: i64, user_sub: str) -> FmrOut !IO !Net !Time 
                 db2 = issued.db
                 if issued.cost != "0" && issued.cost != "0.00" && issued.cost != "0.0" {
                     let iids = vec_new()
-                    let ri = resolve_account_id(db2, inv_pref, "304", iids)?
+                    let ri = default_resolve_id(db2, defraw, "inventory", inv_pref, "304", iids)?
                     if vec_len(iids) == 0 {
                         return act_err_rb(ri.db, 422, "липсва складова сметка (304)")
                     }
@@ -347,6 +336,7 @@ fn invoice_post_one(db: OrmDb, id: i64, user_sub: str) -> FmrOut !IO !Net !Time 
             let mut purch_pref: i64 = 0
             let mut is_inv: i64 = 0
             let mut fallback = "602"
+            let mut role = "expenses"
             if pid > 0 {
                 let pq = product_find(db2, pid)?
                 if orm_ok_q(pq) == 0 {
@@ -358,11 +348,12 @@ fn invoice_post_one(db: OrmDb, id: i64, user_sub: str) -> FmrOut !IO !Net !Time 
                     is_inv = orm_cell_by_i64(pq, 0, "is_inventory")
                     if is_inv == 1 {
                         fallback = "304"
+                        role = "inventory"
                     }
                 }
             }
             let ids = vec_new()
-            let rr = resolve_account_id(db2, purch_pref, fallback, ids)?
+            let rr = default_resolve_id(db2, defraw, role, purch_pref, fallback, ids)?
             if vec_len(ids) == 0 {
                 return act_err_rb(rr.db, 422, concat("липсва сметка ", fallback))
             }
@@ -420,18 +411,18 @@ fn invoice_mark_posted(db: OrmDb, entry_id: i64, id: i64) -> FmrOut !IO !Net !Ti
 }
 
 // Протокол по чл. 117: Дт 4531 (начислен ДДС за покупките) / Кт 4532.
-fn invoice_post_117(db: OrmDb, entry_id: i64, id: i64, vat: str) -> FmrOut !IO !Net !Time {
+fn invoice_post_117(db: OrmDb, entry_id: i64, id: i64, vat: str, raw: str) -> FmrOut !IO !Net !Time {
     if vat == "" || vat == "0" || vat == "0.00" {
         return act_err(db, 422, "протоколът по чл. 117 трябва да има начислен ДДС")
     }
     let a4531 = vec_new()
-    let r1 = resolve_account(db, "4531", a4531)?
+    let r1 = default_resolve(db, raw, "vat_purchase", "4531", a4531)?
     if vec_len(a4531) == 0 {
         return r1
     }
     db = r1.db
     let a4532 = vec_new()
-    let r2 = resolve_account(db, "4532", a4532)?
+    let r2 = default_resolve(db, raw, "vat_sale", "4532", a4532)?
     if vec_len(a4532) == 0 {
         return r2
     }
@@ -480,7 +471,7 @@ fn invoice_duty_expense_account(db: OrmDb, id: i64) -> i64 !IO !Net {
 }
 
 // Митническа декларация: Дт разход (мито) / Дт 4531 (митническо ДДС) / Кт 458.
-fn invoice_post_customs(db: OrmDb, entry_id: i64, id: i64, iq: OrmQuery) -> FmrOut !IO !Net !Time {
+fn invoice_post_customs(db: OrmDb, entry_id: i64, id: i64, iq: OrmQuery, raw: str) -> FmrOut !IO !Net !Time {
     // Мито и митническо ДДС са във валутата на декларацията — в записа влизат
     // в основната валута на фирмата (кръстосан курс ЕЦБ as-of датата).
     let inv_currency = str_trim(orm_cell_by(iq, 0, "currency"))
@@ -520,7 +511,7 @@ fn invoice_post_customs(db: OrmDb, entry_id: i64, id: i64, iq: OrmQuery) -> FmrO
     }
     db = r458.db
     let a4531 = vec_new()
-    let r4531 = resolve_account(db, "4531", a4531)?
+    let r4531 = default_resolve(db, raw, "vat_purchase", "4531", a4531)?
     if vec_len(a4531) == 0 {
         return r4531
     }
@@ -528,7 +519,7 @@ fn invoice_post_customs(db: OrmDb, entry_id: i64, id: i64, iq: OrmQuery) -> FmrO
     if has_duty == 1 {
         let exp = invoice_duty_expense_account(db, id)
         let eids = vec_new()
-        let rr = resolve_account_id(db, exp, "602", eids)?
+        let rr = default_resolve_id(db, raw, "expenses", exp, "602", eids)?
         if vec_len(eids) == 0 {
             return act_err_rb(rr.db, 422, "липсва разходна сметка (602)")
         }

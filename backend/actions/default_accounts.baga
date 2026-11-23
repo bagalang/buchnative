@@ -1,0 +1,119 @@
+// actions/default_accounts.baga — default сметки за автоматизация от настройките
+// на фирмата (settings.default_accounts: роля → id на сметка). Липсваща роля
+// или сметка, която не съществува, пада на номера по подразбиране от сметкоплана.
+//
+// Роли: customers, suppliers, vat_purchase, vat_sale, cash, card_purchase,
+// card_sale, revenues, expenses, inventory. Празна роля или нулев id — фолбек.
+
+import "../models/account.baga"
+import "../models/company.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+struct DefaultsRaw {
+    db: OrmDb,
+    raw: str
+}
+
+// Суровите настройки на фирмата (company.settings).
+fn defaults_raw(db: OrmDb, company_id: i64) -> DefaultsRaw !IO !Net {
+    let cq = company_find(db, company_id)?
+    if orm_ok_q(cq) == 0 || orm_nrows(cq) < 1 {
+        return DefaultsRaw { db: orm_db_q(cq), raw: "" }
+    }
+    return DefaultsRaw { db: orm_db_q(cq), raw: orm_cell_by(cq, 0, "settings") }
+}
+
+// Карта роля → стойност от settings.default_accounts. Невалиден JSON → празна.
+fn default_accounts_map(raw: str) -> Map<str, str> {
+    let m: Map<str, str> = map_new()
+    let b = jbody_parse_str(raw)
+    if b.ok == 0 {
+        return m
+    }
+    let da = json_get(b.doc, b.root, "default_accounts")
+    if da < 0 {
+        return m
+    }
+    if json_tag(b.doc, da) != 6 {
+        return m
+    }
+    let n = json_count(b.doc, da)
+    let mut i: i64 = 0
+    while i < n {
+        let k = json_key(b.doc, da, i)
+        let v = json_val(b.doc, da, i)
+        let tv = str_trim(json_str(b.doc, v))
+        if str_trim(k) != "" && tv != "" {
+            map_set(m, str_trim(k), tv)
+        }
+        i = i + 1
+    }
+    return m
+}
+
+// id на сметката за роля (0, ако не е зададена или не е число).
+fn default_account_id(raw: str, role: str) -> i64 {
+    let m = default_accounts_map(raw)
+    if map_has(m, role) == 0 {
+        return 0
+    }
+    return parse_int(map_get(m, role))
+}
+
+// Резолвер по роля: пазен id (или номер за стари записи), иначе фолбек-номер.
+// out_id е същият вектор, който ползва resolve_account в invoices_post.baga.
+fn default_resolve(db: OrmDb, raw: str, role: str, fallback: str, out_id: Vec<i64>) -> FmrOut !IO !Net {
+    let m = default_accounts_map(raw)
+    if map_has(m, role) == 1 {
+        let v = str_trim(map_get(m, role))
+        let id = parse_int(v)
+        if id > 0 {
+            let q = account_find(db, id)?
+            if orm_ok_q(q) == 0 {
+                return act_err(orm_db_q(q), 500, orm_err_q(q))
+            }
+            if orm_nrows(q) < 1 {
+                return act_err(orm_db_q(q), 422, concat("липсва default сметка за „", concat(role, "“")))
+            }
+            vec_push(out_id, id)
+            return act_ok(orm_db_q(q), jobj_new())
+        }
+        let q = account_by_number(db, v)?
+        if orm_ok_q(q) == 0 {
+            return act_err(orm_db_q(q), 500, orm_err_q(q))
+        }
+        if orm_nrows(q) > 0 {
+            vec_push(out_id, orm_cell_by_i64(q, 0, "id"))
+            return act_ok(orm_db_q(q), jobj_new())
+        }
+    }
+    let q = account_by_number(db, fallback)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return act_err(orm_db_q(q), 422, concat("липсва сметка с номер ", fallback))
+    }
+    vec_push(out_id, orm_cell_by_i64(q, 0, "id"))
+    return act_ok(orm_db_q(q), jobj_new())
+}
+
+// Като default_resolve, но при продукта им име предпочитан id (като
+// resolve_account_id в invoices_post.baga).
+fn default_resolve_id(db: OrmDb, raw: str, role: str, preferred_id: i64, fallback: str, out_id: Vec<i64>) -> FmrOut !IO !Net {
+    if preferred_id > 0 {
+        let q = account_find(db, preferred_id)?
+        if orm_ok_q(q) == 0 {
+            return act_err(orm_db_q(q), 500, orm_err_q(q))
+        }
+        if orm_nrows(q) < 1 {
+            return act_err(orm_db_q(q), 422, concat("липсва сметка с id ", int_to_str(preferred_id)))
+        }
+        vec_push(out_id, preferred_id)
+        return act_ok(orm_db_q(q), jobj_new())
+    }
+    return default_resolve(db, raw, role, fallback, out_id)?
+}

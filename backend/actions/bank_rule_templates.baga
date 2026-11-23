@@ -1,0 +1,53 @@
+// actions/bank_rule_templates.baga — стандартни шаблони за разпознаване на
+// банкови транзакции (като baraba DEFAULT_TEMPLATES) + роля към default
+// сметките на фирмата.
+
+struct BnTemplate {
+    name: str,
+    keywords: str,
+    direction: str,
+    codes: Vec<str>,
+    priority: i64
+}
+
+fn bank_rule_templates() -> Vec<BnTemplate> {
+    let t: Vec<BnTemplate> = vec_new()
+    let mut n: Vec<str> = vec_new()
+    vec_push(n, "447")
+    vec_push(n, "446")
+    vec_push(n, "50902")
+    vec_push(t, BnTemplate { name: "POS покупки", keywords: "POS,ПОС,pos трансакция,покупка на пос,pos purchase,card purchase,покупка с карта,покупка с дк", direction: "debit", codes: n, priority: 100 })
+    n = vec_new()
+    vec_push(n, "501")
+    vec_push(t, BnTemplate { name: "ATM теглене", keywords: "ATM,АТМ,atm трансакция,теглене,withdrawal,cash withdrawal,теглене на каса,теглене на пари", direction: "debit", codes: n, priority: 90 })
+    n = vec_new()
+    vec_push(n, "629")
+    vec_push(t, BnTemplate { name: "Банкови такси", keywords: "автоматична такса,такса теглене,такса за поддръжка,комисионна,bank fee,commission,месечна такса,мес. такса,monthly fee", direction: "debit", codes: n, priority: 80 })
+    n = vec_new()
+    vec_push(n, "411")
+    vec_push(t, BnTemplate { name: "Получени преводи от клиенти", keywords: "получен директен превод,получен превод,sct instant получен,incoming credit,credit transfer received", direction: "credit", codes: n, priority: 70 })
+    n = vec_new()
+    vec_push(n, "401")
+    vec_push(t, BnTemplate { name: "Издадени преводи към доставчици", keywords: "издаден превод,sct instant издаден,изходящ превод,outgoing credit,issued transfer", direction: "debit", codes: n, priority: 60 })
+    n = vec_new()
+    vec_push(n, "402")
+    vec_push(t, BnTemplate { name: "Аванси", keywords: "аванс,avans,advance", direction: "debit", codes: n, priority: 50 })
+    return t
+}
+
+// Роля от default сметките за шаблон ("" — без default).
+fn bn_template_role(name: str) -> str {
+    if name == "POS покупки" {
+        return "card_purchase"
+    }
+    if name == "ATM теглене" {
+        return "cash"
+    }
+    if name == "Получени преводи от клиенти" {
+        return "customers"
+    }
+    if name == "Издадени преводи към доставчици" {
+        return "suppliers"
+    }
+    return ""
+}

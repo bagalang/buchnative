@@ -12,6 +12,7 @@ import "production.baga"
 import "periods.baga"
 import "txn.baga"
 import "active_company.baga"
+import "default_accounts.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
 import "fmrbaga/action.baga"
@@ -95,7 +96,10 @@ fn act_pord_confirm(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         return act_err(vm.db, 500, vm.err)
     }
     let method = vm.cost
-    let lq = pline_by_order(vm.db, id)?
+    let dr = defaults_raw(vm.db, ac.id)
+    let pcdb = dr.db
+    let defraw = dr.raw
+    let lq = pline_by_order(pcdb, id)?
     if orm_ok_q(lq) == 0 {
         return act_err(orm_db_q(lq), 500, orm_err_q(lq))
     }
@@ -156,7 +160,7 @@ fn act_pord_confirm(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
             let a302 = vec_new()
             let r302 = mfg_resolve_acc(db2, "302", a302)?
             if vec_len(a302) == 0 {
-                let r304 = mfg_resolve_acc(r302.db, "304", a302)?
+                let r304 = default_resolve(r302.db, defraw, "inventory", "304", a302)?
                 if vec_len(a302) == 0 {
                     return act_err_rb(r304.db, 422, "липсва складова сметка 302/304")
                 }
@@ -225,7 +229,7 @@ fn act_pord_confirm(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         let a303 = vec_new()
         let r303 = mfg_resolve_acc(db2, "303", a303)?
         if vec_len(a303) == 0 {
-            let r304 = mfg_resolve_acc(r303.db, "304", a303)?
+            let r304 = default_resolve(r303.db, defraw, "inventory", "304", a303)?
             if vec_len(a303) == 0 {
                 return act_err_rb(r304.db, 422, "липсва складова сметка 303/304 за готовата продукция")
             }

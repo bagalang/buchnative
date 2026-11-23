@@ -10,6 +10,7 @@ import { useI18n } from "../../components/I18nProvider";
 import { DocumentSeriesTab, DocSeries } from "../../components/DocumentSeriesTab";
 import { ClosingSettingsTab } from "../../components/ClosingSettingsTab";
 import { SettingsStockTab } from "../../components/SettingsStockTab";
+import { SettingsAutomationTab } from "../../components/SettingsAutomationTab";
 import { FsFormulasTab } from "../../components/FsFormulasTab";
 import { SettingsCompanyTab } from "../../components/SettingsCompanyTab";
 import { SettingsSaftTab } from "../../components/SettingsSaftTab";
@@ -28,6 +29,7 @@ import {
   api,
   getActiveCompany,
 } from "../../lib/api";
+import { settingsObject, settingsRaw } from "../../lib/settings";
 
 function str(v: unknown, fallback = ""): string {
   if (v === null || v === undefined) return fallback;
@@ -35,23 +37,17 @@ function str(v: unknown, fallback = ""): string {
 }
 
 function parseKeys(raw: unknown): { mistral_api_key: string; zhipu_api_key: string } {
-  const empty = { mistral_api_key: "", zhipu_api_key: "" };
-  if (typeof raw !== "string" || !raw) return empty;
-  try {
-    const o = JSON.parse(raw) as Record<string, unknown>;
-    return {
-      mistral_api_key: str(o.mistral_api_key),
-      zhipu_api_key: str(o.zhipu_api_key),
-    };
-  } catch {
-    return empty;
-  }
+  const o = settingsObject(raw);
+  return {
+    mistral_api_key: str(o.mistral_api_key),
+    zhipu_api_key: str(o.zhipu_api_key),
+  };
 }
 
 function SettingsInner() {
   const { t } = useI18n();
   const [activeId, setActiveId] = useState(0);
-  const [tab, setTab] = useState<0 | 1 | 2 | 3 | 4 | 5>(0);
+  const [tab, setTab] = useState<0 | 1 | 2 | 3 | 4 | 5 | 6>(0);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [splitting, setSplitting] = useState(false);
@@ -133,9 +129,9 @@ function SettingsInner() {
       software_id: str(c.software_id, "BUCHNATIVE"),
       software_version: str(c.software_version, "1.0"),
     });
-    const raw = str(c.settings, "{}");
+    const raw = settingsRaw(c.settings);
     setRawSettings(raw);
-    setKeys(parseKeys(raw));
+    setKeys(parseKeys(c.settings));
     setLocations(pack.locations ?? []);
     setOwners(pack.beneficial_owners ?? []);
     setParents(pack.ultimate_parents ?? []);
@@ -180,15 +176,7 @@ function SettingsInner() {
     setSaving(true);
     setErr("");
     try {
-      let settingsObj: Record<string, unknown> = {};
-      try {
-        const parsed = JSON.parse(rawSettings || "{}") as unknown;
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          settingsObj = parsed as Record<string, unknown>;
-        }
-      } catch {
-        settingsObj = {};
-      }
+      const settingsObj: Record<string, unknown> = settingsObject(rawSettings);
       settingsObj.mistral_api_key = keys.mistral_api_key;
       settingsObj.zhipu_api_key = keys.zhipu_api_key;
       await api.patch(`/v1/companies/${activeId}`, {
@@ -516,6 +504,13 @@ function SettingsInner() {
         >
           {t("settings.tab.stock")}
         </button>
+        <button
+          type="button"
+          className={`tab${tab === 6 ? " tab-active" : ""}`}
+          onClick={() => setTab(6)}
+        >
+          {t("settings.tab.automation")}
+        </button>
       </div>
 
       {tab === 0 && (
@@ -590,6 +585,7 @@ function SettingsInner() {
       {tab === 3 && <FsFormulasTab />}
       {tab === 4 && <ClosingSettingsTab />}
       {tab === 5 && <SettingsStockTab />}
+      {tab === 6 && <SettingsAutomationTab />}
     </>
   );
 }

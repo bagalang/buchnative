@@ -7,6 +7,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api, getActiveCompany } from "../lib/api";
 import { useI18n } from "./I18nProvider";
+import { settingsObject, settingsRaw } from "../lib/settings";
 
 interface Account {
   id: number;
@@ -20,31 +21,25 @@ interface RuleRow {
 }
 
 function parseRules(raw: unknown): RuleRow[] {
-  if (typeof raw !== "string" || !raw) return [];
-  try {
-    const o = JSON.parse(raw) as Record<string, unknown>;
-    const m = o.closing_map;
-    if (Array.isArray(m)) {
-      return m
-        .map((x) => {
-          const r = x as Record<string, unknown>;
-          return {
-            source: String(r.source ?? "").trim(),
-            target: String(r.target ?? "").trim(),
-          };
-        })
-        .filter((r) => r.source && r.target);
-    }
-    if (m && typeof m === "object") {
-      return Object.entries(m as Record<string, unknown>)
-        .filter(([, v]) => typeof v === "string" && v)
-        .map(([source, target]) => ({
-          source: source.trim(),
-          target: String(target).trim(),
-        }));
-    }
-  } catch {
-    // невалиден JSON — празна карта
+  const m = settingsObject(raw).closing_map;
+  if (Array.isArray(m)) {
+    return m
+      .map((x) => {
+        const r = x as Record<string, unknown>;
+        return {
+          source: String(r.source ?? "").trim(),
+          target: String(r.target ?? "").trim(),
+        };
+      })
+      .filter((r) => r.source && r.target);
+  }
+  if (m && typeof m === "object") {
+    return Object.entries(m as Record<string, unknown>)
+      .filter(([, v]) => typeof v === "string" && v)
+      .map(([source, target]) => ({
+        source: source.trim(),
+        target: String(target).trim(),
+      }));
   }
   return [];
 }
@@ -77,9 +72,9 @@ export function ClosingSettingsTab() {
         return;
       }
       const company = await api.get<{ settings?: string }>(`/v1/companies/${id}`);
-      const raw = typeof company.settings === "string" ? company.settings : "{}";
+      const raw = settingsRaw(company.settings);
       setRawSettings(raw);
-      setRows(parseRules(raw));
+      setRows(parseRules(company.settings));
       // За етикети и за подсказки при въвеждане.
       const list = await api.get<{ items?: Account[] }>(`/v1/accounts?limit=2000`);
       setAccounts(list.items ?? []);
@@ -103,13 +98,7 @@ export function ClosingSettingsTab() {
     try {
       const valid = rows.filter((r) => r.source.trim() && r.target.trim());
       // Съществуващи настройки + closing_map (масивова форма).
-      let base: Record<string, unknown> = {};
-      try {
-        const parsed = JSON.parse(rawSettings) as Record<string, unknown>;
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) base = parsed;
-      } catch {
-        // невалиден JSON — започваме празни
-      }
+      const base: Record<string, unknown> = settingsObject(rawSettings);
       if (valid.length > 0) {
         base.closing_map = valid.map((r) => ({
           source: r.source.trim(),
