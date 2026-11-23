@@ -49,6 +49,7 @@ function BankTransactionsInner() {
   const [bookCpId, setBookCpId] = useState(0);
   const [bookCpSearch, setBookCpSearch] = useState("");
   const [bookAccSearch, setBookAccSearch] = useState("");
+  const [bookBankRate, setBookBankRate] = useState("");
   const [bookLoading, setBookLoading] = useState(false);
 
   const [reallocTx, setReallocTx] = useState<BankTransaction | null>(null);
@@ -204,6 +205,7 @@ function BankTransactionsInner() {
     setBookCpId(m?.id ?? 0);
     setBookCpSearch(tx.counterpart_name || "");
     setBookAccSearch("");
+    setBookBankRate("");
     // Предложение по ключови думи (като baraba) — предварително избрана сметка.
     api
       .get<{ account_id?: number; account_number?: string; account_name?: string }>(
@@ -246,7 +248,7 @@ function BankTransactionsInner() {
   const handleBook = async () => {
     if (!bookTx) return;
     const gl = bankGlId(bookTx);
-    const payload: Record<string, number> = {};
+    const payload: Record<string, number | string> = {};
     if (gl > 0) {
       if (!bookContra) {
         setError(t("bank_tx.pick_contra"));
@@ -262,6 +264,7 @@ function BankTransactionsInner() {
       payload.credit_account_id = bookCredit;
     }
     if (bookCpId > 0) payload.counterpart_id = bookCpId;
+    if (bookBankRate.trim()) payload.bank_rate = bookBankRate.trim();
     setBookLoading(true);
     try {
       await api.post(`/v1/bank-transactions/${bookTx.id}/book`, payload);
@@ -644,6 +647,8 @@ function BankTransactionsInner() {
         bookContra={bookContra}
         bookAccSearch={bookAccSearch}
         setBookAccSearch={setBookAccSearch}
+        bookBankRate={bookBankRate}
+        setBookBankRate={setBookBankRate}
         setBookContra={setBookContra}
         bookDebit={bookDebit}
         setBookDebit={setBookDebit}

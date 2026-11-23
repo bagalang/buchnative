@@ -108,3 +108,107 @@ fn fx_att_line(fx: FxLineData, acc_is_currency: i64) -> FxAtt {
     }
     return FxAtt { currency: fx.currency, fx_quantity: fx.fx_quantity, fx_rate: fx.fx_rate }
 }
+
+// ── Уреждане на банкова транзакция с курсова разлика ──────────────────────
+//
+// Банката купува валута по-ниско / продава по-високо от ЕЦБ. Счетоводният
+// курс е винаги от exchange_rates (ЕЦБ as-of датата); банковият курс може да
+// се подаде ръчно. Разликата bank_base − ecb_base е реализирана курсова
+// разлика → 624 (разход) / 724 (приход).
+
+struct BankFxSettle {
+    ok: i64,
+    err: str,
+    db: OrmDb,
+    currency: str,
+    qty: str,
+    ecb_rate: str,
+    ecb_base: str,
+    bank_rate: str,
+    bank_base: str
+}
+
+fn bank_fx_settle_err(db: OrmDb, err: str) -> BankFxSettle {
+    return BankFxSettle { ok: 0, err: err, db: db, currency: "", qty: "", ecb_rate: "", ecb_base: "", bank_rate: "", bank_base: "" }
+}
+
+fn bank_tx_settle_fx(db: OrmDb, company_id: i64, tx_currency: str, account_currency: str, amount: str, tx_date: str, bank_rate: str) -> BankFxSettle !IO !Net {
+    let bc = company_base_currency(db, company_id)?
+    if bc.ok == 0 {
+        return bank_fx_settle_err(bc.db, "фирмата липсва")
+    }
+    let mut d0 = bc.db
+    let ap = dec_parse(amount)
+    if ap.ok == 0 {
+        return bank_fx_settle_err(d0, concat("невалидна сума на транзакцията: ", amount))
+    }
+    let qty = dec_abs(ap.value)
+    let mut cur = str_trim(tx_currency)
+    if cur == "" {
+        cur = str_trim(account_currency)
+    }
+    if cur == "" || cur == bc.cur {
+        let q = dec_to_string(qty)
+        return BankFxSettle { ok: 1, err: "", db: d0, currency: "", qty: q, ecb_rate: "", ecb_base: q, bank_rate: "", bank_base: q }
+    }
+    let c = exchange_rate_cross(d0, cur, bc.cur, tx_date)?
+    if c.ok == 0 {
+        return bank_fx_settle_err(c.db, concat(concat("няма курс ", cur), concat(concat(" към ", tx_date), concat(": ", c.err))))
+    }
+    d0 = c.db
+    let rp = dec_parse(c.rate)
+    if rp.ok == 0 {
+        return bank_fx_settle_err(d0, "невалиден кръстосан курс")
+    }
+    let m = dec_mul(qty, rp.value)
+    if m.ok == 0 {
+        return bank_fx_settle_err(d0, m.err)
+    }
+    let r2 = dec_round_dp(m.value, 2)
+    if r2.ok == 0 {
+        return bank_fx_settle_err(d0, r2.err)
+    }
+    let mut br = str_trim(bank_rate)
+    if br == "" {
+        br = c.rate
+    }
+    let bp = dec_parse(br)
+    if bp.ok == 0 {
+        return bank_fx_settle_err(d0, concat("невалиден банков курс: ", br))
+    }
+    if dec_cmp(bp.value, dec_zero()) <= 0 {
+        return bank_fx_settle_err(d0, "банковият курс трябва да е положителен")
+    }
+    let bm = dec_mul(qty, bp.value)
+    if bm.ok == 0 {
+        return bank_fx_settle_err(d0, bm.err)
+    }
+    let br2 = dec_round_dp(bm.value, 2)
+    if br2.ok == 0 {
+        return bank_fx_settle_err(d0, br2.err)
+    }
+    return BankFxSettle { ok: 1, err: "", db: d0, currency: cur, qty: dec_to_string(qty), ecb_rate: c.rate, ecb_base: dec_to_string(r2.value), bank_rate: br, bank_base: dec_to_string(br2.value) }
+}
+
+// Реализирана курсова разлика със знак: >0 → загуба (Дт 624), <0 → печалба
+// (Кт 724). При получаване загубата е ecb_base − bank_base; при плащане —
+// bank_base − ecb_base.
+fn bank_fx_pl(s: BankFxSettle, is_deposit: i64) -> str {
+    let eb = dec_parse(s.ecb_base)
+    let bb = dec_parse(s.bank_base)
+    if eb.ok == 0 || bb.ok == 0 {
+        return "0"
+    }
+    let mut d = dec_sub(bb.value, eb.value)
+    if d.ok == 0 {
+        return "0"
+    }
+    if is_deposit == 1 {
+        let neg = dec_sub(dec_zero(), d.value)
+        if neg.ok == 0 {
+            return "0"
+        }
+        d = neg
+    }
+    return dec_to_string(d.value)
+}

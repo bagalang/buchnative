@@ -72,6 +72,87 @@ function FxPreview({ t, tx }: { t: (k: string) => string; tx: BankTransaction })
   );
 }
 
+// Банков курс при валутна транзакция: ЕЦБ от /exchange-rates по подразбиране;
+// потребителят може да въведе курса на банката. Разликата се отчита в 624/724.
+function BankRateField({
+  t,
+  tx,
+  value,
+  onChange,
+}: {
+  t: (k: string) => string;
+  tx: BankTransaction;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const [base, setBase] = useState("");
+  const [ecb, setEcb] = useState("");
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    setEcb("");
+    setErr("");
+    const cur = (tx.currency || "").trim().toUpperCase();
+    if (!cur || !tx.transaction_date) return;
+    getActiveCompany()
+      .then(async (c) => {
+        const b = ((c as { currency?: unknown }).currency as string) || "EUR";
+        setBase(b);
+        if (cur === b) return;
+        const r = await api.get<{ rate: string }>(
+          `/v1/exchange-rates/cross?from=${encodeURIComponent(cur)}&to=${encodeURIComponent(b)}&date=${tx.transaction_date}`
+        );
+        if (!cancelled) setEcb(r.rate);
+      })
+      .catch((e) => {
+        if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tx.id, tx.currency, tx.transaction_date]);
+
+  const cur = (tx.currency || "").trim().toUpperCase();
+  if (!cur || !base || cur === base) return null;
+  const qty = Math.abs(parseFloat(tx.amount));
+  const ecbR = parseFloat(ecb);
+  const bankR = parseFloat(value.trim() || ecb);
+  const ecbBase = !Number.isNaN(qty) && !Number.isNaN(ecbR) ? qty * ecbR : NaN;
+  const bankBase = !Number.isNaN(qty) && !Number.isNaN(bankR) ? qty * bankR : NaN;
+  const diff = !Number.isNaN(ecbBase) && !Number.isNaN(bankBase) ? bankBase - ecbBase : NaN;
+  const deposit = parseFloat(tx.amount) >= 0;
+  // загуба за фирмата: при получаване ЕЦБ > банка; при плащане банка > ЕЦБ
+  const loss = deposit ? ecbBase - bankBase : bankBase - ecbBase;
+  return (
+    <div className="field" style={{ marginBottom: 12 }}>
+      <label className="label">{t("bank_tx.bank_rate")}</label>
+      <input
+        className="input"
+        inputMode="decimal"
+        placeholder={ecb || t("bank_tx.fx_loading")}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+        {err
+          ? err
+          : ecb
+          ? `${t("bank_tx.fx_diff")}: ${
+              Number.isNaN(diff) ? "—" : diff.toFixed(2)
+            } ${base} → ${
+              Number.isNaN(loss) || loss === 0
+                ? "—"
+                : loss > 0
+                ? `624 ${t("bank_tx.expense")}`
+                : `724 ${t("bank_tx.income")}`
+            }`
+          : t("bank_tx.fx_loading")}
+      </div>
+    </div>
+  );
+}
+
 export function BankTxModals(props: {
   t: (k: string) => string;
   counterparts: Counterpart[];
@@ -91,6 +172,8 @@ export function BankTxModals(props: {
   bookContra: number;
   bookAccSearch: string;
   setBookAccSearch: (v: string) => void;
+  bookBankRate: string;
+  setBookBankRate: (v: string) => void;
   setBookContra: (v: number) => void;
   bookDebit: number;
   setBookDebit: (v: number) => void;
@@ -121,7 +204,7 @@ export function BankTxModals(props: {
     t, counterparts, chartAccounts,
     previewOpen, setPreviewOpen, previewLoading, preview, importing, handleImport,
     bookTx, setBookTx, bookCpId, bookCpSearch, setBookCpSearch, setBookCpId,
-    bookContra, bookAccSearch, setBookAccSearch, setBookContra, bookDebit, setBookDebit,
+    bookContra, bookAccSearch, setBookAccSearch, bookBankRate, setBookBankRate, setBookContra, bookDebit, setBookDebit,
     bookCredit, setBookCredit, handleBook, bookLoading,
     reallocTx, setReallocTx, reallocLines, reallocJeDesc, reallocCpId, reallocCpSearch, setReallocCpSearch,
     setReallocCpId, reallocAccount, reallocAccSearch, setReallocAccSearch, setReallocAccount,
@@ -155,6 +238,32 @@ export function BankTxModals(props: {
 
   const setEditLine = (id: number, patch: Partial<JeLine>) => {
     setEditLines((ls) => ls.map((l) => (l.id === id ? { ...l, ...patch } : l)));
+  };
+
+  // Валутни полета като в дневника: при валута стойността = количество × курс.
+  const setEditFx = (id: number, patch: Partial<JeLine>) => {
+    setEditLines((ls) =>
+      ls.map((l) => {
+        if (l.id !== id) return l;
+        const next = { ...l, ...patch };
+        const cur = (next.currency || "").trim();
+        if (cur) {
+          const q = parseFloat(next.fx_quantity || "");
+          const r = parseFloat(next.fx_rate || "");
+          if (!Number.isNaN(q) && !Number.isNaN(r)) next.amount = (q * r).toFixed(2);
+        }
+        return next;
+      })
+    );
+  };
+  const addEditLine = () => {
+    setEditLines((ls) => [
+      ...ls,
+      { id: -Date.now(), account_id: 0, direction: "debit", amount: "0" },
+    ]);
+  };
+  const removeEditLine = (id: number) => {
+    setEditLines((ls) => (ls.length > 2 ? ls.filter((l) => l.id !== id) : ls));
   };
 
   const saveEdit = async () => {
@@ -364,6 +473,12 @@ export function BankTxModals(props: {
             <h2 className="modal-title">{t("bank_tx.book_title")}</h2>
             {txSummary(bookTx)}
             <FxPreview t={t} tx={bookTx} />
+            <BankRateField
+              t={t}
+              tx={bookTx}
+              value={bookBankRate}
+              onChange={setBookBankRate}
+            />
             {bookTx.description ? (
               <p className="muted" style={{ marginBottom: 12 }}>
                 {bookTx.description}
@@ -496,6 +611,7 @@ export function BankTxModals(props: {
                       <th>{t("bank_tx.target_account")}</th>
                       <th>{t("bank_tx.direction")}</th>
                       <th style={{ textAlign: "right" }}>{t("bank_tx.amount")}</th>
+                      <th />
                     </tr>
                   </thead>
                   <tbody>
@@ -527,20 +643,65 @@ export function BankTxModals(props: {
                           <input
                             className="input"
                             value={ln.amount}
+                            readOnly={!!(ln.currency || "").trim()}
                             onChange={(e) =>
                               setEditLine(ln.id, { amount: e.target.value })
                             }
                           />
-                          {ln.currency ? (
-                            <div className="muted" style={{ fontSize: 12 }}>
-                              {ln.fx_quantity} {ln.currency} × {ln.fx_rate}
-                            </div>
-                          ) : null}
+                          <div className="journal-fx-row" style={{ marginTop: 4 }}>
+                            <input
+                              className="input"
+                              placeholder={t("journal.currency")}
+                              maxLength={3}
+                              value={ln.currency || ""}
+                              onChange={(e) =>
+                                setEditFx(ln.id, {
+                                  currency: e.target.value.toUpperCase(),
+                                })
+                              }
+                            />
+                            <input
+                              className="input"
+                              inputMode="decimal"
+                              placeholder={t("journal.quantity")}
+                              value={ln.fx_quantity || ""}
+                              onChange={(e) =>
+                                setEditFx(ln.id, { fx_quantity: e.target.value })
+                              }
+                            />
+                            <input
+                              className="input"
+                              inputMode="decimal"
+                              placeholder={t("journal.fx_rate")}
+                              value={ln.fx_rate || ""}
+                              onChange={(e) =>
+                                setEditFx(ln.id, { fx_rate: e.target.value })
+                              }
+                            />
+                          </div>
+                        </td>
+                        <td>
+                          <button
+                            type="button"
+                            className="btn btn-danger btn-sm"
+                            onClick={() => removeEditLine(ln.id)}
+                            disabled={editLines.length <= 2}
+                          >
+                            ✕
+                          </button>
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={addEditLine}
+                  style={{ marginTop: 8 }}
+                >
+                  + {t("journal.add_line")}
+                </button>
               </div>
             ) : (
               reallocLines.length > 0 && (

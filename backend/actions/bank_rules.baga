@@ -536,7 +536,7 @@ fn act_bank_rules_auto(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
                     let booked = orm_cell_by_i64(txs, i, "is_booked")
                     let mut r = bank_book_result_err("", 0, d0)
                     if booked == 0 {
-                        r = bank_tx_book_one(d0, ac.id, tx_id, hit.account_id, cp_id)?
+                        r = bank_tx_book_one(d0, ac.id, tx_id, hit.account_id, cp_id, "")?
                     } else {
                         r = bank_tx_reallocate_one(d0, ac.id, tx_id, hit.account_id, cp_id)?
                     }

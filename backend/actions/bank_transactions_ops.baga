@@ -8,6 +8,7 @@ import "../models/journal.baga"
 import "../models/counterpart.baga"
 import "../models/fx.baga"
 import "bank_suggest.baga"
+import "bank_tx_book.baga"
 import "active_company.baga"
 import "txn.baga"
 import "periods.baga"
@@ -60,6 +61,7 @@ fn act_bank_transactions_book(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     }
     let debit_f = bank_tx_opt_i64(b.doc, b.root, "debit_account_id")
     let credit_f = bank_tx_opt_i64(b.doc, b.root, "credit_account_id")
+    let bank_rate = str_trim(jopt_str(b.doc, b.root, "bank_rate", "").val)
     if orm_ok_db(db) == 0 {
         return act_err(db, 503, "database unavailable")
     }
@@ -110,12 +112,12 @@ fn act_bank_transactions_book(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         ba_currency = tx_currency
     }
     d0 = orm_db_q(baq0)
-    let fx = bank_tx_fx(d0, ac.id, ba_currency, tx_amount, tx_date)?
+    let fx = bank_tx_settle_fx(d0, ac.id, tx_currency, ba_currency, tx_amount, tx_date, bank_rate)?
     if fx.ok == 0 {
         return act_err(fx.db, 422, fx.err)
     }
     d0 = fx.db
-    let base_s = fx.base_amount
+    let base_s = bank_fx_total(fx)
     let mut debit_id: i64 = 0
     let mut credit_id: i64 = 0
     let mut debit_cp: i64 = 0
@@ -201,8 +203,6 @@ fn act_bank_transactions_book(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if orm_nrows(cacc) > 0 {
         cacc_cur = orm_cell_by_i64(cacc, 0, "is_currency")
     }
-    let fa_d = fx_att_line(fx, dacc_cur)
-    let fa_c = fx_att_line(fx, cacc_cur)
     let bgn = bb_begin(d0)?
     if orm_ok(bgn) == 0 {
         return act_err_rb(orm_db_exec(bgn), 500, orm_err_exec(bgn))
@@ -214,16 +214,11 @@ fn act_bank_transactions_book(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     }
     let entry_id = orm_cell_by_i64(eq, 0, "id")
     db2 = orm_db_q(eq)
-    let l1 = journal_line_insert_fx(db2, entry_id, debit_id, "debit", base_s, "0", fa_d.currency, fa_d.fx_quantity, fa_d.fx_rate, debit_cp, 0, 0)?
-    if orm_ok(l1) == 0 {
-        return act_err_rb(orm_db_exec(l1), 500, orm_err_exec(l1))
+    let post = bank_post_settlement(db2, entry_id, debit_id, credit_id, fx, is_deposit, debit_cp, credit_cp, dacc_cur, cacc_cur, ba_currency)?
+    if post.ok == 0 {
+        return act_err_rb(post.db, 500, post.err)
     }
-    db2 = orm_db_exec(l1)
-    let l2 = journal_line_insert_fx(db2, entry_id, credit_id, "credit", base_s, "0", fa_c.currency, fa_c.fx_quantity, fa_c.fx_rate, credit_cp, 0, 0)?
-    if orm_ok(l2) == 0 {
-        return act_err_rb(orm_db_exec(l2), 500, orm_err_exec(l2))
-    }
-    db2 = orm_db_exec(l2)
+    db2 = post.db
     let tcols = vec_new()
     vec_push(tcols, "is_booked")
     vec_push(tcols, "is_allocated")
