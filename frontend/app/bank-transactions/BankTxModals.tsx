@@ -199,6 +199,7 @@ export function BankTxModals(props: {
   handleUnbook: (tx: BankTransaction) => void;
   handleDelete: (tx: BankTransaction) => void;
   handleSaveJe: (jeId: number, payload: Record<string, unknown>) => Promise<boolean>;
+  markAllocated: (txId: number, cpId: number) => Promise<boolean>;
 }) {
   const {
     t, counterparts, chartAccounts,
@@ -209,10 +210,10 @@ export function BankTxModals(props: {
     reallocTx, setReallocTx, reallocLines, reallocJeDesc, reallocCpId, reallocCpSearch, setReallocCpSearch,
     setReallocCpId, reallocAccount, reallocAccSearch, setReallocAccSearch, setReallocAccount,
     handleReallocate, reallocLoading, bankGlId,
-    handleUnbook, handleDelete, handleSaveJe,
+    handleUnbook, handleDelete, handleSaveJe, markAllocated,
   } = props;
 
-  const [editMode, setEditMode] = useState(false);
+  const [editMode, setEditMode] = useState(true);
   const [editLines, setEditLines] = useState<JeLine[]>([]);
   const [editDesc, setEditDesc] = useState("");
   const [editCpId, setEditCpId] = useState(0);
@@ -220,12 +221,21 @@ export function BankTxModals(props: {
   const [editSaving, setEditSaving] = useState(false);
 
   useEffect(() => {
-    setEditMode(false);
+    setEditMode(true);
     setEditLines([]);
     setEditDesc("");
     setEditCpId(0);
     setEditCpSearch("");
   }, [reallocTx]);
+
+  // Редовете се зареждат асинхронно след отваряне — пълним редактора, щом дойдат.
+  useEffect(() => {
+    if (!reallocTx || reallocLines.length === 0) return;
+    setEditLines(reallocLines.map((l) => ({ ...l })));
+    setEditDesc(reallocJeDesc || reallocTx.description || "");
+    setEditCpId(reallocCpId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reallocLines]);
 
   const startEdit = () => {
     if (!reallocTx) return;
@@ -285,7 +295,10 @@ export function BankTxModals(props: {
       })),
     });
     setEditSaving(false);
-    if (ok) setEditMode(false);
+    if (ok) {
+      const marked = await markAllocated(reallocTx.id, editCpId);
+      if (marked) setReallocTx(null);
+    }
   };
 
   const txSummary = (tx: BankTransaction) => (
@@ -567,8 +580,8 @@ export function BankTxModals(props: {
       {reallocTx && (
         <div className="modal-backdrop" onClick={() => setReallocTx(null)}>
           <div
-            className="card modal"
-            style={{ maxWidth: 640, maxHeight: "90vh", overflowY: "auto" }}
+            className="card modal modal-lg"
+            style={{ maxHeight: "90vh", overflowY: "auto" }}
             onClick={(e) => e.stopPropagation()}
           >
             <h2 className="modal-title">{t("bank_tx.reallocate_title")}</h2>
@@ -605,95 +618,86 @@ export function BankTxModals(props: {
                     onChange={setEditCpId}
                   />
                 </div>
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>{t("bank_tx.target_account")}</th>
-                      <th>{t("bank_tx.direction")}</th>
-                      <th style={{ textAlign: "right" }}>{t("bank_tx.amount")}</th>
-                      <th />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {editLines.map((ln) => (
-                      <tr key={ln.id}>
-                        <td>
-                          <AccountSelect
-                            t={t}
-                            chartAccounts={chartAccounts}
-                            value={ln.account_id}
-                            search=""
-                            onSearch={() => {}}
-                            onChange={(id) => setEditLine(ln.id, { account_id: id })}
-                          />
-                        </td>
-                        <td>
-                          <select
-                            className="select"
-                            value={ln.direction}
-                            onChange={(e) =>
-                              setEditLine(ln.id, { direction: e.target.value })
-                            }
-                          >
-                            <option value="debit">{t("bank_tx.debit")}</option>
-                            <option value="credit">{t("bank_tx.credit")}</option>
-                          </select>
-                        </td>
-                        <td>
-                          <input
-                            className="input"
-                            value={ln.amount}
-                            readOnly={!!(ln.currency || "").trim()}
-                            onChange={(e) =>
-                              setEditLine(ln.id, { amount: e.target.value })
-                            }
-                          />
-                          <div className="journal-fx-row" style={{ marginTop: 4 }}>
-                            <input
-                              className="input"
-                              placeholder={t("journal.currency")}
-                              maxLength={3}
-                              value={ln.currency || ""}
-                              onChange={(e) =>
-                                setEditFx(ln.id, {
-                                  currency: e.target.value.toUpperCase(),
-                                })
-                              }
-                            />
-                            <input
-                              className="input"
-                              inputMode="decimal"
-                              placeholder={t("journal.quantity")}
-                              value={ln.fx_quantity || ""}
-                              onChange={(e) =>
-                                setEditFx(ln.id, { fx_quantity: e.target.value })
-                              }
-                            />
-                            <input
-                              className="input"
-                              inputMode="decimal"
-                              placeholder={t("journal.fx_rate")}
-                              value={ln.fx_rate || ""}
-                              onChange={(e) =>
-                                setEditFx(ln.id, { fx_rate: e.target.value })
-                              }
-                            />
-                          </div>
-                        </td>
-                        <td>
-                          <button
-                            type="button"
-                            className="btn btn-danger btn-sm"
-                            onClick={() => removeEditLine(ln.id)}
-                            disabled={editLines.length <= 2}
-                          >
-                            ✕
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <div className="journal-lines-novat">
+                  <div className="journal-line-head">
+                    <span>{t("bank_tx.target_account")}</span>
+                    <span>{t("bank_tx.direction")}</span>
+                    <span>{t("bank_tx.amount")}</span>
+                    <span />
+                  </div>
+                  {editLines.map((ln) => (
+                    <div key={ln.id} className="journal-line-row">
+                      <AccountSelect
+                        t={t}
+                        chartAccounts={chartAccounts}
+                        value={ln.account_id}
+                        search=""
+                        onSearch={() => {}}
+                        onChange={(id) => setEditLine(ln.id, { account_id: id })}
+                      />
+                      <select
+                        className="select"
+                        value={ln.direction}
+                        onChange={(e) =>
+                          setEditLine(ln.id, { direction: e.target.value })
+                        }
+                      >
+                        <option value="debit">{t("bank_tx.debit")}</option>
+                        <option value="credit">{t("bank_tx.credit")}</option>
+                      </select>
+                      <input
+                        className="input"
+                        value={ln.amount}
+                        readOnly={!!(ln.currency || "").trim()}
+                        onChange={(e) =>
+                          setEditLine(ln.id, { amount: e.target.value })
+                        }
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-danger btn-sm"
+                        onClick={() => removeEditLine(ln.id)}
+                        disabled={editLines.length <= 2}
+                      >
+                        ✕
+                      </button>
+                      <div
+                        className="journal-fx-row"
+                        style={{ gridTemplateColumns: "90px 1fr 1fr", marginTop: 4 }}
+                      >
+                        <input
+                          className="input"
+                          placeholder={t("journal.currency")}
+                          maxLength={3}
+                          value={ln.currency || ""}
+                          onChange={(e) =>
+                            setEditFx(ln.id, {
+                              currency: e.target.value.toUpperCase(),
+                            })
+                          }
+                        />
+                        <input
+                          className="input"
+                          inputMode="decimal"
+                          placeholder={t("journal.quantity")}
+                          value={ln.fx_quantity || ""}
+                          onChange={(e) =>
+                            setEditFx(ln.id, { fx_quantity: e.target.value })
+                          }
+                        />
+                        <input
+                          className="input"
+                          inputMode="decimal"
+                          placeholder={t("journal.fx_rate")}
+                          value={ln.fx_rate || ""}
+                          onChange={(e) =>
+                            setEditFx(ln.id, { fx_rate: e.target.value })
+                          }
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
                 <button
                   type="button"
                   className="btn btn-sm"
@@ -747,31 +751,35 @@ export function BankTxModals(props: {
                 </div>
               )
             )}
-            <p className="muted" style={{ marginBottom: 16 }}>
-              {t("bank_tx.reallocate_hint")}
-            </p>
-            <div className="field" style={{ marginBottom: 12 }}>
-              <label className="label">{t("bank_tx.counterpart")}</label>
-              <CounterpartSelect
-                t={t}
-                counterparts={counterparts}
-                value={reallocCpId}
-                search={reallocCpSearch}
-                onSearch={setReallocCpSearch}
-                onChange={setReallocCpId}
-              />
-            </div>
-            <div className="field" style={{ marginBottom: 16 }}>
-              <label className="label">{t("bank_tx.contra_account")}</label>
-              <AccountSelect
-                t={t}
-                chartAccounts={chartAccounts}
-                value={reallocAccount}
-                search={reallocAccSearch}
-                onSearch={setReallocAccSearch}
-                onChange={setReallocAccount}
-              />
-            </div>
+            {!editMode && (
+              <>
+                <p className="muted" style={{ marginBottom: 16 }}>
+                  {t("bank_tx.reallocate_hint")}
+                </p>
+                <div className="field" style={{ marginBottom: 12 }}>
+                  <label className="label">{t("bank_tx.counterpart")}</label>
+                  <CounterpartSelect
+                    t={t}
+                    counterparts={counterparts}
+                    value={reallocCpId}
+                    search={reallocCpSearch}
+                    onSearch={setReallocCpSearch}
+                    onChange={setReallocCpId}
+                  />
+                </div>
+                <div className="field" style={{ marginBottom: 16 }}>
+                  <label className="label">{t("bank_tx.contra_account")}</label>
+                  <AccountSelect
+                    t={t}
+                    chartAccounts={chartAccounts}
+                    value={reallocAccount}
+                    search={reallocAccSearch}
+                    onSearch={setReallocAccSearch}
+                    onChange={setReallocAccount}
+                  />
+                </div>
+              </>
+            )}
             <div className="form-actions" style={{ flexWrap: "wrap" }}>
               <button
                 className="btn"
@@ -781,14 +789,37 @@ export function BankTxModals(props: {
                 {t("common.cancel")}
               </button>
               {editMode ? (
-                <button
-                  className="btn btn-primary"
-                  onClick={saveEdit}
-                  disabled={editSaving}
-                  type="button"
-                >
-                  {t("common.save")}
-                </button>
+                <>
+                  <button
+                    className="btn"
+                    onClick={() => setEditMode(false)}
+                    type="button"
+                  >
+                    {t("bank_tx.quick_realloc")}
+                  </button>
+                  <button
+                    className="btn"
+                    onClick={() => handleUnbook(reallocTx)}
+                    type="button"
+                  >
+                    {t("bank_tx.unbook")}
+                  </button>
+                  <button
+                    className="btn btn-danger"
+                    onClick={() => handleDelete(reallocTx)}
+                    type="button"
+                  >
+                    {t("common.delete")}
+                  </button>
+                  <button
+                    className="btn btn-primary"
+                    onClick={saveEdit}
+                    disabled={editSaving}
+                    type="button"
+                  >
+                    {t("common.save")}
+                  </button>
+                </>
               ) : (
                 <>
                   <button className="btn" onClick={startEdit} type="button">

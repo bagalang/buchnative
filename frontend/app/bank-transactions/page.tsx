@@ -302,6 +302,19 @@ function BankTransactionsInner() {
     }
   };
 
+  const markAllocated = async (txId: number, cpId: number): Promise<boolean> => {
+    try {
+      const payload: Record<string, number> = { manual: 1 };
+      if (cpId > 0) payload.counterpart_id = cpId;
+      await api.post(`/v1/bank-transactions/${txId}/reallocate`, payload);
+      await load();
+      return true;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      return false;
+    }
+  };
+
   const handleDelete = async (tx: BankTransaction) => {
     if (!window.confirm(t("common.confirmDelete"))) return;
     try {
@@ -674,6 +687,7 @@ function BankTransactionsInner() {
         handleUnbook={handleUnbook}
         handleDelete={handleDelete}
         handleSaveJe={handleSaveJe}
+        markAllocated={markAllocated}
       />
     </div>
   );

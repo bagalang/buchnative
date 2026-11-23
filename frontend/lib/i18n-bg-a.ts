@@ -474,6 +474,7 @@ export const bgA = {
   "bank_tx.fx_asof": "курс от",
   "bank_tx.fx_loading": "Зареждане на курса…",
   "bank_tx.bank_rate": "Банков курс (ЕЦБ по подразбиране)",
+  "bank_tx.quick_realloc": "Бързо: една сметка",
   "bank_tx.fx_diff": "Курсова разлика",
   "bank_tx.expense": "разход",
   "bank_tx.income": "приход",

@@ -142,7 +142,7 @@ JSON на екрана (сумите с точка); файлът е XHTML та�
 | POST | `/v1/bank-transactions/preview` `{bank_account_id, filename, content_base64}` |
 | POST | `/v1/bank-transactions/import` — същият payload; записва новите |
 | POST | `/v1/bank-transactions/{id}/book` `{contra_account_id, counterpart_id?, bank_rate?}` (или стария `{debit_account_id, credit_account_id}`); при валута и `bank_rate` ≠ ЕЦБ се добавя ред 624/724 за курсовата разлика |
-| POST | `/v1/bank-transactions/{id}/reallocate` `{account_id, counterpart_id?}` |
+| POST | `/v1/bank-transactions/{id}/reallocate` `{account_id, counterpart_id?}` или `{manual: 1, counterpart_id?}` (ръчни редове през `PUT /v1/journal/{id}`, маркира разнесен) |
 | POST | `/v1/bank-transactions/{id}/unbook` — връща в чернова (изтрива записа) |
 | DELETE | `/v1/bank-transactions/{id}` — изтрива транзакцията и свързания запис |
 | POST | `/v1/bank-transactions/bulk` `{action: "unbook"\|"delete", ids: […]}` — групово, в една транзакция |

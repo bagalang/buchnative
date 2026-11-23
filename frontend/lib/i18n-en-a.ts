@@ -469,6 +469,7 @@ export const enA = {
   "bank_tx.fx_asof": "rate as of",
   "bank_tx.fx_loading": "Loading rate…",
   "bank_tx.bank_rate": "Bank rate (ECB by default)",
+  "bank_tx.quick_realloc": "Quick: single account",
   "bank_tx.fx_diff": "Exchange difference",
   "bank_tx.expense": "expense",
   "bank_tx.income": "income",
